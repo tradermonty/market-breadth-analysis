@@ -6,6 +6,12 @@ on:
     - cron: '0 5 * * 1-5'  # 月曜から金曜の午前5時に実行
   workflow_dispatch:  # 手動実行を可能にする
 
+# GitHub Pagesへのデプロイに必要な権限を設定
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
 jobs:
   analyze-market-breadth:
     runs-on: ubuntu-latest
