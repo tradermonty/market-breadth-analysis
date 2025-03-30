@@ -8,7 +8,7 @@ on:
 
 # Set required permissions for GitHub Pages deployment
 permissions:
-  contents: write
+  contents: read
   pages: write
   id-token: write
 
@@ -21,6 +21,11 @@ jobs:
   analyze:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     
     steps:
     - name: Checkout repository
