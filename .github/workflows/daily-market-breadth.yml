@@ -81,19 +81,13 @@ jobs:
         echo "data directory contents:"
         ls -la data/
 
-    - name: List generated files
-      run: |
-        echo "Workspace contents:"
-        ls -R
-        echo "Reports directory contents:"
-        ls -la reports/
+    - name: Create .nojekyll file
+      run: touch reports/.nojekyll
 
-    - name: Upload artifact
-      uses: actions/upload-artifact@v3
+    - name: Upload Pages artifact
+      uses: actions/upload-pages-artifact@v3
       with:
-        name: market-breadth-reports
-        path: reports/
-        retention-days: 1
+        path: reports
 
   deploy:
     needs: analyze
@@ -108,17 +102,6 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     
     steps:
-      - name: Download artifact
-        uses: actions/download-artifact@v3
-        with:
-          name: market-breadth-reports
-          path: ./reports
-
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: reports
-
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4 
