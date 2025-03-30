@@ -2,11 +2,11 @@ name: Daily Market Breadth Analysis
 
 on:
   schedule:
-    # 米国市場の引け後（日本時間 午前5時）に実行
-    - cron: '0 5 * * 1-5'  # 月曜から金曜の午前5時に実行
-  workflow_dispatch:  # 手動実行を可能にする
+    # Run after US market closes (5 AM Japan time)
+    - cron: '0 5 * * 1-5'  # Run at 5 AM from Monday to Friday
+  workflow_dispatch:  # Enable manual execution
 
-# GitHub Pagesへのデプロイに必要な権限を設定
+# Set required permissions for GitHub Pages deployment
 permissions:
   contents: read
   pages: write
@@ -15,6 +15,7 @@ permissions:
 jobs:
   analyze-market-breadth:
     runs-on: ubuntu-latest
+    timeout-minutes: 15  # Limit maximum execution time to 15 minutes
     
     steps:
     - uses: actions/checkout@v3
