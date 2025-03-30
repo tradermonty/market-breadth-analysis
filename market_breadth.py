@@ -638,8 +638,20 @@ def plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, short_ma_period=
     
     plt.close()  # Close the figure to free memory
 
-# Main process
-if __name__ == "__main__":
+def main():
+    parser = argparse.ArgumentParser(description='Market Breadth Analysis')
+    parser.add_argument('--debug', action='store_true', help='Enable debug mode')
+    args = parser.parse_args()
+
+    if args.debug:
+        print("Debug mode enabled")
+        print(f"Current working directory: {os.getcwd()}")
+        print(f"Environment variables:")
+        print(f"EODHD_API_KEY set: {'EODHD_API_KEY' in os.environ}")
+        print(f"Available directories:")
+        print(f"reports/ exists: {os.path.exists('reports')}")
+        print(f"data/ exists: {os.path.exists('data')}")
+
     # Set up command line arguments
     parser = argparse.ArgumentParser(description='Analyze S&P500 market breadth')
     parser.add_argument('--start_date', type=str, help='Start date (YYYY-MM-DD format)')
@@ -718,3 +730,6 @@ if __name__ == "__main__":
     except ValueError as e:
         print(f"Error: {e}")
         print("Use --use_saved_data option to use previously saved data.")
+
+if __name__ == '__main__':
+    main()
