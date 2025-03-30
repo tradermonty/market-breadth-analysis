@@ -55,12 +55,12 @@
         <h1>Market Breadth Analysis</h1>
         <div class="chart-container">
             <div class="error-message" id="error-message">
-                画像の読み込みに失敗しました。しばらく経ってから再度お試しください。
+                Failed to load the image. Please try again later.
             </div>
             <img id="chart-image" alt="Market Breadth Analysis Chart">
         </div>
         <div class="last-update">
-            最終更新: <span id="last-update"></span>
+            Last Update: <span id="last-update"></span>
         </div>
     </div>
     <script>
@@ -76,12 +76,12 @@
             const errorMessage = document.getElementById('error-message');
             const today = new Date();
             
-            // 最初に今日の日付でMA20の画像を試す
+            // First, try to load today's MA20 image
             const todayFormatted = formatDate(today);
             img.src = `market_breadth_${todayFormatted}_ma20.png`;
             
             img.onerror = function() {
-                // 今日の日付で失敗した場合、昨日の日付で試す
+                // If today's image fails, try yesterday's image
                 const yesterday = new Date(today);
                 yesterday.setDate(yesterday.getDate() - 1);
                 const yesterdayFormatted = formatDate(yesterday);
@@ -89,7 +89,7 @@
                 img.src = `market_breadth_${yesterdayFormatted}_ma20.png`;
                 
                 img.onerror = function() {
-                    // 両方失敗した場合、エラーメッセージを表示
+                    // If both attempts fail, show error message
                     errorMessage.style.display = 'block';
                     img.style.display = 'none';
                 };
@@ -106,10 +106,10 @@
             };
         }
 
-        // ページ読み込み時に画像を読み込む
+        // Load image when page loads
         window.onload = function() {
             loadImage();
-            // 最終更新時刻を日本時間で表示
+            // Display last update time in Japan timezone
             const now = new Date();
             const options = {
                 timeZone: 'Asia/Tokyo',
