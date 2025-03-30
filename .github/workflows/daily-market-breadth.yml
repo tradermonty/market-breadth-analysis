@@ -35,6 +35,6 @@ jobs:
       uses: peaceiris/actions-gh-pages@v3
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
-        publish_dir: ./reports
+        publish_dir: ./root
         publish_branch: gh-pages
         commit_message: "Update market breadth analysis: ${{ github.event.head_commit.message }}" 
