@@ -18,15 +18,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  analyze:
+  build:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     
     steps:
     - name: Checkout repository
       uses: actions/checkout@v3
-      with:
-        ref: main
     
     - name: Set up Python
       uses: actions/setup-python@v4
@@ -59,10 +57,9 @@ jobs:
         retention-days: 1
 
   deploy:
-    needs: analyze
+    needs: build
     runs-on: ubuntu-latest
     
-    # Add explicit permissions for deploy job
     permissions:
       pages: write
       id-token: write
