@@ -4,6 +4,7 @@ on:
   schedule:
     # 米国市場の引け後（日本時間 午前5時）に実行
     - cron: '0 5 * * 1-5'  # 月曜から金曜の午前5時に実行
+  workflow_dispatch:  # 手動実行を可能にする
 
 jobs:
   analyze-market-breadth:
