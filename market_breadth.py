@@ -540,11 +540,18 @@ def plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, short_ma_period=
     peaks_avg = breadth_ma_200.iloc[peaks].mean()
     troughs_avg_below_04 = below_04.iloc[troughs_below_04].mean()
 
-    # Create plot
-    fig, axs = plt.subplots(2, 1, figsize=(10, 10), sharex=True)
+    # Create plot with larger figure size and adjusted font sizes
+    plt.rcParams['font.size'] = 12  # 基本フォントサイズを大きく
+    plt.rcParams['axes.titlesize'] = 16  # タイトルのフォントサイズを大きく
+    plt.rcParams['axes.labelsize'] = 14  # 軸ラベルのフォントサイズを大きく
+    plt.rcParams['xtick.labelsize'] = 10  # x軸の目盛りラベルのフォントサイズ
+    plt.rcParams['ytick.labelsize'] = 10  # y軸の目盛りラベルのフォントサイズ
+    plt.rcParams['legend.fontsize'] = 10  # 凡例のフォントサイズ
+
+    fig, axs = plt.subplots(2, 1, figsize=(12, 12), sharex=True)  # 図のサイズを大きく
 
     # Plot S&P 500 price first
-    axs[0].plot(sp500_data.index, sp500_data, label='S&P 500 Price', color='cyan', zorder=2)
+    axs[0].plot(sp500_data.index, sp500_data, label='S&P 500 Price', color='cyan', zorder=2, linewidth=2)
     
     # Create a custom patch for the background color legend
     background_patch = Patch(facecolor=(1.0, 0.9, 0.96), alpha=0.5, 
@@ -558,12 +565,12 @@ def plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, short_ma_period=
             axs[1].axvspan(breadth_ma_short.index[i], breadth_ma_short.index[i + 1], 
                           color=(1.0, 0.9, 0.96), alpha=0.3, zorder=1)
 
-    axs[0].set_title('S&P 500 Price')
-    axs[0].set_xlabel('Date')
-    axs[0].set_ylabel('Price')
+    axs[0].set_title('S&P 500 Price', pad=20, fontsize=16)  # タイトルのフォントサイズを直接指定
+    axs[0].set_xlabel('Date', fontsize=14)  # X軸ラベルのフォントサイズを直接指定
+    axs[0].set_ylabel('Price', fontsize=14)  # Y軸ラベルのフォントサイズを直接指定
     axs[0].set_yscale('log')
     
-    # Configure logarithmic axis format
+    # Configure logarithmic axis format with larger font sizes
     major_ticks = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]
     axs[0].yaxis.set_major_locator(FixedLocator(major_ticks))
     axs[0].yaxis.set_major_formatter(FixedFormatter([str(x) for x in major_ticks]))
@@ -579,38 +586,38 @@ def plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, short_ma_period=
     axs[0].yaxis.set_minor_locator(FixedLocator(minor_ticks))
     axs[0].yaxis.set_minor_formatter(NullFormatter())
     
-    # Add marks on S&P500 at the same timing
+    # Add marks on S&P500 at the same timing with larger markers
     if len(troughs_below_04) > 0:
         s_and_p_troughs = sp500_data.loc[below_04.index[troughs_below_04]]
-        axs[0].scatter(s_and_p_troughs.index, s_and_p_troughs, color='purple', marker='v', s=100, 
+        axs[0].scatter(s_and_p_troughs.index, s_and_p_troughs, color='purple', marker='v', s=150, 
                       label=f'Troughs ({short_ma_period}MA < 0.4) on S&P 500', zorder=3)
     
-    # Add custom legend with the background patch
+    # Add custom legend with the background patch and larger markers
     handles, labels = axs[0].get_legend_handles_labels()
     handles.insert(1, background_patch)
     axs[0].legend(handles=handles, loc='upper left')
     
     axs[0].grid(True)
 
-    # Plot Breadth Index
-    axs[1].plot(breadth_ma_200.index, breadth_ma_200, label='Breadth Index (200-Day MA)', color='green', zorder=2)
-    axs[1].plot(breadth_ma_short.index, breadth_ma_short, label=f'Breadth Index ({short_ma_period}-Day MA)', color='orange', zorder=2)
+    # Plot Breadth Index with thicker lines
+    axs[1].plot(breadth_ma_200.index, breadth_ma_200, label='Breadth Index (200-Day MA)', color='green', zorder=2, linewidth=2)
+    axs[1].plot(breadth_ma_short.index, breadth_ma_short, label=f'Breadth Index ({short_ma_period}-Day MA)', color='orange', zorder=2, linewidth=2)
     
-    # Add all markers with higher zorder
+    # Add all markers with higher zorder and larger size
     if len(peaks) > 0:
-        axs[1].plot(breadth_ma_200.index[peaks], breadth_ma_200.iloc[peaks], 'r^', label='Peaks (Tops)', zorder=3)
+        axs[1].plot(breadth_ma_200.index[peaks], breadth_ma_200.iloc[peaks], 'r^', label='Peaks (Tops)', zorder=3, markersize=10)
     if len(troughs) > 0:
-        axs[1].plot(breadth_ma_200.index[troughs], breadth_ma_200.iloc[troughs], 'bv', label='Troughs (Bottoms)', zorder=3)
+        axs[1].plot(breadth_ma_200.index[troughs], breadth_ma_200.iloc[troughs], 'bv', label='Troughs (Bottoms)', zorder=3, markersize=10)
     if len(troughs_below_04) > 0:
-        axs[1].scatter(below_04.index[troughs_below_04], below_04.iloc[troughs_below_04], color='purple', marker='v', s=100,
+        axs[1].scatter(below_04.index[troughs_below_04], below_04.iloc[troughs_below_04], color='purple', marker='v', s=150,
                       label=f'Troughs ({short_ma_period}MA < 0.4)', zorder=3)
 
-    # Draw horizontal lines for peak and trough averages
-    axs[1].axhline(peaks_avg, color='red', linestyle='--', label=f'Average Peaks (200MA) = {peaks_avg:.2f}', zorder=2)
-    axs[1].axhline(troughs_avg_below_04, color='blue', linestyle='--', label=f'Average Troughs ({short_ma_period}MA < 0.4) = {troughs_avg_below_04:.2f}', zorder=2)
+    # Draw horizontal lines for peak and trough averages with thicker lines
+    axs[1].axhline(peaks_avg, color='red', linestyle='--', label=f'Average Peaks (200MA) = {peaks_avg:.2f}', zorder=2, linewidth=2)
+    axs[1].axhline(troughs_avg_below_04, color='blue', linestyle='--', label=f'Average Troughs ({short_ma_period}MA < 0.4) = {troughs_avg_below_04:.2f}', zorder=2, linewidth=2)
 
-    axs[1].set_title(f'S&P 500 Breadth Index with 200-Day MA and {short_ma_period}-Day MA')
-    axs[1].set_ylabel('Breadth Index Percentage')
+    axs[1].set_title(f'S&P 500 Breadth Index with 200-Day MA and {short_ma_period}-Day MA', pad=20, fontsize=16)  # タイトルのフォントサイズを直接指定
+    axs[1].set_ylabel('Breadth Index Percentage', fontsize=14)  # Y軸ラベルのフォントサイズを直接指定
     axs[1].legend()
     axs[1].grid(True)
 
@@ -620,15 +627,15 @@ def plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, short_ma_period=
     current_date = datetime.now().strftime('%Y%m%d')
     filename = f'reports/market_breadth_{current_date}_ma{short_ma_period}.png'
     
-    # Save image with error handling
+    # Save image with higher DPI and better quality settings
     try:
-        plt.savefig(filename, dpi=300, bbox_inches='tight', format='png')
+        plt.savefig(filename, dpi=400, bbox_inches='tight', format='png', facecolor='white', edgecolor='none')
         print(f"Chart saved to {filename}")
     except Exception as e:
         print(f"Error saving chart: {e}")
         # Try alternative save method
         try:
-            plt.savefig(filename, dpi=300, bbox_inches='tight', format='png', facecolor='white', edgecolor='none')
+            plt.savefig(filename, dpi=400, bbox_inches='tight', format='png')
             print(f"Chart saved to {filename} (alternative method)")
         except Exception as e:
             print(f"Failed to save chart: {e}")
