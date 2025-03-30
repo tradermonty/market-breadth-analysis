@@ -51,13 +51,39 @@ session.mount("http://", adapter)
 
 def save_stock_data(data, filename):
     """Save stock data to CSV file"""
-    data.to_csv(data_dir / filename)
+    print(f"\nSaving stock data:")
+    print(f"Data type: {type(data)}")
+    if isinstance(data, pd.DataFrame):
+        print(f"Shape: {data.shape}")
+        print(f"Sample columns: {list(data.columns[:5])}")
+    elif isinstance(data, pd.Series):
+        print(f"Length: {len(data)}")
+        print(f"Name: {data.name}")
+    
+    if isinstance(data, pd.Series):
+        # Convert Series to DataFrame with a single column
+        df = pd.DataFrame(data, columns=['adjusted_close'])
+        print(f"Converted to DataFrame with shape: {df.shape}")
+        df.to_csv(data_dir / filename, index=True)
+    else:
+        # Save DataFrame as is
+        data.to_csv(data_dir / filename, index=True)
 
 def load_stock_data(filename):
     """Load stock data from CSV file"""
     try:
-        return pd.read_csv(data_dir / filename, index_col=0, parse_dates=True)
+        print(f"\nLoading stock data from {filename}")
+        data = pd.read_csv(data_dir / filename, index_col=0, parse_dates=True)
+        print(f"Loaded data shape: {data.shape}")
+        print(f"Sample columns: {list(data.columns[:5])}")
+        
+        # If it's a single column DataFrame, convert to Series
+        if isinstance(data, pd.DataFrame) and len(data.columns) == 1:
+            print("Converting single column DataFrame to Series")
+            return data.iloc[:, 0]
+        return data
     except FileNotFoundError:
+        print(f"File not found: {filename}")
         return None
 
 def get_sp500_tickers_from_wikipedia():
@@ -139,6 +165,8 @@ def get_sp500_price_data(start_date, end_date, use_saved_data=False):
             combined_data = pd.concat([saved_data, new_data])
             combined_data = combined_data[~combined_data.index.duplicated(keep='last')]
             combined_data = combined_data.sort_index()
+            # Save as a single column with proper name
+            combined_data.name = 'adjusted_close'
             save_stock_data(combined_data, filename)
             return combined_data
         
@@ -162,8 +190,11 @@ def get_sp500_price_data(start_date, end_date, use_saved_data=False):
                 data.set_index('date', inplace=True)
                 
                 if 'adjusted_close' in data.columns:
-                    save_stock_data(data['adjusted_close'], filename)
-                    return data['adjusted_close']
+                    # Save as a single column with proper name
+                    price_data = data['adjusted_close']
+                    price_data.name = 'adjusted_close'
+                    save_stock_data(price_data, filename)
+                    return price_data
     except Exception as e:
         print(f"Error fetching S&P500 data: {e}")
     
@@ -174,19 +205,22 @@ def get_multiple_stock_data(tickers, start_date, end_date, use_saved_data=False)
     filename = 'stock_data.csv'
     file_path = data_dir / filename
     
-    # Check if file exists and is not empty
-    if use_saved_data and file_path.exists() and file_path.stat().st_size > 0:
-        try:
-            saved_data = load_stock_data(filename)
-            if saved_data is not None and not saved_data.empty:
-                return saved_data
-        except Exception as e:
-            print(f"Error loading saved data: {e}")
+    # Print initial parameters
+    print(f"\nget_multiple_stock_data parameters:")
+    print(f"Start date: {start_date}")
+    print(f"End date: {end_date}")
+    print(f"Number of tickers: {len(tickers)}")
+    print(f"Sample tickers: {tickers[:5]}")
     
     # Try to load local data
     saved_data = load_stock_data(filename)
     
     if saved_data is not None and not saved_data.empty:
+        print(f"\nLoaded saved data:")
+        print(f"Shape: {saved_data.shape}")
+        print(f"Date range: {saved_data.index.min()} to {saved_data.index.max()}")
+        print(f"Sample columns: {list(saved_data.columns[:5])}")
+        
         # Check the date range of saved data
         saved_start = saved_data.index.min()
         saved_end = saved_data.index.max()
@@ -247,7 +281,9 @@ def get_multiple_stock_data(tickers, start_date, end_date, use_saved_data=False)
                                 if 'adjusted_close' in data.columns and len(data) > 0:
                                     # Remove any duplicate indices before adding to list
                                     data = data[~data.index.duplicated(keep='last')]
-                                    new_data_list.append(data['adjusted_close'])
+                                    series = data['adjusted_close']
+                                    series.name = ticker  # Use ticker as column name
+                                    new_data_list.append(series)
                         except ValueError as e:
                             print(f"\nError parsing data for {ticker}: {str(e)}")
             except Exception as e:
@@ -265,30 +301,27 @@ def get_multiple_stock_data(tickers, start_date, end_date, use_saved_data=False)
             saved_data = saved_data[~saved_data.index.duplicated(keep='last')]
             print(f"Shape of saved_data: {saved_data.shape}")
             
-            # Get common tickers between saved_data and new_data
-            common_tickers = list(set(saved_data.columns) & set(new_data.columns))
-            print(f"\nNumber of common tickers: {len(common_tickers)}")
-            print(f"Sample of common tickers: {common_tickers[:5]}")
+            # Get unique tickers
+            all_tickers = list(set(saved_data.columns) | set(new_data.columns))
+            print(f"Total unique tickers: {len(all_tickers)}")
             
-            if common_tickers:
-                # Combine data only for common tickers
-                print("\nAttempting to combine data...")
-                print(f"Saved data shape before combination: {saved_data[common_tickers].shape}")
-                print(f"New data shape before combination: {new_data[common_tickers].shape}")
-                
-                combined_data = pd.concat([
-                    saved_data[common_tickers],
-                    new_data[common_tickers]
-                ])
-                print(f"Combined data shape: {combined_data.shape}")
-                
-                combined_data = combined_data[~combined_data.index.duplicated(keep='last')]
-                combined_data = combined_data.sort_index()
-                save_stock_data(combined_data, filename)
-                return combined_data
-            else:
-                print("Warning: No common tickers found between saved and new data")
-                return saved_data
+            # Initialize the combined DataFrame with NaN values
+            combined_data = pd.DataFrame(index=sorted(set(saved_data.index) | set(new_data.index)))
+            
+            # Fill data from both sources
+            for ticker in all_tickers:
+                if ticker in saved_data.columns:
+                    combined_data.loc[saved_data.index, ticker] = saved_data[ticker]
+                if ticker in new_data.columns:
+                    combined_data.loc[new_data.index, ticker] = new_data[ticker]
+            
+            # Sort index and remove any duplicates
+            combined_data = combined_data.sort_index()
+            combined_data = combined_data[~combined_data.index.duplicated(keep='last')]
+            
+            print(f"Combined data shape: {combined_data.shape}")
+            save_stock_data(combined_data, filename)
+            return combined_data
         
         return saved_data
     
@@ -319,7 +352,9 @@ def get_multiple_stock_data(tickers, start_date, end_date, use_saved_data=False)
                         if 'adjusted_close' in data.columns and len(data) > 200:
                             # Remove any duplicate indices before adding to list
                             data = data[~data.index.duplicated(keep='last')]
-                            all_data.append(data['adjusted_close'])
+                            series = data['adjusted_close']
+                            series.name = ticker  # Use ticker as column name
+                            all_data.append(series)
                         else:
                             print(f"\nSkipping {ticker}: Insufficient data")
                 except ValueError as e:
@@ -343,8 +378,26 @@ def get_multiple_stock_data(tickers, start_date, end_date, use_saved_data=False)
 
 # Calculate whether each stock is above the specified moving average
 def calculate_above_ma(stock_data, window=200):
-    ma_data = stock_data.rolling(window=window).mean()  # Calculate moving average
-    above_ma = stock_data > ma_data  # Check if price is above moving average
+    """Calculate whether each stock is above the specified moving average"""
+    print(f"\nCalculating moving averages:")
+    print(f"Input data shape: {stock_data.shape}")
+    print(f"Sample column names: {list(stock_data.columns[:5])}")
+    print(f"Date range: {stock_data.index.min()} to {stock_data.index.max()}")
+    
+    # Calculate moving average
+    ma_data = stock_data.rolling(window=window).mean()
+    
+    # Check if price is above moving average
+    above_ma = stock_data > ma_data
+    
+    # Calculate and print statistics
+    daily_percentages = above_ma.mean(axis=1)
+    print(f"\nBreadth Index Statistics:")
+    print(f"Mean: {daily_percentages.mean():.3f}")
+    print(f"Max: {daily_percentages.max():.3f}")
+    print(f"Min: {daily_percentages.min():.3f}")
+    print(f"Number of stocks per day: {above_ma.sum(axis=1).mean():.1f}")
+    
     return above_ma
 
 # Calculate trend with hysteresis for slope
@@ -443,15 +496,24 @@ def get_last_trading_day(date):
         last_day = last_day - timedelta(days=1)
     return last_day.strftime('%Y-%m-%d')
 
-def plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, short_ma_period=20):
+def plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, short_ma_period=20, start_date=None, end_date=None):
     """Visualize Breadth Index and S&P 500 price"""
     # Ensure both datasets have the same date range
     common_dates = above_ma_200.index.intersection(sp500_data.index)
     if len(common_dates) == 0:
         raise ValueError("No common dates found between breadth data and S&P500 data")
     
+    # Align both datasets to common dates
     above_ma_200 = above_ma_200.loc[common_dates]
     sp500_data = sp500_data.loc[common_dates]
+    
+    # Filter data by date range if specified
+    if start_date and end_date:
+        start_date = pd.to_datetime(start_date)
+        end_date = pd.to_datetime(end_date)
+        mask = (above_ma_200.index >= start_date) & (above_ma_200.index <= end_date)
+        above_ma_200 = above_ma_200.loc[mask]
+        sp500_data = sp500_data.loc[mask]
     
     # Calculate percentage of stocks above 200-day moving average
     breadth_index_200 = above_ma_200.mean(axis=1)
@@ -595,7 +657,7 @@ if __name__ == "__main__":
     print(f"\nInitial start date: {start_date}")
     
     # Get the latest available market date
-    end_date = get_latest_market_date()
+    end_date = get_last_trading_day(datetime.today())  # Use the previous business day from today
     print(f"Initial end date: {end_date}")
     
     # Convert dates to datetime for comparison
@@ -618,15 +680,39 @@ if __name__ == "__main__":
         if ticker_list:
             # Get S&P 500 price data
             sp500_data = get_sp500_price_data(start_date, end_date, args.use_saved_data)
+            
+            if sp500_data.empty:
+                raise ValueError("Failed to retrieve S&P500 price data")
 
             # Get and process data
             stock_data = get_multiple_stock_data(ticker_list, start_date, end_date, args.use_saved_data)
+            
+            if stock_data.empty:
+                raise ValueError("Failed to retrieve stock data")
 
             # Calculate 200-day moving average
             above_ma_200 = calculate_above_ma(stock_data, window=200)
+            
+            if above_ma_200.empty:
+                raise ValueError("Failed to calculate moving averages")
 
-            # Visualize Breadth Index and S&P 500 price
-            plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, args.short_ma)
+            # Ensure both datasets have the same date range
+            common_dates = above_ma_200.index.intersection(sp500_data.index)
+            if len(common_dates) == 0:
+                raise ValueError("No common dates found between breadth data and S&P500 data")
+            
+            # Align both datasets to common dates
+            above_ma_200 = above_ma_200.loc[common_dates]
+            sp500_data = sp500_data.loc[common_dates]
+
+            # Print data shapes for debugging
+            print(f"\nData shapes after alignment:")
+            print(f"above_ma_200 shape: {above_ma_200.shape}")
+            print(f"sp500_data shape: {sp500_data.shape}")
+            print(f"Number of common dates: {len(common_dates)}")
+
+            # Visualize Breadth Index and S&P 500 price with specified date range
+            plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, args.short_ma, start_date, end_date)
         else:
             print("Error: Ticker list could not be retrieved.")
     except ValueError as e:
