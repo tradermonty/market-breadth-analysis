@@ -45,10 +45,13 @@ jobs:
         EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
       run: python market_breadth.py
 
+    - name: Setup Pages
+      uses: actions/configure-pages@v4
+
     - name: Upload artifact
       uses: actions/upload-pages-artifact@v3
       with:
-        path: './reports'
+        path: 'reports'  # Upload the reports directory directly
 
   # Deploy job
   deploy:
