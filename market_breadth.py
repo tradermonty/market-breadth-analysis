@@ -29,12 +29,13 @@ def setup_matplotlib_backend():
     """Set up matplotlib backend based on the operating system"""
     system = platform.system().lower()
     if system == 'darwin':  # macOS
-        matplotlib.use('TkAgg')
+        matplotlib.use('TkAgg')  # Use TkAgg backend for macOS
     elif system == 'windows':
-        matplotlib.use('Qt5Agg')  # Qt5Agg is generally stable on Windows
+        matplotlib.use('TkAgg')  # Use TkAgg backend for Windows
     else:  # Linux and others
-        matplotlib.use('Agg')  # Non-interactive backend for server environments
+        matplotlib.use('Agg')  # Use Agg backend for other systems
 
+# Set up backend first
 setup_matplotlib_backend()
 
 # Configure retry strategy for API calls
@@ -374,28 +375,73 @@ def get_latest_market_date():
             'limit': 1
         }
         
+        # Execute API request
         response = session.get(url, params=params)
-        if response.status_code == 200:
-            data = pd.DataFrame(response.json())
-            if not data.empty:
-                latest_date = pd.to_datetime(data['date'].iloc[0])
-                # Verify that the date is not in the future
-                if latest_date > datetime.today():
-                    print("Warning: API returned a future date, using yesterday's date instead")
-                    yesterday = datetime.today() - timedelta(days=1)
-                    if yesterday.weekday() >= 5:  # 5 is Saturday, 6 is Sunday
-                        yesterday = yesterday - timedelta(days=yesterday.weekday() - 4)
-                    return yesterday.strftime('%Y-%m-%d')
-                return latest_date.strftime('%Y-%m-%d')
-    except Exception as e:
+        
+        # Check response status
+        if response.status_code != 200:
+            print(f"Warning: API returned status code {response.status_code}")
+            raise ValueError(f"API request failed with status code {response.status_code}")
+        
+        # Check response content
+        if not response.text.strip():
+            print("Warning: Empty response received from API")
+            raise ValueError("Empty response from API")
+        
+        # Parse JSON data
+        try:
+            json_data = response.json()
+        except ValueError as e:
+            print(f"Warning: Invalid JSON response: {e}")
+            raise
+        
+        # Create and validate dataframe
+        data = pd.DataFrame(json_data)
+        if data.empty:
+            print("Warning: Empty data returned from API")
+            raise ValueError("Empty data received from API")
+        
+        # Check for date column existence
+        if 'date' not in data.columns:
+            print("Warning: 'date' column not found in API response")
+            raise ValueError("Missing 'date' column in API response")
+        
+        # Convert and validate date
+        try:
+            latest_date = pd.to_datetime(data['date'].iloc[0])
+        except (ValueError, TypeError) as e:
+            print(f"Warning: Invalid date format: {e}")
+            raise
+        
+        # Validate date
+        today = datetime.today()
+        
+        # If future date
+        if latest_date > today:
+            print("Warning: API returned a future date, using yesterday's date instead")
+            return get_last_trading_day(today)
+        
+        # If date is too far in the past
+        if (today - latest_date).days > 3650:
+            print("Warning: API returned a date too far in the past")
+            return get_last_trading_day(today)
+        
+        # Adjust for weekends
+        if latest_date.weekday() >= 5:  # 5 is Saturday, 6 is Sunday
+            latest_date = get_last_trading_day(latest_date)
+        
+        return latest_date.strftime('%Y-%m-%d')
+        
+    except (ValueError, TypeError, requests.exceptions.RequestException) as e:
         print(f"Error getting latest market date: {e}")
-    
-    # If API call fails or returns invalid date, use yesterday's date
-    yesterday = datetime.today() - timedelta(days=1)
-    # If yesterday was a weekend, go back to Friday
-    if yesterday.weekday() >= 5:  # 5 is Saturday, 6 is Sunday
-        yesterday = yesterday - timedelta(days=yesterday.weekday() - 4)
-    return yesterday.strftime('%Y-%m-%d')
+        return get_last_trading_day(datetime.today())
+
+def get_last_trading_day(date):
+    """Get the last trading day from a given date"""
+    last_day = date - timedelta(days=1)
+    while last_day.weekday() >= 5:  # 5 is Saturday, 6 is Sunday
+        last_day = last_day - timedelta(days=1)
+    return last_day.strftime('%Y-%m-%d')
 
 def plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, short_ma_period=20):
     """Visualize Breadth Index and S&P 500 price"""
@@ -512,11 +558,23 @@ def plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, short_ma_period=
     current_date = datetime.now().strftime('%Y%m%d')
     filename = f'reports/market_breadth_{current_date}_ma{short_ma_period}.png'
     
-    # Save image
-    plt.savefig(filename, dpi=300, bbox_inches='tight')
-    print(f"Chart saved to {filename}")
+    # Save image with error handling
+    try:
+        plt.savefig(filename, dpi=300, bbox_inches='tight', format='png')
+        print(f"Chart saved to {filename}")
+    except Exception as e:
+        print(f"Error saving chart: {e}")
+        # Try alternative save method
+        try:
+            plt.savefig(filename, dpi=300, bbox_inches='tight', format='png', facecolor='white', edgecolor='none')
+            print(f"Chart saved to {filename} (alternative method)")
+        except Exception as e:
+            print(f"Failed to save chart: {e}")
     
+    # Display the graph
     plt.show()
+    
+    plt.close()  # Close the figure to free memory
 
 # Main process
 if __name__ == "__main__":
