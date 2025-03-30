@@ -20,7 +20,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pandas matplotlib scipy python-dotenv requests tqdm
+        pip install -r requirements.txt
     
     - name: Create necessary directories
       run: |
@@ -29,7 +29,7 @@ jobs:
     - name: Run market breadth analysis
       env:
         EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
-      run: python market_breadth/market_breadth.py
+      run: python market_breadth.py
     
     - name: Deploy to GitHub Pages
       uses: peaceiris/actions-gh-pages@v3
@@ -37,4 +37,4 @@ jobs:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         publish_dir: ./reports
         publish_branch: gh-pages
-        commit_message: ${{ github.event.head_commit.message }} 
+        commit_message: "Update market breadth analysis: ${{ github.event.head_commit.message }}" 
