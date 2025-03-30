@@ -24,7 +24,8 @@ jobs:
     timeout-minutes: 15  # Limit maximum execution time to 15 minutes
     
     steps:
-    - uses: actions/checkout@v3
+    - name: Checkout repository
+      uses: actions/checkout@v3
       with:
         ref: main  # Explicitly checkout main branch
     
@@ -82,10 +83,10 @@ jobs:
         echo "data directory contents:"
         ls -la data/
 
-    - name: Upload artifact
+    - name: Upload Pages artifact
       uses: actions/upload-pages-artifact@v3
       with:
-        path: 'reports'  # Upload the reports directory directly
+        path: reports
 
   # Deploy job
   deploy:
