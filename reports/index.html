@@ -76,17 +76,53 @@
             const errorMessage = document.getElementById('error-message');
             const today = new Date();
             
+            function updateLastModifiedDate(imagePath) {
+                fetch(imagePath)
+                    .then(response => {
+                        const lastModified = response.headers.get('last-modified');
+                        if (lastModified) {
+                            const lastModifiedDate = new Date(lastModified);
+                            const options = {
+                                timeZone: 'America/New_York',
+                                year: 'numeric',
+                                month: '2-digit',
+                                day: '2-digit',
+                                hour: '2-digit',
+                                minute: '2-digit',
+                                second: '2-digit'
+                            };
+                            document.getElementById('last-update').textContent = lastModifiedDate.toLocaleString('en-US', options);
+                        }
+                    })
+                    .catch(() => {
+                        // If we can't get the last modified date, show current time
+                        const now = new Date();
+                        const options = {
+                            timeZone: 'America/New_York',
+                            year: 'numeric',
+                            month: '2-digit',
+                            day: '2-digit',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            second: '2-digit'
+                        };
+                        document.getElementById('last-update').textContent = now.toLocaleString('en-US', options);
+                    });
+            }
+            
             // First, try to load today's MA20 image
             const todayFormatted = formatDate(today);
-            img.src = `market_breadth_${todayFormatted}_ma20.png`;
+            const todayImagePath = `market_breadth_${todayFormatted}_ma20.png`;
+            img.src = todayImagePath;
             
             img.onerror = function() {
                 // If today's image fails, try yesterday's image
                 const yesterday = new Date(today);
                 yesterday.setDate(yesterday.getDate() - 1);
                 const yesterdayFormatted = formatDate(yesterday);
+                const yesterdayImagePath = `market_breadth_${yesterdayFormatted}_ma20.png`;
                 
-                img.src = `market_breadth_${yesterdayFormatted}_ma20.png`;
+                img.src = yesterdayImagePath;
                 
                 img.onerror = function() {
                     // If both date-based images fail, try sample_output.png
@@ -101,36 +137,27 @@
                     img.onload = function() {
                         errorMessage.style.display = 'none';
                         img.style.display = 'block';
+                        updateLastModifiedDate('sample_output.png');
                     };
                 };
                 
                 img.onload = function() {
                     errorMessage.style.display = 'none';
                     img.style.display = 'block';
+                    updateLastModifiedDate(yesterdayImagePath);
                 };
             };
             
             img.onload = function() {
                 errorMessage.style.display = 'none';
                 img.style.display = 'block';
+                updateLastModifiedDate(todayImagePath);
             };
         }
 
         // Load the image when the page loads
         window.onload = function() {
             loadImage();
-            // Display last update time in US Eastern timezone
-            const now = new Date();
-            const options = {
-                timeZone: 'America/New_York',
-                year: 'numeric',
-                month: '2-digit',
-                day: '2-digit',
-                hour: '2-digit',
-                minute: '2-digit',
-                second: '2-digit'
-            };
-            document.getElementById('last-update').textContent = now.toLocaleString('en-US', options);
         };
     </script>
 </body>
