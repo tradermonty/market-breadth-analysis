@@ -22,11 +22,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     
-    permissions:
-      contents: read
-      pages: write
-      id-token: write
-    
     steps:
     - name: Checkout repository
       uses: actions/checkout@v3
@@ -42,60 +37,22 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        pip list
-    
-    - name: Verify environment
-      run: |
-        echo "Checking directory structure..."
-        ls -la
-        echo "Checking Python version..."
-        python --version
-        echo "Checking if EODHD_API_KEY is set..."
-        if [ -z "${{ secrets.EODHD_API_KEY }}" ]; then
-          echo "Error: EODHD_API_KEY is not set in GitHub Secrets"
-          exit 1
-        else
-          echo "EODHD_API_KEY is properly set"
-        fi
-        echo "Current working directory: $(pwd)"
     
     - name: Create necessary directories
-      run: |
-        mkdir -p reports data
-        echo "Created directories:"
-        ls -la
-        echo "Contents of reports directory:"
-        ls -la reports/
-        echo "Contents of data directory:"
-        ls -la data/
+      run: mkdir -p reports data
     
     - name: Run market breadth analysis
       env:
         EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
-      run: |
-        echo "Starting market breadth analysis..."
-        echo "Current working directory: $(pwd)"
-        echo "Python path: $(which python)"
-        python --version
-        echo "Contents before execution:"
-        ls -la
-        python -u market_breadth.py --debug --use_saved_data
-        echo "Analysis completed. Checking directories:"
-        echo "reports directory contents:"
-        ls -la reports/
-        echo "data directory contents:"
-        ls -la data/
+      run: python market_breadth.py
 
     - name: Create .nojekyll file
-      run: |
-        touch reports/.nojekyll
-        echo "Contents of reports directory after creating .nojekyll:"
-        ls -la reports/
+      run: touch reports/.nojekyll
 
-    - name: Configure Pages
+    - name: Setup Pages
       uses: actions/configure-pages@v4
 
-    - name: Upload Pages artifact
+    - name: Upload artifact
       uses: actions/upload-pages-artifact@v3
       with:
         path: reports
@@ -104,10 +61,6 @@ jobs:
   deploy:
     needs: analyze
     runs-on: ubuntu-latest
-    
-    permissions:
-      pages: write
-      id-token: write
     
     environment:
       name: github-pages
