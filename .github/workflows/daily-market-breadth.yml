@@ -35,15 +35,50 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
+        pip list  # Show installed packages for debugging
+    
+    - name: Verify environment
+      run: |
+        echo "Checking directory structure..."
+        ls -la
+        echo "Checking Python version..."
+        python --version
+        echo "Checking if EODHD_API_KEY is set..."
+        if [ -z "${{ secrets.EODHD_API_KEY }}" ]; then
+          echo "Error: EODHD_API_KEY is not set in GitHub Secrets"
+          exit 1
+        else
+          echo "EODHD_API_KEY is properly set"
+        fi
+        echo "Current working directory: $(pwd)"
     
     - name: Create necessary directories
       run: |
         mkdir -p reports data
+        echo "Created directories:"
+        ls -la
+        echo "Contents of reports directory:"
+        ls -la reports/
+        echo "Contents of data directory:"
+        ls -la data/
     
     - name: Run market breadth analysis
       env:
         EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
-      run: python market_breadth.py
+      run: |
+        echo "Starting market breadth analysis..."
+        echo "Current working directory: $(pwd)"
+        echo "Python path: $(which python)"
+        echo "Python version: $(python --version)"
+        echo "Contents before execution:"
+        ls -la
+        # Run with debug mode
+        python -u market_breadth.py --debug
+        echo "Analysis completed. Checking directories:"
+        echo "reports directory contents:"
+        ls -la reports/
+        echo "data directory contents:"
+        ls -la data/
 
     - name: Upload artifact
       uses: actions/upload-pages-artifact@v3
