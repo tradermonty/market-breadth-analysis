@@ -482,7 +482,7 @@ def plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, short_ma_period=
     fig, axs = plt.subplots(2, 1, figsize=(10, 10), sharex=True)
 
     # Plot S&P 500 price first
-    axs[0].plot(sp500_data.index, sp500_data['adjusted_close'], label='S&P 500 Price', color='cyan', zorder=2)
+    axs[0].plot(sp500_data.index, sp500_data, label='S&P 500 Price', color='cyan', zorder=2)
     
     # Create a custom patch for the background color legend
     background_patch = Patch(facecolor=(1.0, 0.9, 0.96), alpha=0.5, 
@@ -519,7 +519,7 @@ def plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, short_ma_period=
     
     # Add marks on S&P500 at the same timing
     if len(troughs_below_04) > 0:
-        s_and_p_troughs = sp500_data['adjusted_close'].loc[below_04.index[troughs_below_04]]
+        s_and_p_troughs = sp500_data.loc[below_04.index[troughs_below_04]]
         axs[0].scatter(s_and_p_troughs.index, s_and_p_troughs, color='purple', marker='v', s=100, 
                       label=f'Troughs ({short_ma_period}MA < 0.4) on S&P 500', zorder=3)
     
