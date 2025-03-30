@@ -4,5 +4,6 @@ data/*
 !data/.gitkeep
 reports/*
 !reports/.gitkeep
+!reports/sample_output.png
 __pycache__/
 *.pyc 
