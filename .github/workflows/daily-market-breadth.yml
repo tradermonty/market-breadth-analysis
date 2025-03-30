@@ -18,16 +18,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Build job
-  build:
+  analyze:
     runs-on: ubuntu-latest
-    timeout-minutes: 15  # Limit maximum execution time to 15 minutes
+    timeout-minutes: 15
     
     steps:
     - name: Checkout repository
       uses: actions/checkout@v3
       with:
-        ref: main  # Explicitly checkout main branch
+        ref: main
     
     - name: Set up Python
       uses: actions/setup-python@v4
@@ -38,7 +37,7 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        pip list  # Show installed packages for debugging
+        pip list
     
     - name: Verify environment
       run: |
@@ -72,25 +71,33 @@ jobs:
         echo "Starting market breadth analysis..."
         echo "Current working directory: $(pwd)"
         echo "Python path: $(which python)"
-        echo "Python version: $(python --version)"
+        python --version
         echo "Contents before execution:"
         ls -la
-        # Run with debug mode
-        python -u market_breadth.py --debug
+        python -u market_breadth.py --debug --use_saved_data
         echo "Analysis completed. Checking directories:"
         echo "reports directory contents:"
         ls -la reports/
         echo "data directory contents:"
         ls -la data/
 
-    - name: Upload Pages artifact
-      uses: actions/upload-pages-artifact@v3
-      with:
-        path: reports
+    - name: List generated files
+      run: |
+        echo "Workspace contents:"
+        ls -R
+        echo "Reports directory contents:"
+        ls -la reports/
 
-  # Deploy job
+    - name: Upload artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: market-breadth-reports
+        path: reports/
+        retention-days: 1
+
   deploy:
-    needs: build
+    needs: analyze
+    runs-on: ubuntu-latest
     
     permissions:
       pages: write
@@ -100,8 +107,18 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     
-    runs-on: ubuntu-latest
     steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: market-breadth-reports
+          path: ./reports
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: reports
+
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4 
