@@ -82,12 +82,19 @@ jobs:
         ls -la data/
 
     - name: Create .nojekyll file
-      run: touch reports/.nojekyll
+      run: |
+        touch reports/.nojekyll
+        echo "Contents of reports directory after creating .nojekyll:"
+        ls -la reports/
+
+    - name: Configure Pages
+      uses: actions/configure-pages@v4
 
     - name: Upload Pages artifact
       uses: actions/upload-pages-artifact@v3
       with:
         path: reports
+        retention-days: 1
 
   deploy:
     needs: analyze
