@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ja">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -89,9 +89,19 @@
                 img.src = `market_breadth_${yesterdayFormatted}_ma20.png`;
                 
                 img.onerror = function() {
-                    // If both attempts fail, show error message
-                    errorMessage.style.display = 'block';
-                    img.style.display = 'none';
+                    // If both date-based images fail, try sample_output.png
+                    img.src = 'sample_output.png';
+                    
+                    img.onerror = function() {
+                        // If sample image also fails, show error message
+                        errorMessage.style.display = 'block';
+                        img.style.display = 'none';
+                    };
+                    
+                    img.onload = function() {
+                        errorMessage.style.display = 'none';
+                        img.style.display = 'block';
+                    };
                 };
                 
                 img.onload = function() {
@@ -106,13 +116,13 @@
             };
         }
 
-        // Load image when page loads
+        // Load the image when the page loads
         window.onload = function() {
             loadImage();
-            // Display last update time in Japan timezone
+            // Display last update time in US Eastern timezone
             const now = new Date();
             const options = {
-                timeZone: 'Asia/Tokyo',
+                timeZone: 'America/New_York',
                 year: 'numeric',
                 month: '2-digit',
                 day: '2-digit',
@@ -120,7 +130,7 @@
                 minute: '2-digit',
                 second: '2-digit'
             };
-            document.getElementById('last-update').textContent = now.toLocaleString('ja-JP', options);
+            document.getElementById('last-update').textContent = now.toLocaleString('en-US', options);
         };
     </script>
 </body>
