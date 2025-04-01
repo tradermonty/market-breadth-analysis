@@ -417,6 +417,29 @@ def calculate_trend_with_hysteresis(ma_series, threshold=0.001):
 
     return trend
 
+def get_last_trading_day(date):
+    """
+    Get the last trading day from a given date.
+    If the given date is today, it will return today's date.
+    
+    Args:
+        date (datetime): The date to get the last trading day from
+        
+    Returns:
+        str: The last trading day in YYYY-MM-DD format
+    """
+    today = datetime.today()
+    
+    # If the date is today, return today's date
+    if date.date() == today.date():
+        return date.strftime('%Y-%m-%d')
+    
+    # For past dates, calculate the last trading day
+    last_day = date - timedelta(days=1)
+    while last_day.weekday() >= 5:  # 5 is Saturday, 6 is Sunday
+        last_day = last_day - timedelta(days=1)
+    return last_day.strftime('%Y-%m-%d')
+
 def get_latest_market_date():
     """Get the latest available market date"""
     try:
@@ -469,15 +492,14 @@ def get_latest_market_date():
         # Validate date
         today = datetime.today()
         
-        # If future date
-        if latest_date > today:
-            print("Warning: API returned a future date, using yesterday's date instead")
-            return get_last_trading_day(today)
+        # If the date is today, use today's date
+        if latest_date.date() == today.date():
+            return today.strftime('%Y-%m-%d')
         
         # If date is too far in the past
         if (today - latest_date).days > 3650:
             print("Warning: API returned a date too far in the past")
-            return get_last_trading_day(today)
+            return today.strftime('%Y-%m-%d')
         
         # Adjust for weekends
         if latest_date.weekday() >= 5:  # 5 is Saturday, 6 is Sunday
@@ -487,14 +509,7 @@ def get_latest_market_date():
         
     except (ValueError, TypeError, requests.exceptions.RequestException) as e:
         print(f"Error getting latest market date: {e}")
-        return get_last_trading_day(datetime.today())
-
-def get_last_trading_day(date):
-    """Get the last trading day from a given date"""
-    last_day = date - timedelta(days=1)
-    while last_day.weekday() >= 5:  # 5 is Saturday, 6 is Sunday
-        last_day = last_day - timedelta(days=1)
-    return last_day.strftime('%Y-%m-%d')
+        return datetime.today().strftime('%Y-%m-%d')
 
 def plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, short_ma_period=20, start_date=None, end_date=None):
     """Visualize Breadth Index and S&P 500 price"""
@@ -541,14 +556,14 @@ def plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, short_ma_period=
     troughs_avg_below_04 = below_04.iloc[troughs_below_04].mean()
 
     # Create plot with larger figure size and adjusted font sizes
-    plt.rcParams['font.size'] = 12  # 基本フォントサイズを大きく
-    plt.rcParams['axes.titlesize'] = 16  # タイトルのフォントサイズを大きく
-    plt.rcParams['axes.labelsize'] = 14  # 軸ラベルのフォントサイズを大きく
-    plt.rcParams['xtick.labelsize'] = 10  # x軸の目盛りラベルのフォントサイズ
-    plt.rcParams['ytick.labelsize'] = 10  # y軸の目盛りラベルのフォントサイズ
-    plt.rcParams['legend.fontsize'] = 10  # 凡例のフォントサイズ
+    plt.rcParams['font.size'] = 12  # Increase base font size
+    plt.rcParams['axes.titlesize'] = 16  # Increase title font size
+    plt.rcParams['axes.labelsize'] = 14  # Increase axis label font size
+    plt.rcParams['xtick.labelsize'] = 10  # Set x-axis tick label font size
+    plt.rcParams['ytick.labelsize'] = 10  # Set y-axis tick label font size
+    plt.rcParams['legend.fontsize'] = 10  # Set legend font size
 
-    fig, axs = plt.subplots(2, 1, figsize=(12, 12), sharex=True)  # 図のサイズを大きく
+    fig, axs = plt.subplots(2, 1, figsize=(12, 12), sharex=True)  # Create larger figure size
 
     # Plot S&P 500 price first
     axs[0].plot(sp500_data.index, sp500_data, label='S&P 500 Price', color='cyan', zorder=2, linewidth=2)
@@ -565,9 +580,9 @@ def plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, short_ma_period=
             axs[1].axvspan(breadth_ma_short.index[i], breadth_ma_short.index[i + 1], 
                           color=(1.0, 0.9, 0.96), alpha=0.3, zorder=1)
 
-    axs[0].set_title('S&P 500 Price', pad=20, fontsize=16)  # タイトルのフォントサイズを直接指定
-    axs[0].set_xlabel('Date', fontsize=14)  # X軸ラベルのフォントサイズを直接指定
-    axs[0].set_ylabel('Price', fontsize=14)  # Y軸ラベルのフォントサイズを直接指定
+    axs[0].set_title('S&P 500 Price', pad=20, fontsize=16)  # Set title font size directly
+    axs[0].set_xlabel('Date', fontsize=14)  # Set x-axis label font size directly
+    axs[0].set_ylabel('Price', fontsize=14)  # Set y-axis label font size directly
     axs[0].set_yscale('log')
     
     # Configure logarithmic axis format with larger font sizes
@@ -616,8 +631,8 @@ def plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, short_ma_period=
     axs[1].axhline(peaks_avg, color='red', linestyle='--', label=f'Average Peaks (200MA) = {peaks_avg:.2f}', zorder=2, linewidth=2)
     axs[1].axhline(troughs_avg_below_04, color='blue', linestyle='--', label=f'Average Troughs ({short_ma_period}MA < 0.4) = {troughs_avg_below_04:.2f}', zorder=2, linewidth=2)
 
-    axs[1].set_title(f'S&P 500 Breadth Index with 200-Day MA and {short_ma_period}-Day MA', pad=20, fontsize=16)  # タイトルのフォントサイズを直接指定
-    axs[1].set_ylabel('Breadth Index Percentage', fontsize=14)  # Y軸ラベルのフォントサイズを直接指定
+    axs[1].set_title(f'S&P 500 Breadth Index with 200-Day MA and {short_ma_period}-Day MA', pad=20, fontsize=16)  # Set title font size directly
+    axs[1].set_ylabel('Breadth Index Percentage', fontsize=14)  # Set y-axis label font size directly
     axs[1].legend()
     axs[1].grid(True)
 
