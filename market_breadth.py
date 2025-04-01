@@ -109,6 +109,10 @@ def get_sp500_price_data(start_date, end_date, use_saved_data=False):
     filename = 'sp500_price_data.csv'
     file_path = data_dir / filename
     
+    # Calculate the actual start date (1 year before the specified start date)
+    start_date_dt = pd.to_datetime(start_date)
+    actual_start_date = (start_date_dt - pd.DateOffset(years=1)).strftime('%Y-%m-%d')
+    
     # Check if file exists and is not empty
     if use_saved_data and file_path.exists() and file_path.stat().st_size > 0:
         try:
@@ -127,13 +131,13 @@ def get_sp500_price_data(start_date, end_date, use_saved_data=False):
         saved_end = saved_data.index.max()
         
         # Verify if the required period is covered by saved data
-        if pd.to_datetime(start_date) >= saved_start and pd.to_datetime(end_date) <= saved_end:
+        if pd.to_datetime(actual_start_date) >= saved_start and pd.to_datetime(end_date) <= saved_end:
             return saved_data
         
         # Identify missing periods
         missing_periods = []
-        if pd.to_datetime(start_date) < saved_start:
-            missing_periods.append((start_date, saved_start.strftime('%Y-%m-%d')))
+        if pd.to_datetime(actual_start_date) < saved_start:
+            missing_periods.append((actual_start_date, saved_start.strftime('%Y-%m-%d')))
         if pd.to_datetime(end_date) > saved_end:
             missing_periods.append((saved_end.strftime('%Y-%m-%d'), end_date))
         
@@ -176,7 +180,7 @@ def get_sp500_price_data(start_date, end_date, use_saved_data=False):
     try:
         url = f'https://eodhd.com/api/eod/SPY.US'
         params = {
-            'from': start_date,
+            'from': actual_start_date,
             'to': end_date,
             'api_token': os.getenv('EODHD_API_KEY'),
             'fmt': 'json'
@@ -205,9 +209,14 @@ def get_multiple_stock_data(tickers, start_date, end_date, use_saved_data=False)
     filename = 'stock_data.csv'
     file_path = data_dir / filename
     
+    # Calculate the actual start date (1 year before the specified start date)
+    start_date_dt = pd.to_datetime(start_date)
+    actual_start_date = (start_date_dt - pd.DateOffset(years=1)).strftime('%Y-%m-%d')
+    
     # Print initial parameters
     print(f"\nget_multiple_stock_data parameters:")
-    print(f"Start date: {start_date}")
+    print(f"Original start date: {start_date}")
+    print(f"Actual start date (1 year before): {actual_start_date}")
     print(f"End date: {end_date}")
     print(f"Number of tickers: {len(tickers)}")
     print(f"Sample tickers: {tickers[:5]}")
@@ -226,7 +235,7 @@ def get_multiple_stock_data(tickers, start_date, end_date, use_saved_data=False)
         saved_end = saved_data.index.max()
         
         # Convert dates to datetime for comparison
-        start_date_dt = pd.to_datetime(start_date)
+        start_date_dt = pd.to_datetime(actual_start_date)
         end_date_dt = pd.to_datetime(end_date)
         
         # Verify if the required period is covered by saved data
@@ -236,7 +245,7 @@ def get_multiple_stock_data(tickers, start_date, end_date, use_saved_data=False)
         # Identify missing periods
         missing_periods = []
         if start_date_dt < saved_start:
-            missing_periods.append((start_date, saved_start.strftime('%Y-%m-%d')))
+            missing_periods.append((actual_start_date, saved_start.strftime('%Y-%m-%d')))
         if end_date_dt > saved_end:
             # Check if the gap is small enough to ignore (less than 2 days)
             gap_days = (end_date_dt - saved_end).days
@@ -335,7 +344,7 @@ def get_multiple_stock_data(tickers, start_date, end_date, use_saved_data=False)
             
             url = f'https://eodhd.com/api/eod/{eodhd_ticker}.US'
             params = {
-                'from': start_date,
+                'from': actual_start_date,
                 'to': end_date,
                 'api_token': os.getenv('EODHD_API_KEY'),
                 'fmt': 'json'
