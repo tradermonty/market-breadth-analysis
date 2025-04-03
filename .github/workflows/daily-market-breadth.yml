@@ -2,8 +2,8 @@ name: Daily Market Breadth Analysis
 
 on:
   schedule:
-    # Run after US market closes (5 AM Japan time)
-    - cron: '0 5 * * 1-5'  # Run at 5 AM from Monday to Friday
+    # Run after US market closes (5:30 AM Japan time)
+    - cron: '30 5 * * 1-5'  # Run at 5:30 AM from Monday to Friday
   workflow_dispatch:  # Enable manual execution
 
 # Set required permissions for GitHub Pages deployment
