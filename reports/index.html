@@ -77,9 +77,12 @@
             const today = new Date();
             
             function updateLastModifiedDate(imagePath) {
+                console.log('Fetching:', imagePath);
                 fetch(imagePath)
                     .then(response => {
+                        console.log('Response headers:', response.headers);
                         const lastModified = response.headers.get('last-modified');
+                        console.log('Last modified:', lastModified);
                         if (lastModified) {
                             const lastModifiedDate = new Date(lastModified);
                             const options = {
@@ -89,12 +92,16 @@
                                 day: '2-digit',
                                 hour: '2-digit',
                                 minute: '2-digit',
-                                second: '2-digit'
+                                second: '2-digit',
+                                timeZoneName: 'short'
                             };
                             document.getElementById('last-update').textContent = lastModifiedDate.toLocaleString('en-US', options);
+                        } else {
+                            console.log('No last-modified header found');
                         }
                     })
-                    .catch(() => {
+                    .catch(error => {
+                        console.error('Fetch error:', error);
                         // If we can't get the last modified date, show current time
                         const now = new Date();
                         const options = {
@@ -104,7 +111,8 @@
                             day: '2-digit',
                             hour: '2-digit',
                             minute: '2-digit',
-                            second: '2-digit'
+                            second: '2-digit',
+                            timeZoneName: 'short'
                         };
                         document.getElementById('last-update').textContent = now.toLocaleString('en-US', options);
                     });
@@ -115,6 +123,12 @@
             const todayImagePath = `market_breadth_${todayFormatted}_ma20.png`;
             img.src = todayImagePath;
             
+            img.onload = function() {
+                errorMessage.style.display = 'none';
+                img.style.display = 'block';
+                updateLastModifiedDate(todayImagePath);
+            };
+            
             img.onerror = function() {
                 // If today's image fails, try yesterday's image
                 const yesterday = new Date(today);
@@ -124,34 +138,28 @@
                 
                 img.src = yesterdayImagePath;
                 
+                img.onload = function() {
+                    errorMessage.style.display = 'none';
+                    img.style.display = 'block';
+                    updateLastModifiedDate(yesterdayImagePath);
+                };
+                
                 img.onerror = function() {
                     // If both date-based images fail, try sample_output.png
                     img.src = 'sample_output.png';
-                    
-                    img.onerror = function() {
-                        // If sample image also fails, show error message
-                        errorMessage.style.display = 'block';
-                        img.style.display = 'none';
-                    };
                     
                     img.onload = function() {
                         errorMessage.style.display = 'none';
                         img.style.display = 'block';
                         updateLastModifiedDate('sample_output.png');
                     };
+                    
+                    img.onerror = function() {
+                        // If sample image also fails, show error message
+                        errorMessage.style.display = 'block';
+                        img.style.display = 'none';
+                    };
                 };
-                
-                img.onload = function() {
-                    errorMessage.style.display = 'none';
-                    img.style.display = 'block';
-                    updateLastModifiedDate(yesterdayImagePath);
-                };
-            };
-            
-            img.onload = function() {
-                errorMessage.style.display = 'none';
-                img.style.display = 'block';
-                updateLastModifiedDate(todayImagePath);
             };
         }
 
