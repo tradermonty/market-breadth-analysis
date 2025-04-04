@@ -139,7 +139,9 @@ def get_sp500_price_data(start_date, end_date, use_saved_data=False):
         if pd.to_datetime(actual_start_date) < saved_start:
             missing_periods.append((actual_start_date, saved_start.strftime('%Y-%m-%d')))
         if pd.to_datetime(end_date) > saved_end:
+            # Always update if there's any gap
             missing_periods.append((saved_end.strftime('%Y-%m-%d'), end_date))
+            print(f"Adding missing period from {saved_end.strftime('%Y-%m-%d')} to {end_date}")
         
         # Fetch data for missing periods
         new_data = pd.Series()
@@ -247,12 +249,9 @@ def get_multiple_stock_data(tickers, start_date, end_date, use_saved_data=False)
         if start_date_dt < saved_start:
             missing_periods.append((actual_start_date, saved_start.strftime('%Y-%m-%d')))
         if end_date_dt > saved_end:
-            # Check if the gap is small enough to ignore (less than 2 days)
-            gap_days = (end_date_dt - saved_end).days
-            if gap_days > 2:
-                missing_periods.append((saved_end.strftime('%Y-%m-%d'), end_date))
-            else:
-                print(f"Ignoring small gap of {gap_days} days after saved data")
+            # Always update if there's any gap
+            missing_periods.append((saved_end.strftime('%Y-%m-%d'), end_date))
+            print(f"Adding missing period from {saved_end.strftime('%Y-%m-%d')} to {end_date}")
         
         if not missing_periods:
             return saved_data
@@ -364,8 +363,12 @@ def get_multiple_stock_data(tickers, start_date, end_date, use_saved_data=False)
                             series = data['adjusted_close']
                             series.name = ticker  # Use ticker as column name
                             all_data.append(series)
+                            print(f"\nSuccessfully processed {ticker}: {len(data)} days of data")
                         else:
                             print(f"\nSkipping {ticker}: Insufficient data")
+                            print(f"  - Data length: {len(data)} days")
+                            print(f"  - Date range: {data.index.min()} to {data.index.max()}")
+                            print(f"  - Has adjusted_close: {'adjusted_close' in data.columns}")
                 except ValueError as e:
                     print(f"\nError parsing data for {ticker}: {str(e)}")
             else:
@@ -673,7 +676,7 @@ def main():
     parser = argparse.ArgumentParser(description='Market Breadth Analysis')
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
     parser.add_argument('--start_date', type=str, help='Start date (YYYY-MM-DD format)')
-    parser.add_argument('--short_ma', type=int, default=20, choices=[10, 20], help='Short-term moving average period (10 or 20)')
+    parser.add_argument('--short_ma', type=int, default=10, choices=[10, 20], help='Short-term moving average period (10 or 20)')
     parser.add_argument('--use_saved_data', action='store_true', help='Use saved data instead of fetching from EODHD')
 
     # Set up command line arguments
