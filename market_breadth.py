@@ -676,7 +676,7 @@ def main():
     parser = argparse.ArgumentParser(description='Market Breadth Analysis')
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
     parser.add_argument('--start_date', type=str, help='Start date (YYYY-MM-DD format)')
-    parser.add_argument('--short_ma', type=int, default=10, choices=[10, 20], help='Short-term moving average period (10 or 20)')
+    parser.add_argument('--short_ma', type=int, default=20, choices=[10, 20], help='Short-term moving average period (10 or 20)')
     parser.add_argument('--use_saved_data', action='store_true', help='Use saved data instead of fetching from EODHD')
 
     # Set up command line arguments
