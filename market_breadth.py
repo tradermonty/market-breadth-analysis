@@ -265,6 +265,9 @@ def get_multiple_stock_data(tickers, start_date, end_date, use_saved_data=False)
         print(f"\nExisting tickers in saved data: {len(existing_tickers)}")
         print(f"Sample of existing tickers: {existing_tickers[:5]}")
         
+        # ティッカーごとのデータを一時的に保存する辞書
+        ticker_data_dict = {}
+        
         for ticker in tqdm(tickers, desc="Stock data retrieval progress"):
             try:
                 eodhd_ticker = convert_ticker_symbol(ticker)
@@ -291,12 +294,22 @@ def get_multiple_stock_data(tickers, start_date, end_date, use_saved_data=False)
                                     data = data[~data.index.duplicated(keep='last')]
                                     series = data['adjusted_close']
                                     series.name = ticker  # Use ticker as column name
-                                    new_data_list.append(series)
+                                    
+                                    # 既存のデータがある場合は結合、なければ新規作成
+                                    if ticker in ticker_data_dict:
+                                        ticker_data_dict[ticker] = pd.concat([ticker_data_dict[ticker], series])
+                                        # 重複を削除し、最新のデータを保持
+                                        ticker_data_dict[ticker] = ticker_data_dict[ticker][~ticker_data_dict[ticker].index.duplicated(keep='last')]
+                                    else:
+                                        ticker_data_dict[ticker] = series
                         except ValueError as e:
                             print(f"\nError parsing data for {ticker}: {str(e)}")
             except Exception as e:
                 print(f"\nError processing {ticker}: {str(e)}")
                 continue
+        
+        # 辞書からデータシリーズのリストを作成
+        new_data_list = list(ticker_data_dict.values())
         
         # Combine new data with saved data
         if new_data_list:
