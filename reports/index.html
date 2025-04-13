@@ -118,44 +118,43 @@
                     });
             }
             
-            // First, try to load today's MA20 image
-            const todayFormatted = formatDate(today);
-            const todayImagePath = `market_breadth_${todayFormatted}_ma20.png`;
-            img.src = todayImagePath;
+            // First, try to load the latest market breadth image
+            const latestImagePath = 'market_breadth.png';
+            img.src = latestImagePath;
             
             img.onload = function() {
                 errorMessage.style.display = 'none';
                 img.style.display = 'block';
-                updateLastModifiedDate(todayImagePath);
+                updateLastModifiedDate(latestImagePath);
             };
             
             img.onerror = function() {
-                // If today's image fails, try yesterday's image
-                const yesterday = new Date(today);
-                yesterday.setDate(yesterday.getDate() - 1);
-                const yesterdayFormatted = formatDate(yesterday);
-                const yesterdayImagePath = `market_breadth_${yesterdayFormatted}_ma20.png`;
+                // If the latest image fails, try today's MA10 image
+                const todayFormatted = formatDate(today);
+                const todayMA10ImagePath = `market_breadth_${todayFormatted}_ma10.png`;
                 
-                img.src = yesterdayImagePath;
+                img.src = todayMA10ImagePath;
                 
                 img.onload = function() {
                     errorMessage.style.display = 'none';
                     img.style.display = 'block';
-                    updateLastModifiedDate(yesterdayImagePath);
+                    updateLastModifiedDate(todayMA10ImagePath);
                 };
                 
                 img.onerror = function() {
-                    // If both date-based images fail, try sample_output.png
-                    img.src = 'sample_output.png';
+                    // If today's MA10 image fails, try today's MA5 image
+                    const todayMA5ImagePath = `market_breadth_${todayFormatted}_ma5.png`;
+                    
+                    img.src = todayMA5ImagePath;
                     
                     img.onload = function() {
                         errorMessage.style.display = 'none';
                         img.style.display = 'block';
-                        updateLastModifiedDate('sample_output.png');
+                        updateLastModifiedDate(todayMA5ImagePath);
                     };
                     
                     img.onerror = function() {
-                        // If sample image also fails, show error message
+                        // If all attempts fail, show error message
                         errorMessage.style.display = 'block';
                         img.style.display = 'none';
                     };

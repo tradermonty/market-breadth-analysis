@@ -635,7 +635,7 @@ def plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, short_ma_period=
     # Add custom legend with the background patch and larger markers
     handles, labels = axs[0].get_legend_handles_labels()
     handles.insert(1, background_patch)
-    axs[0].legend(handles=handles, loc='upper left')
+    axs[0].legend(handles=handles, loc='center left', bbox_to_anchor=(0.02, 0.5))
     
     axs[0].grid(True)
 
@@ -658,7 +658,7 @@ def plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, short_ma_period=
 
     axs[1].set_title(f'S&P 500 Breadth Index with 200-Day MA and {short_ma_period}-Day MA', pad=20, fontsize=16)  # Set title font size directly
     axs[1].set_ylabel('Breadth Index Percentage', fontsize=14)  # Set y-axis label font size directly
-    axs[1].legend()
+    axs[1].legend(loc='center left', bbox_to_anchor=(0.02, 0.5))
     axs[1].grid(True)
 
     plt.tight_layout()

@@ -1,0 +1,35 @@
+name: Market Breadth Analysis
+
+on:
+  schedule:
+    - cron: '0 0 * * *'  # 毎日UTC 00:00に実行
+  workflow_dispatch:  # 手動実行も可能
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v2
+    
+    - name: Set up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: '3.8'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Run market breadth analysis
+      run: python market_breadth.py --use_saved_data
+      env:
+        EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
+    
+    - name: Commit and push if changed
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add reports/market_breadth.png
+        git diff --quiet && git diff --staged --quiet || (git commit -m "update: market breadth chart" && git push) 
