@@ -5,5 +5,9 @@ data/*
 reports/*
 !reports/.gitkeep
 !reports/sample_output.png
+!reports/backtest_results_summary.md
+!reports/backtest_results_summary.csv
+archive/*
+!archive/.gitkeep
 __pycache__/
 *.pyc 

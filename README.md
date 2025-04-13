@@ -9,6 +9,8 @@ A tool for analyzing and visualizing the market breadth of S&P500 stocks.
 - Visualize breadth indicators and S&P500 price movements
 - Identify trend reversal points through peak detection
 - Save and reuse historical data without requiring an API key
+- Backtest trading strategies based on market breadth signals
+- Multi-ETF backtesting capabilities
 
 ## Prerequisites
 
@@ -44,6 +46,8 @@ cp .env.sample .env
 
 ## Usage
 
+### Market Breadth Analysis
+
 Basic usage (requires API key):
 ```bash
 python market_breadth.py
@@ -59,12 +63,33 @@ With additional options:
 python market_breadth.py --start_date 2020-01-01 --short_ma 20 --use_saved_data
 ```
 
+### Backtesting
+
+Single strategy backtesting:
+```bash
+python backtest/backtest.py
+```
+
+Multi-ETF backtesting:
+```bash
+python backtest/run_multi_etf_backtest.py
+```
+
 ### Command Line Arguments
 
+#### Market Breadth Analysis
 - `--start_date`: Start date for analysis (YYYY-MM-DD format)
   - Default: 10 years ago from today
 - `--short_ma`: Short-term moving average period (10 or 20)
 - `--use_saved_data`: Use previously saved data instead of fetching from EODHD
+
+#### Backtesting
+- `--start_date`: Start date for backtesting
+- `--end_date`: End date for backtesting
+- `--initial_capital`: Initial capital for backtesting
+- `--position_size`: Position size as percentage of capital
+- `--stop_loss`: Stop loss percentage
+- `--take_profit`: Take profit percentage
 
 ### Data Storage and Reuse
 
@@ -107,6 +132,10 @@ EODHD (End of Day Historical Data)
 The following files are generated in the `reports/` directory:
 - `market_breadth_YYYYMMDD.png`: Graph showing breadth indicators and S&P500 price movements
 - `market_breadth_YYYYMMDD.csv`: Numerical data of breadth indicators
+- `backtest_results_YYYYMMDD.csv`: Backtesting results and performance metrics
+- `multi_etf_backtest_results_YYYYMMDD.csv`: Multi-ETF backtesting results
+- `backtest_results_summary.md`: Detailed results report in Markdown format
+- `backtest_results_summary.csv`: Results data in CSV format
 
 ### Graph Color Coding
 
@@ -134,12 +163,16 @@ In the sample graph above:
 - macOS: TkAgg backend
 - Windows: Qt5Agg backend
 - Linux: Agg backend (non-interactive)
+- Minimum 8GB RAM recommended for backtesting
+- SSD storage recommended for faster data access
 
 ## Notes
 
 - Keep your API key in the `.env` file and do not upload it to GitHub
 - EODHD is a paid service
 - Commercial use requires a separate EODHD commercial license
+- Backtesting results are for educational purposes only
+- Past performance does not guarantee future results
 
 ## License
 

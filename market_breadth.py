@@ -265,7 +265,7 @@ def get_multiple_stock_data(tickers, start_date, end_date, use_saved_data=False)
         print(f"\nExisting tickers in saved data: {len(existing_tickers)}")
         print(f"Sample of existing tickers: {existing_tickers[:5]}")
         
-        # ティッカーごとのデータを一時的に保存する辞書
+        # Dictionary to temporarily store data for each ticker
         ticker_data_dict = {}
         
         for ticker in tqdm(tickers, desc="Stock data retrieval progress"):
@@ -295,10 +295,10 @@ def get_multiple_stock_data(tickers, start_date, end_date, use_saved_data=False)
                                     series = data['adjusted_close']
                                     series.name = ticker  # Use ticker as column name
                                     
-                                    # 既存のデータがある場合は結合、なければ新規作成
+                                    # If existing data exists, combine it; otherwise create new data
                                     if ticker in ticker_data_dict:
                                         ticker_data_dict[ticker] = pd.concat([ticker_data_dict[ticker], series])
-                                        # 重複を削除し、最新のデータを保持
+                                        # Remove duplicates and keep the latest data
                                         ticker_data_dict[ticker] = ticker_data_dict[ticker][~ticker_data_dict[ticker].index.duplicated(keep='last')]
                                     else:
                                         ticker_data_dict[ticker] = series
@@ -308,7 +308,7 @@ def get_multiple_stock_data(tickers, start_date, end_date, use_saved_data=False)
                 print(f"\nError processing {ticker}: {str(e)}")
                 continue
         
-        # 辞書からデータシリーズのリストを作成
+        # Create a list of data series from the dictionary
         new_data_list = list(ticker_data_dict.values())
         
         # Combine new data with saved data
@@ -536,7 +536,7 @@ def get_latest_market_date():
         print(f"Error getting latest market date: {e}")
         return datetime.today().strftime('%Y-%m-%d')
 
-def plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, short_ma_period=20, start_date=None, end_date=None):
+def plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, short_ma_period=10, start_date=None, end_date=None):
     """Visualize Breadth Index and S&P 500 price"""
     # Ensure both datasets have the same date range
     common_dates = above_ma_200.index.intersection(sp500_data.index)
@@ -559,8 +559,8 @@ def plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, short_ma_period=
     breadth_index_200 = above_ma_200.mean(axis=1)
 
     # Calculate 200-day and short-term moving averages for Breadth Index
-    breadth_ma_200 = breadth_index_200.rolling(window=200).mean()
-    breadth_ma_short = breadth_index_200.rolling(window=short_ma_period).mean()
+    breadth_ma_200 = breadth_index_200.ewm(span=200, adjust=False).mean()
+    breadth_ma_short = breadth_index_200.ewm(span=short_ma_period, adjust=False).mean()
 
     # Calculate 200MA slope using hysteresis
     breadth_ma_200_trend = calculate_trend_with_hysteresis(breadth_ma_200, threshold=0.001)
@@ -685,11 +685,78 @@ def plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, short_ma_period=
     
     plt.close()  # Close the figure to free memory
 
+def get_stock_price_data(symbol, start_date, end_date, use_saved_data=False):
+    """
+    Get stock price data for a given symbol
+    
+    Parameters:
+    -----------
+    symbol : str
+        The stock symbol (e.g., 'AAPL', 'MSFT', etc.)
+    start_date : str
+        Start date in 'YYYY-MM-DD' format
+    end_date : str
+        End date in 'YYYY-MM-DD' format
+    use_saved_data : bool, optional
+        Whether to use saved data instead of fetching from EODHD (default: False)
+        
+    Returns:
+    --------
+    pandas.Series
+        Stock price data (adjusted_close)
+    """
+    # Actual start date (get data from 2 years before the specified start date)
+    actual_start_date = (pd.to_datetime(start_date) - pd.DateOffset(years=2)).strftime('%Y-%m-%d')
+    
+    # Set filename
+    filename = f'{symbol}_price_data.csv'
+    
+    # If using saved data
+    if use_saved_data:
+        saved_data = load_stock_data(filename)
+        if saved_data is not None and not saved_data.empty:
+            # Check the date range
+            if (pd.to_datetime(actual_start_date) >= saved_data.index.min() and 
+                pd.to_datetime(end_date) <= saved_data.index.max()):
+                # Extract data for the calculation period
+                mask = (saved_data.index >= pd.to_datetime(actual_start_date)) & \
+                      (saved_data.index <= pd.to_datetime(end_date))
+                return saved_data.loc[mask]
+    
+    # Fetch new data
+    try:
+        url = f'https://eodhd.com/api/eod/{symbol}.US'
+        params = {
+            'from': actual_start_date,
+            'to': end_date,
+            'api_token': os.getenv('EODHD_API_KEY'),
+            'fmt': 'json'
+        }
+        
+        response = session.get(url, params=params)
+        if response.status_code == 200:
+            data = pd.DataFrame(response.json())
+            if not data.empty:
+                data['date'] = pd.to_datetime(data['date'])
+                data.set_index('date', inplace=True)
+                
+                if 'adjusted_close' in data.columns:
+                    # Save as a single column with appropriate name
+                    price_data = data['adjusted_close']
+                    price_data.name = 'adjusted_close'
+                    save_stock_data(price_data, filename)
+                    return price_data
+    except Exception as e:
+        print(f"Error fetching {symbol} data: {e}")
+    
+    return pd.Series()
+
 def main():
     parser = argparse.ArgumentParser(description='Market Breadth Analysis')
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
     parser.add_argument('--start_date', type=str, help='Start date (YYYY-MM-DD format)')
-    parser.add_argument('--short_ma', type=int, default=20, choices=[10, 20], help='Short-term moving average period (10 or 20)')
+    parser.add_argument('--end_date', type=str, help='End date (YYYY-MM-DD format). If not specified, today\'s date will be used.')
+    parser.add_argument('--short_ma', type=int, default=10, choices=[5, 10, 20], help='Short-term moving average period (5, 10, or 20)')
     parser.add_argument('--use_saved_data', action='store_true', help='Use saved data instead of fetching from EODHD')
 
     # Set up command line arguments
@@ -712,10 +779,14 @@ def main():
         # Default is 10 years ago from today
         start_date = (datetime.today() - timedelta(days=3650)).strftime("%Y-%m-%d")
     
-    print(f"\nInitial start date: {start_date}")
+    # Set end date
+    if args.end_date:
+        end_date = args.end_date
+    else:
+        # Default is today
+        end_date = get_last_trading_day(datetime.today())  # Use the previous business day from today
     
-    # Get the latest available market date
-    end_date = get_last_trading_day(datetime.today())  # Use the previous business day from today
+    print(f"\nInitial start date: {start_date}")
     print(f"Initial end date: {end_date}")
     
     # Convert dates to datetime for comparison
