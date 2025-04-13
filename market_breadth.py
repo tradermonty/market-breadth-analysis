@@ -664,8 +664,7 @@ def plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, short_ma_period=
     plt.tight_layout()
     
     # Get current date and add to filename
-    current_date = datetime.now().strftime('%Y%m%d')
-    filename = f'reports/market_breadth_{current_date}_ma{short_ma_period}.png'
+    filename = 'reports/market_breadth.png'
     
     # Save image with higher DPI and better quality settings
     try:

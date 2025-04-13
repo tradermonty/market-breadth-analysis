@@ -5,6 +5,7 @@ data/*
 reports/*
 !reports/.gitkeep
 !reports/sample_output.png
+!reports/market_breadth.png
 !reports/backtest_results_summary.md
 !reports/backtest_results_summary.csv
 archive/*
