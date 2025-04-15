@@ -36,7 +36,7 @@ class Backtest:
                  disable_short_ma_entry=False, use_trailing_stop=False, trailing_stop_pct=0.2,
                  background_exit_threshold=0.5, use_background_color_signals=False,
                  partial_exit=False, no_show_plot=False):
-        self.symbol = symbol  # シンボルを指定可能に変更
+        self.symbol = symbol  # Changed to allow symbol specification
         self.start_date = start_date
         self.end_date = end_date
         self.short_ma = short_ma
@@ -48,14 +48,14 @@ class Backtest:
         self.debug = debug
         self.threshold = threshold
         self.ma_type = ma_type.lower()  # 'ema' or 'sma'
-        self.stop_loss_pct = stop_loss_pct  # 損切りパーセンテージ
-        self.disable_short_ma_entry = disable_short_ma_entry  # short_maによるエントリーを無効にするオプション
-        self.use_trailing_stop = use_trailing_stop  # Trailing stopを使用するかどうか
-        self.trailing_stop_pct = trailing_stop_pct  # Trailing stopのパーセンテージ
-        self.background_exit_threshold = background_exit_threshold  # 背景色変化時のイグジットしきい値
-        self.use_background_color_signals = use_background_color_signals  # 背景色の変化によるシグナルを使用するかどうか
-        self.partial_exit = partial_exit  # イグジット時に保有資産の半分だけ売却するかどうか
-        self.no_show_plot = no_show_plot  # プロットを表示しないかどうか
+        self.stop_loss_pct = stop_loss_pct  # Percentage for stop loss
+        self.disable_short_ma_entry = disable_short_ma_entry  # Option to disable entry by short_ma
+        self.use_trailing_stop = use_trailing_stop  # Whether to use trailing stop
+        self.trailing_stop_pct = trailing_stop_pct  # Percentage for trailing stop
+        self.background_exit_threshold = background_exit_threshold  # Exit threshold when background color changes
+        self.use_background_color_signals = use_background_color_signals  # Whether to use signals based on background color changes
+        self.partial_exit = partial_exit  # Whether to sell only half of the position on exit
+        self.no_show_plot = no_show_plot  # Whether to not show the plot
         
         # Variables to store backtest results
         self.positions = []
@@ -63,9 +63,9 @@ class Backtest:
         self.equity_curve = []
         self.current_capital = initial_capital
         self.current_position = 0
-        self.entry_prices = []  # エントリー価格を記録するリスト
-        self.stop_loss_prices = []  # 損切り価格を記録するリスト
-        self.highest_price = None  # ポジション保有中の最高価格
+        self.entry_prices = []  # List to record entry prices
+        self.stop_loss_prices = []  # List to record stop loss prices
+        self.highest_price = None  # Highest price during position holding
         
     def run(self):
         """Execute the backtest"""
@@ -527,7 +527,7 @@ class Backtest:
         commission = exit_price * self.current_position * self.commission
         total_proceeds = exit_price * self.current_position - commission
         
-        # 部分イグジットの場合、保有資産の半分だけ売却
+        # For partial exit, sell only half of the position
         if self.partial_exit and self.current_position > 1:
             shares_to_sell = self.current_position // 2
             self.current_position -= shares_to_sell
@@ -547,7 +547,7 @@ class Backtest:
             
             print(f"Partial exit: Sold {shares_to_sell} shares, remaining {self.current_position} shares")
         else:
-            # 全額イグジット
+            # Full exit
             self.current_capital += total_proceeds
             
             self.trades.append({
@@ -561,38 +561,38 @@ class Backtest:
             })
             
             self.current_position = 0
-            self.entry_prices = []  # エントリー価格リストをクリア
-            self.stop_loss_prices = []  # 損切り価格リストをクリア
-            self.highest_price = None  # 最高価格をリセット
+            self.entry_prices = []  # Clear entry price list
+            self.stop_loss_prices = []  # Clear stop loss price list
+            self.highest_price = None  # Reset highest price
     
     def calculate_performance(self):
         """Calculate performance"""
         self.equity_df = pd.DataFrame(self.equity_curve)
         self.equity_df.set_index('date', inplace=True)
         
-        # 最終的な資産価値を計算（現金 + ポジション価値）
+        # Calculate final asset value (cash + position value)
         final_equity = self.equity_df['equity'].iloc[-1]
         
-        # Total return（修正版）
+        # Total return (revised)
         self.total_return = (final_equity / self.initial_capital) - 1
         
         # Annual return and CAGR calculation
         days = (self.equity_df.index[-1] - self.equity_df.index[0]).days
         years = days / 365
         
-        # CAGRの計算（負のリターンに対応）
+        # CAGR calculation (handles negative returns)
         if self.total_return <= -1:
             self.cagr = -1
         else:
             self.cagr = np.sign(self.total_return) * (abs(1 + self.total_return) ** (1 / years) - 1)
         
-        # Annual Returnの計算（負のリターンに対応）
+        # Annual Return calculation (handles negative returns)
         if self.total_return <= -1:
             self.annual_return = -1
         else:
             self.annual_return = np.sign(self.total_return) * (abs(1 + self.total_return) ** (365 / days) - 1)
         
-        # デバッグ情報を追加
+        # Add debug information
         if self.debug:
             print("\nReturn calculation details:")
             print(f"Initial capital: ${self.initial_capital:.2f}")
@@ -617,7 +617,7 @@ class Backtest:
         # Profit-loss ratio
         self.profit_loss_ratio = self._calculate_profit_loss_ratio()
         
-        # 新しい指標を計算
+        # Calculate new metrics
         self.profit_factor = self._calculate_profit_factor()
         self.calmar_ratio = self._calculate_calmar_ratio()
         self.expected_value = self._calculate_expected_value()
@@ -685,10 +685,10 @@ class Backtest:
         if not self.trades:
             return 0
         
-        # 取引ペアを取得
+        # Get trade pairs
         trade_pairs = self._get_trade_pairs()
         
-        # 各取引ペアの損益を計算
+        # Calculate profit/loss for each trade pair
         profitable_trades = 0
         total_trades = len(trade_pairs)
         
@@ -697,7 +697,7 @@ class Backtest:
             if profit > 0:
                 profitable_trades += 1
         
-        # 勝率を計算
+        # Calculate win rate
         win_rate = profitable_trades / total_trades if total_trades > 0 else 0
         
         if self.debug:
@@ -706,7 +706,7 @@ class Backtest:
             print(f"Winning trades: {profitable_trades}")
             print(f"Losing trades: {total_trades - profitable_trades}")
             
-            # 詳細な取引情報を表示
+            # Display detailed trade information
             print("\nTrade details:")
             for i, pair in enumerate(trade_pairs):
                 profit = pair['sell_proceeds'] - pair['buy_cost']
@@ -726,10 +726,10 @@ class Backtest:
         if not self.trades:
             return 0
             
-        # 取引ペアを取得
+        # Get trade pairs
         trade_pairs = self._get_trade_pairs()
         
-        # 各取引ペアの損益を計算
+        # Calculate profit/loss for each trade pair
         profits = []
         losses = []
         
@@ -740,7 +740,7 @@ class Backtest:
             else:
                 losses.append(abs(profit))
         
-        # プロフィット・ロス比を計算
+        # Calculate profit-loss ratio
         avg_profit = np.mean(profits) if profits else 0
         avg_loss = np.mean(losses) if losses else 0
         
@@ -752,7 +752,7 @@ class Backtest:
             print(f"Average profit: ${avg_profit:.2f}")
             print(f"Average loss: ${avg_loss:.2f}")
             
-            # 詳細な取引情報を表示
+            # Display detailed trade information
             print("\nTrade details:")
             for i, pair in enumerate(trade_pairs):
                 profit = pair['sell_proceeds'] - pair['buy_cost']
@@ -772,10 +772,10 @@ class Backtest:
         if not self.trades:
             return 0
             
-        # 取引ペアを取得
+        # Get trade pairs
         trade_pairs = self._get_trade_pairs()
         
-        # 各取引ペアの損益を計算
+        # Calculate profit/loss for each trade pair
         total_profit = 0
         total_loss = 0
         
@@ -786,7 +786,7 @@ class Backtest:
             else:
                 total_loss += abs(profit)
         
-        # プロフィットファクターを計算
+        # Calculate profit factor
         return total_profit / total_loss if total_loss > 0 else float('inf')
     
     def _calculate_calmar_ratio(self):
@@ -794,22 +794,22 @@ class Backtest:
         if not self.trades:
             return 0
             
-        # 年率リターンを計算
+        # Calculate annual return
         days = (self.equity_df.index[-1] - self.equity_df.index[0]).days
         years = days / 365
         
-        # Annual Returnの計算（負のリターンに対応）
+        # Annual Return calculation (handles negative returns)
         if self.total_return <= -1:
             annual_return = -1
         else:
             annual_return = np.sign(self.total_return) * (abs(1 + self.total_return) ** (1 / years) - 1)
         
-        # 最大ドローダウンを取得
+        # Get maximum drawdown
         max_drawdown = abs(self.max_drawdown)
         
-        # Calmar比率を計算
+        # Calculate Calmar ratio
         if max_drawdown == 0:
-            return 0  # ドローダウンがない場合は0を返す
+            return 0  # Return 0 if there is no drawdown
         else:
             return annual_return / max_drawdown
     
@@ -818,10 +818,10 @@ class Backtest:
         if not self.trades:
             return 0
             
-        # 取引ペアを取得
+        # Get trade pairs
         trade_pairs = self._get_trade_pairs()
         
-        # 各取引ペアの損益を計算
+        # Calculate profit/loss for each trade pair
         total_profit = 0
         total_trades = len(trade_pairs)
         
@@ -829,7 +829,7 @@ class Backtest:
             profit = pair['sell_proceeds'] - pair['buy_cost']
             total_profit += profit
         
-        # 期待値を計算
+        # Calculate expected value
         return total_profit / total_trades if total_trades > 0 else 0
     
     def _calculate_avg_pnl_per_trade(self):
@@ -837,10 +837,10 @@ class Backtest:
         if not self.trades:
             return 0
             
-        # 取引ペアを取得
+        # Get trade pairs
         trade_pairs = self._get_trade_pairs()
         
-        # 各取引ペアの損益を計算
+        # Calculate profit/loss for each trade pair
         total_pnl = 0
         total_trades = len(trade_pairs)
         
@@ -848,7 +848,7 @@ class Backtest:
             pnl = pair['sell_proceeds'] - pair['buy_cost']
             total_pnl += pnl
         
-        # 平均PnLを計算
+        # Calculate average PnL
         return total_pnl / total_trades if total_trades > 0 else 0
     
     def _calculate_pareto_ratio(self):
@@ -856,30 +856,30 @@ class Backtest:
         if not self.trades:
             return 0
             
-        # 取引ペアを取得
+        # Get trade pairs
         trade_pairs = self._get_trade_pairs()
         
-        # 各取引ペアの損益を計算
+        # Calculate profit/loss for each trade pair
         trade_pnls = []
         
         for pair in trade_pairs:
             pnl = pair['sell_proceeds'] - pair['buy_cost']
             trade_pnls.append(pnl)
         
-        # 損益を降順にソート
+        # Sort profits/losses in descending order
         trade_pnls.sort(reverse=True)
         
-        # 合計損益を計算
+        # Calculate total profit/loss
         total_pnl = sum(trade_pnls)
         
         if total_pnl <= 0:
             return 0
         
-        # 上位20%の取引の損益合計を計算
+        # Calculate total profit/loss of top 20% trades
         top_20_percent_count = max(1, int(len(trade_pnls) * 0.2))
         top_20_percent_pnl = sum(trade_pnls[:top_20_percent_count])
         
-        # Pareto比率を計算
+        # Calculate Pareto ratio
         return top_20_percent_pnl / total_pnl
     
     def _get_trade_pairs(self):
@@ -887,16 +887,16 @@ class Backtest:
         trade_pairs = []
         current_buy_trades = []
         
-        # 取引履歴をコピーして操作（元のデータを変更しない）
+        # Copy trade history to operate on (don't modify original data)
         trades_copy = []
         for trade in self.trades:
             trade_copy = trade.copy()
-            # 株式数をコピー
+            # Copy number of shares
             if 'shares' in trade_copy:
                 trade_copy['shares'] = trade_copy['shares']
             trades_copy.append(trade_copy)
         
-        # デバッグ情報
+        # Debug information
         if self.debug:
             print("\nTrade pairs calculation:")
             print(f"Total trades: {len(trades_copy)}")
@@ -963,13 +963,13 @@ class Backtest:
         # Price chart and trade points
         ax1.plot(self.price_data.index, self.price_data['adjusted_close'], label=f'{self.symbol} Price')
         
-        # 取引ポイントを表示
+        # Display trade points
         for trade in self.trades:
             if trade['action'] == 'BUY':
                 ax1.scatter(trade['date'], trade['price'], 
                           color='green', marker='^', s=100, label='Buy')
             elif trade['action'] == 'SELL':
-                # 損切りかどうかを判断するために、直前のエントリー価格を確認
+                # Check if this was a stop loss by checking the previous entry price
                 trade_idx = self.trades.index(trade)
                 if trade_idx > 0:
                     prev_trade = self.trades[trade_idx - 1]
@@ -977,23 +977,23 @@ class Backtest:
                         entry_price = prev_trade['price']
                         stop_loss_price = entry_price * (1 - self.stop_loss_pct)
                         
-                        # 損切りかどうかを判断
+                        # Determine if this was a stop loss
                         if trade['price'] <= stop_loss_price:
-                            # 損切りされた取引は特別なマーカーで表示
+                            # Display stop loss trades with special markers
                             if self.use_trailing_stop:
-                                # トレーリングストップの場合は青色で表示
+                                # Display in blue for trailing stop
                                 ax1.scatter(trade['date'], trade['price'], 
                                           color='blue', marker='x', s=150, label='Trailing Stop')
                             else:
-                                # 通常の損切りは紫色で表示
+                                # Display in purple for regular stop loss
                                 ax1.scatter(trade['date'], trade['price'], 
                                           color='purple', marker='x', s=150, label='Stop Loss')
                         else:
-                            # 通常の売却
+                            # Regular sell
                             ax1.scatter(trade['date'], trade['price'], 
                                       color='red', marker='v', s=100, label='Sell')
         
-        # 重複するラベルを削除
+        # Remove duplicate labels
         handles, labels = ax1.get_legend_handles_labels()
         by_label = dict(zip(labels, handles))
         ax1.legend(by_label.values(), by_label.keys())
@@ -1018,45 +1018,45 @@ class Backtest:
                     alpha=0.3
                 )
         
-        # 背景色の変化ポイントを検出して表示
+        # Detect and display background color change points
         background_changes = []
-        white_to_pink_changes = []  # 白からピンクへの変化（エグジット）
-        pink_to_white_changes = []  # ピンクから白への変化（エントリー）
+        white_to_pink_changes = []  # White to pink change (exit)
+        pink_to_white_changes = []  # Pink to white change (entry)
         
-        # use_background_color_signalsが有効な場合のみ背景色の変化を検出
+        # Only detect background color changes if use_background_color_signals is enabled
         if self.use_background_color_signals:
             for i in range(1, len(self.long_ma_trend)):
                 prev_trend = self.long_ma_trend.iloc[i-1]
                 prev_short_ma = self.short_ma_line.iloc[i-1]
                 prev_long_ma = self.long_ma_line.iloc[i-1]
                 
-                # 今日のデータ
+                # Today's data
                 current_trend = self.long_ma_trend.iloc[i]
                 current_short_ma = self.short_ma_line.iloc[i]
                 current_long_ma = self.long_ma_line.iloc[i]
                 
-                # 白からピンクへの変化（エグジット）
+                # White to pink change (exit)
                 prev_condition = not (prev_trend == -1 and prev_short_ma < prev_long_ma)
                 current_condition = (current_trend == -1 and current_short_ma < current_long_ma)
                 
                 if prev_condition and current_condition and current_long_ma >= self.background_exit_threshold:
                     white_to_pink_changes.append(self.long_ma_line.index[i])
                 
-                # ピンクから白への変化（エントリー）
+                # Pink to white change (entry)
                 prev_condition = (prev_trend == -1 and prev_short_ma < prev_long_ma)
                 current_condition = not (current_trend == -1 and current_short_ma < current_long_ma)
                 
                 if prev_condition and current_condition and current_long_ma >= self.background_exit_threshold:
                     pink_to_white_changes.append(self.long_ma_line.index[i])
         
-        # 白からピンクへの変化ポイントを表示（エグジット）
+        # Display white to pink change points (exit)
         if white_to_pink_changes and self.use_background_color_signals:
             ax2.scatter(white_to_pink_changes, 
                        self.long_ma_line[white_to_pink_changes],
                        color='orange', marker='x', s=150,
                        label=f'White to Pink (Exit, MA≥{self.background_exit_threshold:.2f})')
         
-        # ピンクから白への変化ポイントを表示（エントリー）
+        # Display pink to white change points (entry)
         if pink_to_white_changes and self.use_background_color_signals:
             ax2.scatter(pink_to_white_changes, 
                        self.long_ma_line[pink_to_white_changes],
@@ -1095,11 +1095,11 @@ class Backtest:
         rolling_max = equity.expanding().max()
         drawdown = equity / rolling_max - 1
         
-        # Buy & Holdのdrawdownを計算
+        # Buy & Hold's drawdown calculation
         buy_hold_rolling_max = buy_hold_equity.expanding().max()
         buy_hold_drawdown = buy_hold_equity / buy_hold_rolling_max - 1
         
-        # 両方のdrawdownをプロット
+        # Plot both drawdowns
         ax4.fill_between(drawdown.index, drawdown, 0, color='red', alpha=0.3, label='Strategy')
         ax4.plot(drawdown.index, drawdown, color='red', linewidth=1)
         ax4.plot(buy_hold_drawdown.index, buy_hold_drawdown, color='blue', linewidth=1, label='Buy & Hold')
@@ -1117,7 +1117,7 @@ class Backtest:
         plt.tight_layout()
         plt.savefig(f'reports/backtest_results_{self.symbol}.png')
         if show_plot:
-            plt.show()  # チャートを表示
+            plt.show()  # Display chart
 
 def main():
     parser = argparse.ArgumentParser(description='Backtest using Market Breadth indicator')

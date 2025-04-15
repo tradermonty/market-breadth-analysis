@@ -194,6 +194,9 @@ ETFs are categorized as follows:
 ### 4.5 Output Files
 - `../reports/backtest_results_summary.md`: Detailed results report in Markdown format
 - `../reports/backtest_results_summary.csv`: Results data in CSV format
+- `../reports/backtest_result_sample.png`: Sample chart showing price action, breadth index, and trading signals
+
+![Backtest Result Sample](../reports/backtest_result_sample.png)
 
 ### 4.6 Parameters
 - `etfs`: List of ETF symbols for backtesting
