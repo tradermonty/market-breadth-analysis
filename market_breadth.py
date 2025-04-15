@@ -208,7 +208,7 @@ def get_sp500_price_data(start_date, end_date, use_saved_data=False):
 
 def get_multiple_stock_data(tickers, start_date, end_date, use_saved_data=False):
     """Get data for multiple stocks using EODHD or saved data"""
-    filename = 'stock_data.csv'
+    filename = 'sp500_all_stocks.csv'
     file_path = data_dir / filename
     
     # Calculate the actual start date (1 year before the specified start date)

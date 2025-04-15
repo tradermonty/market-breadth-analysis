@@ -24,7 +24,7 @@ from market_breadth import (
     get_stock_price_data
 )
 
-# 必要なディレクトリの作成
+# Create necessary directories
 reports_dir = pathlib.Path('reports')
 reports_dir.mkdir(exist_ok=True)
 
@@ -104,13 +104,13 @@ class Backtest:
         # Calculate moving averages
         self.breadth_index = self.above_ma.mean(axis=1)
         
-        # 移動平均線の種類に基づいて計算
+        # Calculate based on the type of moving average
         if self.ma_type == 'ema':
-            # 指数移動平均（EMA）
+            # Exponential Moving Average (EMA)
             self.short_ma_line = self.breadth_index.ewm(span=self.short_ma, adjust=False).mean()
             self.long_ma_line = self.breadth_index.ewm(span=self.long_ma, adjust=False).mean()
         else:
-            # 単純移動平均（SMA）
+            # Simple Moving Average (SMA)
             self.short_ma_line = self.breadth_index.rolling(window=self.short_ma).mean()
             self.long_ma_line = self.breadth_index.rolling(window=self.long_ma).mean()
         
@@ -129,11 +129,11 @@ class Backtest:
         self.long_ma_line = self.long_ma_line.loc[mask]
         self.long_ma_trend = self.long_ma_trend.loc[mask]
         
-        # Initialize lists to store signals
+        # Initialize variables for signal detection
         self.short_ma_bottoms = []
         self.long_ma_bottoms = []
         self.peaks = []
-        
+                
         # Execute trades
         self.execute_trades()
         
@@ -187,63 +187,58 @@ class Backtest:
     def execute_trades(self):
         """Execute trades"""
         available_capital = self.initial_capital
-        
-        # シグナル検出用の変数を初期化
-        self.short_ma_bottoms = []
-        self.long_ma_bottoms = []
-        self.peaks = []
-        
+                
         # 検出済みのシグナルを記録する変数
         detected_short_ma_bottoms = set()
         detected_long_ma_bottoms = set()
         detected_peaks = set()
         
-        # 取引実行
+        # Execute trades
         for i, date in enumerate(self.price_data.index):
             price = self.price_data.loc[date, 'adjusted_close']
             
-            # 現在の日付までのデータを使用してシグナルを検出
+            # Detect signals using data up to the current date
             current_data = self.price_data.iloc[:i+1]
             current_breadth_index = self.breadth_index.iloc[:i+1]
             current_short_ma_line = self.short_ma_line.iloc[:i+1]
             current_long_ma_line = self.long_ma_line.iloc[:i+1]
             
-            # データ期間の開始日と終了日を取得
+            # Get start and end dates of the data period
             data_start_date = current_short_ma_line.index[0].strftime('%Y-%m-%d')
             data_end_date = current_short_ma_line.index[-1].strftime('%Y-%m-%d')
             
-            # 20MAのボトム検出（disable_short_ma_entryがFalseの場合のみ）
+            # Detect 20MA bottoms (only if disable_short_ma_entry is False)
             if not self.disable_short_ma_entry and len(current_short_ma_line) > self.short_ma:
                 below_threshold_short = current_short_ma_line[current_short_ma_line < self.threshold]
                 if not below_threshold_short.empty:
-                    # 元のインデックスを保持
+                    # Preserve original indices
                     original_indices = np.where(current_short_ma_line < self.threshold)[0]
                     bottoms_short, _ = find_peaks(
                         -below_threshold_short.values,
                         prominence=0.02
                     )
                     
-                    # find_peaksで検出された底から、Market Breadthの実測値が条件を満たすものだけを選択
+                    # Select only those bottoms detected by find_peaks that meet the Market Breadth actual value conditions
                     for bottom_idx in bottoms_short:
-                        # 元のデータでのインデックス位置を取得
+                        # Get index position in the original data
                         original_idx = original_indices[bottom_idx]
                         bottom_date = current_short_ma_line.index[original_idx]
                         
-                        # 過去20日間のMarket Breadthの最小値を計算
-                        if original_idx >= 20:  # 過去20日分のデータがある場合のみチェック
+                        # Calculate minimum Market Breadth value over the past 20 days
+                        if original_idx >= 20:  # Only check if there is data for the past 20 days
                             past_20days_min = current_breadth_index.iloc[original_idx-20:original_idx+1].min()
-                            if past_20days_min <= 0.3:  # 実測値の条件をチェック
-                                # まだ検出されていないボトムの場合のみ追加
+                            if past_20days_min <= 0.3:  # Check actual value conditions
+                                # Only add if the bottom has not been detected yet
                                 if bottom_date not in detected_short_ma_bottoms:
                                     detected_short_ma_bottoms.add(bottom_date)
-                                    # シグナル発生日としてData periodの終わりの日付を使用
+                                    # Use the end date of the Data period as the signal date
                                     signal_date = pd.to_datetime(data_end_date)
                                     self.short_ma_bottoms.append(signal_date)
                                     print(f"New {self.short_ma}{self.ma_type.upper()} bottom detected at: {bottom_date.strftime('%Y-%m-%d')}")
                                     print(f"  Data period: {data_start_date} to {data_end_date}")
                                     print(f"  Signal date: {signal_date.strftime('%Y-%m-%d')}")
             
-            # 200MAのボトム検出
+            # Detect 200MA bottoms
             if len(current_long_ma_line) > self.long_ma:
                 bottoms_long, _ = find_peaks(
                     -current_long_ma_line.values,
@@ -252,23 +247,23 @@ class Backtest:
                 for bottom_idx in bottoms_long:
                     bottom_date = current_long_ma_line.index[bottom_idx]
                     
-                    # 元のデータでのインデックス位置を取得
+                    # Get index position in the original data
                     original_idx = bottom_idx
                     
-                    # 過去20日間のMarket Breadthの最小値を計算
-                    if original_idx >= 20:  # 過去20日分のデータがある場合のみチェック
+                    # Calculate minimum Market Breadth value over the past 20 days
+                    if original_idx >= 20:  # Only check if there is data for the past 20 days
                         past_20days_min = current_breadth_index.iloc[original_idx-20:original_idx+1].min()
-                        if past_20days_min <= 0.5:  # 実測値の条件をチェック
+                        if past_20days_min <= 0.5:  # Check actual value conditions
                             if bottom_date not in detected_long_ma_bottoms:
                                 detected_long_ma_bottoms.add(bottom_date)
-                                # シグナル発生日としてData periodの終わりの日付を使用
+                                # Use the end date of the Data period as the signal date
                                 signal_date = pd.to_datetime(data_end_date)
                                 self.long_ma_bottoms.append(signal_date)
                                 print(f"New {self.long_ma}{self.ma_type.upper()} bottom detected at: {bottom_date.strftime('%Y-%m-%d')}")
                                 print(f"  Data period: {data_start_date} to {data_end_date}")
                                 print(f"  Signal date: {signal_date.strftime('%Y-%m-%d')}")
             
-            # 200MAのピーク検出
+            # Detect 200MA peaks
             if len(current_long_ma_line) > self.long_ma:
                 peaks, _ = find_peaks(
                     current_long_ma_line.values,
@@ -277,11 +272,11 @@ class Backtest:
                 for peak_idx in peaks:
                     peak_date = current_long_ma_line.index[peak_idx]
                     
-                    # 200MAの値が0.6以上であることを確認
+                    # Verify that the 200MA value is 0.6 or higher
                     if current_long_ma_line.iloc[peak_idx] >= 0.5:
                         if peak_date not in detected_peaks:
                             detected_peaks.add(peak_date)
-                            # シグナル発生日としてData periodの終わりの日付を使用
+                            # Use the end date of the Data period as the signal date
                             signal_date = pd.to_datetime(data_end_date)
                             self.peaks.append(signal_date)
                             print(f"New {self.long_ma}{self.ma_type.upper()} peak detected at: {peak_date.strftime('%Y-%m-%d')}")
@@ -289,15 +284,15 @@ class Backtest:
                             print(f"  Signal date: {signal_date.strftime('%Y-%m-%d')}")
                             print(f"  {self.long_ma}{self.ma_type.upper()} value: {current_long_ma_line.iloc[peak_idx]:.4f}")
             
-            # 20MAのボトムでのエントリー（disable_short_ma_entryがFalseの場合のみ）
+            # Entry at 20MA bottom (only if disable_short_ma_entry is False)
             if not self.disable_short_ma_entry and date in self.short_ma_bottoms:
-                if available_capital > 0:  # 資金がある場合はポジションを増やす
+                if available_capital > 0:  # Increase position if capital is available
                     entry_amount = available_capital / 2
                     shares = self._calculate_shares(entry_amount, price)
-                    if shares > 0:  # 購入可能な株式がある場合のみエントリー
+                    if shares > 0:  # Only enter if shares can be purchased
                         self._execute_entry(date, price, shares, reason="short_ma_bottom")
                         available_capital -= entry_amount
-                        # 最高価格を初期化
+                        # Initialize highest price
                         self.highest_price = price
                         print(f"\nEntry at {self.short_ma}{self.ma_type.upper()} bottom (buy more):")
                         print(f"Date: {date.strftime('%Y-%m-%d')}")
@@ -311,15 +306,15 @@ class Backtest:
                     print(f"Date: {date.strftime('%Y-%m-%d')}")
                     print(f"Current position: {self.current_position} shares")
                     print(f"Current valuation: ${self.current_position * price:.2f}")
-                
-            # 200MAのボトムでのエントリー
+            
+            # Entry at 200MA bottom
             elif date in self.long_ma_bottoms:
-                if available_capital > 0:  # 資金がある場合はポジションを増やす
-                    # 200MAの場合は残りの利用可能資金をすべて使用
+                if available_capital > 0:  # Increase position if capital is available
+                    # For 200MA, use all remaining available capital
                     shares = self._calculate_shares(available_capital, price)
                     if shares > 0:
                         self._execute_entry(date, price, shares, reason="long_ma_bottom")
-                        # 最高価格を初期化
+                        # Initialize highest price
                         self.highest_price = price
                         print(f"\nEntry at {self.long_ma}{self.ma_type.upper()} bottom (buy more):")
                         print(f"Date: {date.strftime('%Y-%m-%d')}")
@@ -335,31 +330,31 @@ class Backtest:
                     print(f"Current position: {self.current_position} shares")
                     print(f"Current valuation: ${self.current_position * price:.2f}")
             
-            # 背景が白に変わったときのエントリー（新しい条件）
+            # Entry when background changes to white (new condition)
             elif self.use_background_color_signals and self.current_position == 0 and i > 0:
-                # 前日のデータと比較して背景色が変わったかどうかを確認
+                # Check if background color has changed by comparing with previous day's data
                 prev_trend = self.long_ma_trend.iloc[i-1]
                 prev_short_ma = self.short_ma_line.iloc[i-1]
                 prev_long_ma = self.long_ma_line.iloc[i-1]
                 
-                # 前日は背景がピンクだった（条件を満たしていた）
+                # Previous day had pink background (conditions were met)
                 prev_condition = (prev_trend == -1 and prev_short_ma < prev_long_ma)
                 
-                # 今日は背景が白になった（条件を満たしていない）
+                # Today the background is white (conditions are not met)
                 current_trend = self.long_ma_trend.iloc[i]
                 current_short_ma = self.short_ma_line.iloc[i]
                 current_long_ma = self.long_ma_line.iloc[i]
                 current_condition = not (current_trend == -1 and current_short_ma < current_long_ma)
                 
-                # 背景色がピンクから白に変わった場合（前日は条件を満たしていて、今日は満たしていない）
-                # かつ、200MAの値が指定されたしきい値以上である場合
+                # If background color changes from pink to white (previous day met conditions, today does not)
+                # And if the 200MA value is above the specified threshold
                 if prev_condition and current_condition and current_long_ma >= self.background_exit_threshold:
-                    if available_capital > 0:  # 資金がある場合はポジションを増やす
-                        # 残りの利用可能資金をすべて使用
+                    if available_capital > 0:  # Increase position if capital is available
+                        # Use all remaining available capital
                         shares = self._calculate_shares(available_capital, price)
                         if shares > 0:
                             self._execute_entry(date, price, shares, reason="background_color_change")
-                            # 最高価格を初期化
+                            # Initialize highest price
                             self.highest_price = price
                             print(f"\nEntry at background color change (pink to white):")
                             print(f"Date: {date.strftime('%Y-%m-%d')}")
@@ -377,7 +372,7 @@ class Backtest:
                         print(f"Current position: {self.current_position} shares")
                         print(f"Current valuation: ${self.current_position * price:.2f}")
             
-            # ピークでのエグジット
+            # Exit at peak
             elif date in self.peaks and self.current_position > 0:
                 print(f"\nExit at {self.long_ma}{self.ma_type.upper()} peak:")
                 print(f"Date: {date.strftime('%Y-%m-%d')}")
@@ -390,24 +385,24 @@ class Backtest:
                 available_capital = self.current_capital
                 print(f"Available capital: ${available_capital:.2f}")
             
-            # 背景がピンクに変わる瞬間でのエグジット（新しい条件）
+            # Exit at the moment background changes to pink (new condition)
             elif self.use_background_color_signals and self.current_position > 0 and i > 0:
-                # 前日のデータと比較して背景色が変わったかどうかを確認
+                # Check if background color has changed by comparing with previous day's data
                 prev_trend = self.long_ma_trend.iloc[i-1]
                 prev_short_ma = self.short_ma_line.iloc[i-1]
                 prev_long_ma = self.long_ma_line.iloc[i-1]
                 
-                # 前日は背景がピンクでなかった（または条件を満たしていなかった）
+                # Previous day did not have pink background (or did not meet conditions)
                 prev_condition = not (prev_trend == -1 and prev_short_ma < prev_long_ma)
                 
-                # 今日は背景がピンクになった（条件を満たした）
+                # Today the background is pink (conditions are met)
                 current_trend = self.long_ma_trend.iloc[i]
                 current_short_ma = self.short_ma_line.iloc[i]
                 current_long_ma = self.long_ma_line.iloc[i]
                 current_condition = (current_trend == -1 and current_short_ma < current_long_ma)
                 
-                # 背景色が変わった場合（前日は条件を満たしていなくて、今日は満たした）
-                # かつ、200MAの値が指定されたしきい値以上である場合
+                # If background color has changed (previous day did not meet conditions, today does)
+                # And if the 200MA value is above the specified threshold
                 if prev_condition and current_condition and current_long_ma >= self.background_exit_threshold:
                     print(f"\nExit at background color change (trend change):")
                     print(f"Date: {date.strftime('%Y-%m-%d')}")
@@ -422,24 +417,24 @@ class Backtest:
                     available_capital = self.current_capital
                     print(f"Available capital: ${available_capital:.2f}")
             
-            # 損切りロジック
+            # Stop loss logic
             elif self.current_position > 0 and self.entry_prices:
-                # 最新のエントリー価格を取得
+                # Get latest entry price
                 latest_entry_price = self.entry_prices[-1]
                 
-                # 最高価格を更新
+                # Update highest price
                 if self.highest_price is None or price > self.highest_price:
                     self.highest_price = price
                 
-                # 損切り価格を計算
+                # Calculate stop loss price
                 if self.use_trailing_stop and self.highest_price is not None:
-                    # トレーリングストップを使用する場合
+                    # When using trailing stop
                     stop_loss_price = self.highest_price * (1 - self.trailing_stop_pct)
                 else:
-                    # 通常の損切りを使用する場合
+                    # When using regular stop loss
                     stop_loss_price = latest_entry_price * (1 - self.stop_loss_pct)
                 
-                # 現在の価格が損切り価格を下回った場合
+                # If current price falls below stop loss price
                 if price <= stop_loss_price:
                     print(f"\nStop loss triggered:")
                     print(f"Date: {date.strftime('%Y-%m-%d')}")
@@ -457,7 +452,7 @@ class Backtest:
                     available_capital = self.current_capital
                     print(f"Available capital: ${available_capital:.2f}")
             
-            # エクイティカーブの更新
+            # Update equity curve
             self.equity_curve.append({
                 'date': date,
                 'equity': self.current_capital + 
@@ -470,26 +465,26 @@ class Backtest:
         print(f"{self.long_ma}{self.ma_type.upper()} bottoms detected: {len(self.long_ma_bottoms)}")
         print(f"{self.long_ma}{self.ma_type.upper()} peaks detected: {len(self.peaks)}")
         
-        # 背景色の変化によるイグジットの回数を計算
+        # Calculate number of exits due to background color changes
         background_change_exits = 0
         for trade in self.trades:
             if trade['action'] == 'SELL':
-                # 直前の取引が背景色の変化によるイグジットかどうかを確認
+                # Check if the previous trade was an exit due to background color change
                 trade_idx = self.trades.index(trade)
                 if trade_idx > 0:
                     prev_trade = self.trades[trade_idx - 1]
                     if prev_trade['action'] == 'BUY':
-                        # 直前の取引が背景色の変化によるイグジットかどうかを確認
+                        # Check if the previous trade was an exit due to background color change
                         if "background color change" in trade.get('reason', ''):
                             background_change_exits += 1
         
         print(f"Background color change exits: {background_change_exits}")
         
-        # 背景色の変化によるエントリーの回数を計算
+        # Calculate number of entries due to background color changes
         background_change_entries = 0
         for trade in self.trades:
             if trade['action'] == 'BUY':
-                # 背景色の変化によるエントリーかどうかを確認
+                # Check if entry was due to background color change
                 if "background color change" in trade.get('reason', ''):
                     background_change_entries += 1
         
@@ -508,7 +503,7 @@ class Backtest:
         self.current_position += shares  # Changed to += to support buying more
         self.current_capital -= total_cost
         
-        # エントリー価格を記録
+        # Record entry price
         self.entry_prices.append(entry_price)
         
         self.trades.append({
