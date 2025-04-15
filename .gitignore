@@ -8,6 +8,7 @@ reports/*
 !reports/market_breadth.png
 !reports/backtest_results_summary.md
 !reports/backtest_results_summary.csv
+!reports/backtest_result_sample.png
 archive/*
 !archive/.gitkeep
 __pycache__/
