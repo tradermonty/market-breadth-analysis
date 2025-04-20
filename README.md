@@ -55,7 +55,7 @@ Basic usage (requires API key):
 python market_breadth.py
 ```
 
-Using saved data (no API key required):
+Using saved data:
 ```bash
 python market_breadth.py --use_saved_data
 ```

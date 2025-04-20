@@ -55,7 +55,7 @@ cp .env.sample .env
 python market_breadth.py
 ```
 
-保存データの使用（APIキー不要）:
+保存データの使用:
 ```bash
 python market_breadth.py --use_saved_data
 ```
