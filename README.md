@@ -1,5 +1,7 @@
 # Market Breadth Analysis Tool
 
+[日本語版はこちら](README-ja.md)
+
 A tool for analyzing and visualizing the market breadth of S&P500 stocks.
 
 ## Features
@@ -125,7 +127,7 @@ EODHD (End of Day Historical Data)
   - Details: https://eodhd.com/pricing
 - Special ticker symbol handling
   - Dots (.) in tickers are converted to hyphens (-)
-  - Examples: BRK.B → BRK-B, U.S.B → U-S-B
+  - Examples: BRK.B → BRK-B
 
 ## Output
 
