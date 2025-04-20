@@ -991,7 +991,7 @@ class Backtest:
         # Remove duplicate labels
         handles, labels = ax1.get_legend_handles_labels()
         by_label = dict(zip(labels, handles))
-        ax1.legend(by_label.values(), by_label.keys())
+        ax1.legend(by_label.values(), by_label.keys(), loc='center left', bbox_to_anchor=(0.02, 0.5))
         
         ax1.set_title(f'{self.symbol} Price Chart with Trade Points')
         
@@ -1073,7 +1073,7 @@ class Backtest:
                    label=f'{self.long_ma}{self.ma_type.upper()} Peak')
         
         ax2.set_title('Breadth Index and Moving Averages')
-        ax2.legend()
+        ax2.legend(loc='center left', bbox_to_anchor=(0.02, 0.5))
         
         # Equity curve comparison
         initial_price = self.price_data['adjusted_close'].iloc[0]
@@ -1083,7 +1083,7 @@ class Backtest:
         ax3.plot(self.equity_df.index, self.equity_df['equity'], label='Strategy')
         ax3.plot(buy_hold_equity.index, buy_hold_equity, label='Buy & Hold')
         ax3.set_title('Equity Curve Comparison')
-        ax3.legend()
+        ax3.legend(loc='center left', bbox_to_anchor=(0.02, 0.5))
         
         # Drawdown chart
         equity = self.equity_df['equity']
@@ -1103,7 +1103,7 @@ class Backtest:
         ax4.set_title('Drawdown Comparison')
         ax4.set_ylabel('Drawdown (%)')
         ax4.grid(True)
-        ax4.legend()
+        ax4.legend(loc='center left', bbox_to_anchor=(0.02, 0.5))
         
         # Add horizontal line at -10% for reference
         ax4.axhline(y=-0.1, color='darkred', linestyle='--', alpha=0.7)
