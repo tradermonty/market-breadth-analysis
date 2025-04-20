@@ -5,7 +5,7 @@ import os
 import sys
 import time
 import matplotlib
-matplotlib.use('Agg')  # プロットを表示しないようにバックエンドを設定
+matplotlib.use('Agg')  # Set backend to not display plots
 
 # Add parent directory to path to import backtest
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -17,57 +17,57 @@ def run_multi_etf_backtest(etfs, start_date=None, end_date=None,
                           debug=False, threshold=0.5, ma_type='ema', stop_loss_pct=0.10,
                           no_show_plot=True):
     """
-    複数のETFに対してバックテストを実施し、結果をまとめたMD形式の表を出力する
+    Run backtest for multiple ETFs and output a summary table in MD format
     
     Parameters:
     -----------
     etfs : list
-        バックテスト対象のETFシンボルのリスト
+        List of ETF symbols to backtest
     start_date : str, optional
-        バックテスト開始日 (YYYY-MM-DD形式)
+        Backtest start date (YYYY-MM-DD format)
     end_date : str, optional
-        バックテスト終了日 (YYYY-MM-DD形式)
+        Backtest end date (YYYY-MM-DD format)
     short_ma : int, optional
-        短期移動平均の期間
+        Short-term moving average period
     long_ma : int, optional
-        長期移動平均の期間
+        Long-term moving average period
     initial_capital : float, optional
-        初期投資額
+        Initial investment amount
     slippage : float, optional
-        スリッページ率
+        Slippage rate
     commission : float, optional
-        取引手数料率
+        Commission rate
     use_saved_data : bool, optional
-        保存済みデータを使用するかどうか
+        Whether to use saved data
     debug : bool, optional
-        デバッグモードを有効にするかどうか
+        Whether to enable debug mode
     threshold : float, optional
-        ボトム検出のしきい値
+        Threshold for bottom detection
     ma_type : str, optional
-        移動平均の種類 ('ema' or 'sma')
+        Type of moving average ('ema' or 'sma')
     stop_loss_pct : float, optional
-        損切りパーセンテージ
+        Stop loss percentage
     no_show_plot : bool, optional
-        プロットを表示しないかどうか（デフォルト: True）
+        Whether to not show plots (default: True)
     """
-    # 日付が指定されていない場合は、10年前から現在までをデフォルトとする
+    # If dates are not specified, default to 10 years ago to present
     if end_date is None:
         end_date = (datetime.now()- timedelta(days=1)).strftime('%Y-%m-%d')
     
     if start_date is None:
         start_date = (datetime.now() - timedelta(days=365*10)).strftime('%Y-%m-%d')
     
-    # 結果を格納するリスト
+    # List to store results
     results = []
     
-    # 各ETFに対してバックテストを実行
+    # Run backtest for each ETF
     for symbol in etfs:
         print(f"\n{'='*50}")
         print(f"Running backtest for {symbol}...")
         print(f"{'='*50}")
         
         try:
-            # バックテストの実行
+            # Execute backtest
             backtest = Backtest(
                 start_date=start_date,
                 end_date=end_date,
@@ -85,13 +85,13 @@ def run_multi_etf_backtest(etfs, start_date=None, end_date=None,
                 no_show_plot=no_show_plot
             )
             
-            # バックテストの実行
+            # Run backtest
             backtest.run()
             
-            # 結果を可視化（no_show_plotパラメータを渡す）
+            # Visualize results (pass no_show_plot parameter)
             backtest.visualize_results(show_plot=not no_show_plot)
             
-            # 結果を取得
+            # Get results
             result = {
                 'Symbol': symbol,
                 'Total Return': backtest.total_return,
@@ -109,12 +109,12 @@ def run_multi_etf_backtest(etfs, start_date=None, end_date=None,
             
             results.append(result)
             
-            # 少し待機してAPIリクエストを制限
+            # Wait briefly to limit API requests
             time.sleep(2)
             
         except Exception as e:
             print(f"Error running backtest for {symbol}: {e}")
-            # エラーが発生した場合でも、空の結果を追加して処理を継続
+            # Add empty result and continue even if error occurs
             results.append({
                 'Symbol': symbol,
                 'Total Return': np.nan,
@@ -131,24 +131,24 @@ def run_multi_etf_backtest(etfs, start_date=None, end_date=None,
             })
             continue
     
-    # 結果をDataFrameに変換
+    # Convert results to DataFrame
     results_df = pd.DataFrame(results)
     
-    # 結果を表示
+    # Display results
     print("\n" + "="*100)
     print("BACKTEST RESULTS SUMMARY")
     print("="*100)
     
-    # 結果を整形して表示
+    # Format and display results
     formatted_results = results_df.copy()
     
-    # パーセンテージ形式に変換
+    # Convert to percentage format
     formatted_results['Total Return'] = formatted_results['Total Return'].map('{:.2%}'.format)
     formatted_results['Annual Return (CAGR)'] = formatted_results['Annual Return (CAGR)'].map('{:.2%}'.format)
     formatted_results['Maximum Drawdown'] = formatted_results['Maximum Drawdown'].map('{:.2%}'.format)
     formatted_results['Win Rate'] = formatted_results['Win Rate'].map('{:.2%}'.format)
     
-    # 小数点以下2桁に丸める
+    # Round to 2 decimal places
     formatted_results['Sharpe Ratio'] = formatted_results['Sharpe Ratio'].map('{:.2f}'.format)
     formatted_results['Profit-Loss Ratio'] = formatted_results['Profit-Loss Ratio'].map('{:.2f}'.format)
     formatted_results['Profit Factor'] = formatted_results['Profit Factor'].map('{:.2f}'.format)
@@ -157,13 +157,13 @@ def run_multi_etf_backtest(etfs, start_date=None, end_date=None,
     formatted_results['Avg. PnL per Trade'] = formatted_results['Avg. PnL per Trade'].map('${:.2f}'.format)
     formatted_results['Pareto Ratio'] = formatted_results['Pareto Ratio'].map('{:.2f}'.format)
     
-    # MD形式の表を生成
+    # Generate MD format table
     md_table = formatted_results.to_markdown(index=False)
     
-    # 結果を表示
+    # Display results
     print(md_table)
     
-    # 結果をファイルに保存
+    # Save results to file
     with open('reports/backtest_results_summary.md', 'w') as f:
         f.write("# ETF Backtest Results Summary\n\n")
         f.write(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
@@ -180,59 +180,59 @@ def run_multi_etf_backtest(etfs, start_date=None, end_date=None,
     
     print(f"\nResults saved to reports/backtest_results_summary.md")
     
-    # 結果をCSVファイルにも保存
+    # Also save results to CSV file
     results_df.to_csv('reports/backtest_results_summary.csv', index=False)
     print(f"Results also saved to reports/backtest_results_summary.csv")
     
     return results_df
 
 if __name__ == "__main__":
-    # バックテスト対象のETFリスト（カテゴリ別に整理）
+    # List of ETFs to backtest (organized by category)
     etfs = [
-        # 米国株式市場の多様化のためのETF
+        # ETFs for US stock market diversification
         'SPY',  # SPDR S&P 500 ETF
-        'VOO',  # Vanguard S&P 500 ETF（S&P500指数）
-        'VTI',  # Vanguard Total Stock Market ETF（全米株式市場）
+        'VOO',  # Vanguard S&P 500 ETF (S&P500 index)
+        'VTI',  # Vanguard Total Stock Market ETF (Total US stock market)
         'QQQ',  # Invesco QQQ Trust
-        'VUG',  # Vanguard Growth ETF（成長株）
-        'VTV',  # Vanguard Value ETF（バリュー株）
-        'VB',   # Vanguard Small-Cap ETF（小型株）
-        'VEA',  # Vanguard Developed Markets ETF（先進国株式）
-        'VWO',  # Vanguard Emerging Markets ETF（新興国株式）
+        'VUG',  # Vanguard Growth ETF (Growth stocks)
+        'VTV',  # Vanguard Value ETF (Value stocks)
+        'VB',   # Vanguard Small-Cap ETF (Small-cap stocks)
+        'VEA',  # Vanguard Developed Markets ETF (Developed markets)
+        'VWO',  # Vanguard Emerging Markets ETF (Emerging markets)
         
-        # セクター別ETF
-        'XLF',  # Financial Select Sector SPDR Fund（金融セクター）
-        'XLE',  # Energy Select Sector SPDR Fund（エネルギーセクター）
-        'XLK',  # Technology Select Sector SPDR Fund（テクノロジーセクター）
-        'XLV',  # Health Care Select Sector SPDR Fund（ヘルスケアセクター）
-        'XLI',  # Industrial Select Sector SPDR Fund（工業セクター）
+        # Sector-specific ETFs
+        'XLF',  # Financial Select Sector SPDR Fund (Financial sector)
+        'XLE',  # Energy Select Sector SPDR Fund (Energy sector)
+        'XLK',  # Technology Select Sector SPDR Fund (Technology sector)
+        'XLV',  # Health Care Select Sector SPDR Fund (Healthcare sector)
+        'XLI',  # Industrial Select Sector SPDR Fund (Industrial sector)
         'VGT',  # Vanguard Information Technology ETF
         
-        # レバレッジ・ブルETF
+        # Leveraged/Bull ETFs
         'SSO',  # ProShares Ultra S&P 500
         'TQQQ', # ProShares UltraPro QQQ
         'QLD',  # ProShares Ultra QQQ
         'SPXL', # Direxion Daily S&P 500 Bull 3X Shares
         'SOXL', # Direxion Daily Semiconductor Bull 3X Shares
         
-        # 小型・中型株ETF
+        # Small/Mid-cap ETFs
         'TNA',  # Direxion Daily Small Cap Bull 3X Shares
         'IWR',  # iShares Russell Mid-Cap ETF
         
-        # 成長株ETF
+        # Growth ETFs
         'SCHG', # Schwab U.S. Large-Cap Growth ETF
         'IWF',  # iShares Russell 1000 Growth ETF
         
-        # ファクターETF
+        # Factor ETFs
         'MTUM', # iShares MSCI USA Momentum Factor ETF
         
-        # 配当重視ETF
-        'VYM',  # Vanguard High Dividend Yield ETF（高配当株）
-        'SCHD', # Schwab U.S. Dividend Equity ETF（配当株）
-        'NOBL'  # ProShares S&P 500 Dividend Aristocrats ETF（配当貴族株）
+        # Dividend-focused ETFs
+        'VYM',  # Vanguard High Dividend Yield ETF (High dividend stocks)
+        'SCHD', # Schwab U.S. Dividend Equity ETF (Dividend stocks)
+        'NOBL'  # ProShares S&P 500 Dividend Aristocrats ETF (Dividend aristocrats)
     ]
     
-    # バックテストの実行
+    # Run backtest
     run_multi_etf_backtest(
         etfs=etfs,
         start_date='2001-01-01',
