@@ -12,4 +12,4 @@ reports/*
 archive/*
 !archive/.gitkeep
 __pycache__/
-*.pyc 
+*.pyc .vscode/
