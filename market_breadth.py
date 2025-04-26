@@ -755,7 +755,7 @@ def main():
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
     parser.add_argument('--start_date', type=str, help='Start date (YYYY-MM-DD format)')
     parser.add_argument('--end_date', type=str, help='End date (YYYY-MM-DD format). If not specified, today\'s date will be used.')
-    parser.add_argument('--short_ma', type=int, default=10, choices=[5, 10, 20], help='Short-term moving average period (5, 10, or 20)')
+    parser.add_argument('--short_ma', type=int, default=8, choices=[5, 8, 10, 20], help='Short-term moving average period (5, 8, 10, or 20)')
     parser.add_argument('--use_saved_data', action='store_true', help='Use saved data instead of fetching from EODHD')
 
     # Set up command line arguments

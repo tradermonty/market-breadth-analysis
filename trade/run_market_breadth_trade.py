@@ -63,7 +63,7 @@ class MarketBreadthTrader:
                  threshold=0.5, ma_type='ema', symbol='SSO', stop_loss_pct=0.10,
                  disable_short_ma_entry=False, use_trailing_stop=False, trailing_stop_pct=0.2,
                  background_exit_threshold=0.5, use_background_color_signals=False,
-                 partial_exit=False, closing_time_minutes=20):
+                 partial_exit=False, closing_time_minutes=20, testmode=False, test_date=None):
         self.symbol = symbol
         self.short_ma = short_ma
         self.long_ma = long_ma
@@ -82,6 +82,9 @@ class MarketBreadthTrader:
         self.use_background_color_signals = use_background_color_signals
         self.partial_exit = partial_exit
         self.closing_time_minutes = closing_time_minutes
+        self.testmode = testmode
+        self.test_date = test_date
+        self.test_dt = None  # Variable to hold current time in test mode
         
         # Initialize Alpaca API
         self.api = tradeapi.REST(ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL, api_version='v2')
@@ -98,10 +101,17 @@ class MarketBreadthTrader:
         self.peaks = []
         
         logger.info(f"MarketBreadthTrader initialized with symbol: {self.symbol}")
+        if self.testmode:
+            logger.info(f"Test mode enabled for date: {self.test_date}")
     
     def is_closing_time_range(self, range_minutes=20):
         """Check if current time is within the specified minutes before market close"""
-        current_dt = datetime.now().astimezone(TZ_NY)
+        if self.testmode:
+            # Use time advanced in run function for test mode
+            current_dt = self.test_dt
+            logger.info(f"Test mode time: {current_dt}")
+        else:
+            current_dt = datetime.now().astimezone(TZ_NY)
         
         cal = self.api.get_calendar(start=str(current_dt.date()), end=str(current_dt.date()))
         
@@ -116,15 +126,18 @@ class MarketBreadthTrader:
                 )
             else:
                 close_dt = datetime.combine(current_dt.date(), close_time, tzinfo=TZ_NY)
+            
+            logger.info(f"Market close time: {close_dt}")
+            logger.info(f"Time difference: {close_dt - current_dt}")
+            
+            if close_dt - timedelta(minutes=range_minutes) <= current_dt < close_dt:
+                logger.info("In closing time range")
+                return True
+            else:
+                logger.info(f"{current_dt}, it's not in closing time range")
+                return False
         else:
             logger.info("Market will not open on the date.")
-            return False
-        
-        if close_dt - timedelta(minutes=range_minutes) <= current_dt < close_dt:
-            logger.info("In closing time range")
-            return True
-        else:
-            logger.info(f"{current_dt}, it's not in closing time range")
             return False
     
     def is_market_open(self):
@@ -162,8 +175,11 @@ class MarketBreadthTrader:
     
     def execute_buy(self, shares, reason=""):
         """Execute buy order"""
+        if self.testmode:
+            logger.info(f"[TEST MODE] Would execute buy order: {shares} shares of {self.symbol}, reason: {reason}")
+            return True
+        
         try:
-            # No need to convert symbol for Alpaca (Alpaca uses original symbol format)
             order = self.api.submit_order(
                 symbol=self.symbol,
                 qty=shares,
@@ -179,8 +195,11 @@ class MarketBreadthTrader:
     
     def execute_sell(self, shares, reason=""):
         """Execute sell order"""
+        if self.testmode:
+            logger.info(f"[TEST MODE] Would execute sell order: {shares} shares of {self.symbol}, reason: {reason}")
+            return True
+        
         try:
-            # No need to convert symbol for Alpaca (Alpaca uses original symbol format)
             order = self.api.submit_order(
                 symbol=self.symbol,
                 qty=shares,
@@ -198,9 +217,23 @@ class MarketBreadthTrader:
         """Execute trading"""
         logger.info("Starting market breadth trading...")
         
+        if self.testmode:
+            # Set initial time for test mode (EST 15:30)
+            self.test_dt = datetime.strptime(self.test_date, '%Y-%m-%d')
+            self.test_dt = self.test_dt.replace(hour=15, minute=30, tzinfo=TZ_NY)
+            logger.info(f"Test mode started at {self.test_dt} (EST)")
+        
         while True:
-            # Check if market is open
-            if not self.is_market_open():
+            if self.testmode:
+                # Use specified time in test mode
+                current_dt = self.test_dt
+                logger.info(f"Current test time: {current_dt}")
+            else:
+                # Use current time in normal mode
+                current_dt = datetime.now().astimezone(TZ_NY)
+            
+            # Check if market is open (skip in test mode)
+            if not self.testmode and not self.is_market_open():
                 logger.info("Market is closed today. Exiting trading.")
                 break
             
@@ -215,15 +248,25 @@ class MarketBreadthTrader:
                     logger.info("Checking signals and executing trades...")
                     self.check_signals_and_trade()
                     
-                    logger.info("Trading completed for today.")
+                    if self.testmode:
+                        logger.info("Test mode trading completed for the day.")
+                    else:
+                        logger.info("Trading completed for today.")
                     break
                 except Exception as e:
                     logger.error(f"Error during trading: {str(e)}")
                     break
             
-            # Wait for 1 minute
-            logger.info("Waiting for closing time range...")
-            time.sleep(60)
+            if self.testmode:
+                # Advance time by 1 minute in test mode
+                self.test_dt += timedelta(minutes=1)
+                logger.info(f"Test time advanced to: {self.test_dt}")
+                # No actual waiting in test mode
+                continue
+            else:
+                # Wait 1 minute in normal mode
+                logger.info("Waiting for closing time range...")
+                time.sleep(60)
         
         logger.info("Trading session ended.")
     
@@ -233,7 +276,12 @@ class MarketBreadthTrader:
             logger.info("Starting market data analysis")
             
             # Get past data (using yesterday's date for EODHD)
-            today = datetime.now()
+            if self.testmode:
+                today = pd.Timestamp(self.test_date)
+                logger.info(f"Test mode: Using test date {today.strftime('%Y-%m-%d')} as current date")
+            else:
+                today = datetime.now()
+            
             yesterday = (today - timedelta(days=1)).strftime('%Y-%m-%d')
             end_date = today.strftime('%Y-%m-%d')
             start_date = (today - timedelta(days=365)).strftime('%Y-%m-%d')
@@ -258,6 +306,12 @@ class MarketBreadthTrader:
             # Combine historical and today's data
             logger.info("Combining data...")
             all_data = pd.concat([historical_data, today_data])
+            # Remove fully empty rows
+            all_data = all_data.dropna(how='all')
+            # Sort by index (date)
+            all_data = all_data.sort_index()
+            # Remove duplicated indices
+            all_data = all_data[~all_data.index.duplicated(keep='first')]
             logger.info(f"Combined data: {len(all_data.columns)} tickers, {len(all_data)} days")
             
             # Calculate Market Breadth Index
@@ -314,7 +368,11 @@ class MarketBreadthTrader:
         """Get latest stock prices using Alpaca API"""
         try:
             # Get current date (Timestamp type)
-            today = pd.Timestamp(datetime.now().strftime('%Y-%m-%d'))
+            if self.testmode:
+                today = pd.Timestamp(self.test_date)
+                logger.info(f"Test mode: Using test date {today.strftime('%Y-%m-%d')} as current date")
+            else:
+                today = pd.Timestamp(datetime.now().strftime('%Y-%m-%d'))
             
             # Temporarily store price data in dictionary
             price_dict = {}
@@ -339,6 +397,7 @@ class MarketBreadthTrader:
                     if bars and hasattr(bars, 'c'):
                         price_dict[ticker] = bars.c
                         success_count += 1
+                        logger.debug(f"Success: Got latest price for {ticker}: ${bars.c:.2f}")
                     else:
                         logger.warning(f"Failed to get latest price for {ticker} (no valid bar data)")
                         failure_count += 1
@@ -435,6 +494,10 @@ class MarketBreadthTrader:
     def _detect_signals(self):
         """Detect signals"""
         try:
+            # Debug: Print start of signal detection
+            logger.info("Debug: Starting signal detection")
+            logger.info(f"  Current date: {datetime.now().strftime('%Y-%m-%d')}")
+            
             # Initialize signal detection variables
             self.short_ma_bottoms = []
             self.long_ma_bottoms = []
@@ -445,8 +508,19 @@ class MarketBreadthTrader:
             detected_long_ma_bottoms = set()
             detected_peaks = set()
             
+            # Debug: Print initialization status
+            logger.info("Debug: Signal detection initialization")
+            logger.info(f"  Initial detected_short_ma_bottoms: {detected_short_ma_bottoms}")
+            logger.info(f"  Initial short_ma_bottoms: {self.short_ma_bottoms}")
+            logger.info(f"  Initial detected_short_ma_bottoms type: {type(detected_short_ma_bottoms)}")
+            logger.info(f"  Initial detected_short_ma_bottoms size: {len(detected_short_ma_bottoms)}")
+            
             # Get today's date
-            today = pd.Timestamp(datetime.now().strftime('%Y-%m-%d'))
+            if self.testmode:
+                today = pd.Timestamp(self.test_date)
+                logger.info(f"Test mode: Using test date {today.strftime('%Y-%m-%d')} as current date")
+            else:
+                today = pd.Timestamp(datetime.now().strftime('%Y-%m-%d'))
             
             # Calculate start date for signal detection (2 years before today)
             start_date = today - pd.DateOffset(years=2)
@@ -522,6 +596,17 @@ class MarketBreadthTrader:
                                         logger.info(f"  Minimum value: {past_20days_min:.4f}")
                                         logger.info(f"  Data values: {past_20days_data.values}")
                                         
+                                        # Debug: Print bottom detection conditions
+                                        logger.info(f"Debug: Bottom detection conditions for {bottom_date.strftime('%Y-%m-%d')}")
+                                        logger.info(f"  Processing date: {current_date.strftime('%Y-%m-%d')}")
+                                        logger.info(f"  Bottom value: {current_data.iloc[original_idx]:.4f}")
+                                        logger.info(f"  Threshold: {self.threshold:.4f}")
+                                        logger.info(f"  Past 20 days minimum: {past_20days_min:.4f}")
+                                        logger.info(f"  Condition 1 (bottom value < threshold): {current_data.iloc[original_idx] < self.threshold}")
+                                        logger.info(f"  Condition 2 (past 20 days min <= 0.3): {past_20days_min <= 0.3}")
+                                        logger.info(f"  Already detected: {bottom_date in detected_short_ma_bottoms}")
+                                        logger.info(f"  Current detected_short_ma_bottoms: {detected_short_ma_bottoms}")
+                                        
                                         if past_20days_min <= 0.3:  # Check actual value condition
                                             # Add only if bottom not already detected
                                             if bottom_date not in detected_short_ma_bottoms:
@@ -530,9 +615,16 @@ class MarketBreadthTrader:
                                                 signal_date = current_date
                                                 self.short_ma_bottoms.append(signal_date)
                                                 logger.info(f"New {self.short_ma}{self.ma_type.upper()} bottom detected at: {bottom_date.strftime('%Y-%m-%d')}")
+                                                logger.info(f"  Processing date: {current_date.strftime('%Y-%m-%d')}")
                                                 logger.info(f"  Signal date: {signal_date.strftime('%Y-%m-%d')}")
                                                 logger.info(f"  Bottom value: {current_data.iloc[original_idx]:.4f}")
                                                 logger.info(f"  Past 20 days minimum: {past_20days_min:.4f}")
+                                            else:
+                                                logger.info(f"Bottom at {bottom_date.strftime('%Y-%m-%d')} already detected, skipping")
+                                                logger.info(f"  Processing date: {current_date.strftime('%Y-%m-%d')}")
+                                        else:
+                                            logger.info(f"Bottom at {bottom_date.strftime('%Y-%m-%d')} does not meet past 20 days minimum condition")
+                                            logger.info(f"  Processing date: {current_date.strftime('%Y-%m-%d')}")
                                     except KeyError:
                                         logger.warning(f"Date {bottom_date.strftime('%Y-%m-%d')} not found in breadth_index")
                                         continue
@@ -635,7 +727,11 @@ class MarketBreadthTrader:
         logger.info(f"Current price: ${current_price:.2f}")
         
         # Current date
-        current_date = pd.to_datetime(datetime.now().strftime('%Y-%m-%d'))
+        if self.testmode:
+            current_date = pd.Timestamp(self.test_date)
+            logger.info(f"Test mode: Using test date {current_date.strftime('%Y-%m-%d')} as current date")
+        else:
+            current_date = pd.to_datetime(datetime.now().strftime('%Y-%m-%d'))
         
         # Check for signals
         has_short_ma_bottom = current_date in self.short_ma_bottoms and not self.disable_short_ma_entry
@@ -644,9 +740,13 @@ class MarketBreadthTrader:
         
         # Log signal detection status
         logger.info("Signal detection status:")
+        logger.info(f"  Current date: {current_date.strftime('%Y-%m-%d')}")
         logger.info(f"  Short MA bottom signal: {'Detected' if has_short_ma_bottom else 'Not detected'}")
         logger.info(f"  Long MA bottom signal: {'Detected' if has_long_ma_bottom else 'Not detected'}")
         logger.info(f"  Peak signal: {'Detected' if has_peak else 'Not detected'}")
+        logger.info(f"  Short MA bottoms: {[d.strftime('%Y-%m-%d') for d in self.short_ma_bottoms]}")
+        logger.info(f"  Long MA bottoms: {[d.strftime('%Y-%m-%d') for d in self.long_ma_bottoms]}")
+        logger.info(f"  Peaks: {[d.strftime('%Y-%m-%d') for d in self.peaks]}")
         
         # Check if current date matches signal date
         if has_short_ma_bottom:
@@ -766,8 +866,15 @@ def main():
                       help='Exit with half of the position when exit signal is triggered')
     parser.add_argument('--closing_time_minutes', type=int, default=20,
                       help='Minutes before market close to execute trades (default: 20)')
+    parser.add_argument('--testmode', action='store_true',
+                      help='Enable test mode (no actual trading)')
+    parser.add_argument('--test_date', type=str,
+                      help='Test date in YYYY-MM-DD format (required for test mode)')
     
     args = parser.parse_args()
+    
+    if args.testmode and not args.test_date:
+        parser.error("--test_date is required when --testmode is enabled")
     
     trader = MarketBreadthTrader(
         short_ma=args.short_ma,
@@ -787,7 +894,9 @@ def main():
         background_exit_threshold=args.background_exit_threshold,
         use_background_color_signals=args.use_background_color_signals,
         partial_exit=args.partial_exit,
-        closing_time_minutes=args.closing_time_minutes
+        closing_time_minutes=args.closing_time_minutes,
+        testmode=args.testmode,
+        test_date=args.test_date
     )
     
     trader.run()

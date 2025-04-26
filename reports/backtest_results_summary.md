@@ -1,6 +1,6 @@
 # ETF Backtest Results Summary
 
-Date: 2025-04-13 13:00:19
+Date: 2025-04-20 05:13:52
 
 Period: 2001-01-01 to 2024-12-31
 
