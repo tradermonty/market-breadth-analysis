@@ -443,26 +443,15 @@ def calculate_trend_with_hysteresis(ma_series, threshold=0.001):
     return trend
 
 def get_last_trading_day(date):
-    """
-    Get the last trading day from a given date.
-    If the given date is today, it will return today's date.
-    
-    Args:
-        date (datetime): The date to get the last trading day from
-        
-    Returns:
-        str: The last trading day in YYYY-MM-DD format
-    """
-    today = datetime.today()
-    
-    # If the date is today, return today's date
-    if date.date() == today.date():
-        return date.strftime('%Y-%m-%d')
-    
-    # For past dates, calculate the last trading day
+    """Return the previous trading day for the given date."""
+
+    # Start from the previous day
     last_day = date - timedelta(days=1)
+
+    # Move back to the most recent weekday
     while last_day.weekday() >= 5:  # 5 is Saturday, 6 is Sunday
-        last_day = last_day - timedelta(days=1)
+        last_day -= timedelta(days=1)
+
     return last_day.strftime('%Y-%m-%d')
 
 def get_latest_market_date():
