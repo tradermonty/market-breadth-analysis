@@ -19,8 +19,8 @@ S&P500銘柄のマーケットブレッドを分析・可視化するツール�
 - Python 3.8以上
 - 必要なPythonパッケージ（requirements.txtに記載）
 - APIキー（オプション）:
-  - EODHD APIキー（EOD Historical Data — All Worldプラン以上が必要）
-    - 料金詳細: https://eodhd.com/pricing
+  - FMP APIキー（Financial Modeling Prep）
+    - 料金・ドキュメント: https://site.financialmodelingprep.com/developer/docs/
   - 保存データを使用する場合は不要
 
 ## インストール
@@ -39,7 +39,7 @@ pip install -r requirements.txt
 3. 環境変数の設定（オプション - 新規データ取得時のみ必要）:
 `.env`ファイルを作成し、APIキーを設定:
 ```
-EODHD_API_KEY=your_eodhd_api_key
+FMP_API_KEY=your_fmp_api_key
 ```
 または`.env.sample`ファイルを`.env`にコピーして編集:
 ```bash
@@ -83,7 +83,7 @@ python backtest/run_multi_etf_backtest.py
 - `--start_date`: 分析開始日（YYYY-MM-DD形式）
   - デフォルト: 現在から10年前
 - `--short_ma`: 短期移動平均期間（10または20）
-- `--use_saved_data`: EODHDから取得せずに保存済みデータを使用
+- `--use_saved_data`: FMPから取得せずに保存済みデータを使用
 
 #### バックテスト
 - `--start_date`: バックテスト開始日
@@ -114,17 +114,12 @@ python backtest/run_multi_etf_backtest.py
 
 ### データソース
 
-EODHD（End of Day Historical Data）
-- 高品質な株価データを提供
-- APIキー必要
+Financial Modeling Prep (FMP)
+- 米国株・世界株、ETF、ファンダメンタル等を提供
+- 無料 "demo" キーが利用可能（速度・機能制限あり）
+- 上位プランでより高いレートリミット・履歴期間を利用可能
 - S&P500ティッカーリストはWikipediaから取得
-- 必要プラン: EOD Historical Data — All World
-  - 料金: $19.99/月（年間契約で$199.00/年）
-  - 1日あたり100,000回のAPI呼び出し
-  - 1分あたり1,000回のAPIリクエスト
-  - 30年以上の履歴データ
-  - 個人使用向け
-  - 詳細: https://eodhd.com/pricing
+- ドキュメント: https://site.financialmodelingprep.com/developer/docs/
 - 特殊ティッカーシンボルの処理
   - ティッカー内のドット(.)はハイフン(-)に変換
   - 例: BRK.B → BRK-B
@@ -171,8 +166,8 @@ market_breadth_20240315.png
 ## 注意事項
 
 - APIキーは`.env`ファイルに保存し、GitHubにアップロードしないでください
-- EODHDは有料サービスです
-- 商用利用には別途EODHDの商用ライセンスが必要です
+- 一部のFMPエンドポイントは有料プランが必要です
+- 商用利用時はFMPの利用規約を確認してください
 - バックテスト結果は教育目的のみです
 - 過去の実績は将来の結果を保証するものではありません
 

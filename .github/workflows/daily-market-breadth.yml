@@ -43,7 +43,7 @@ jobs:
     
     - name: Run market breadth analysis
       env:
-        EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
+        FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
       run: python market_breadth.py
 
     - name: Create .nojekyll file

@@ -15,6 +15,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import platform
 from matplotlib.patches import Patch
+from fmp_data_fetcher import FMPDataFetcher  # NEW: FMP API client
 
 # Load environment variables
 load_dotenv()
@@ -24,6 +25,9 @@ reports_dir = pathlib.Path('reports')
 reports_dir.mkdir(exist_ok=True)
 data_dir = pathlib.Path('data')
 data_dir.mkdir(exist_ok=True)
+
+# Instantiate global FMP data fetcher (use 'demo' key if environment variable is not set to allow tests).
+fmp_fetcher = FMPDataFetcher(api_key=os.getenv('FMP_API_KEY', 'demo'))
 
 def setup_matplotlib_backend():
     """Set up matplotlib backend based on the operating system"""
@@ -98,307 +102,104 @@ def get_sp500_tickers_from_wikipedia():
         return []
 
 def convert_ticker_symbol(ticker):
-    """Convert special ticker symbols for EODHD API"""
-    # Convert any ticker containing dots to use hyphens instead
-    if '.' in ticker:
-        return ticker.replace('.', '-')
-    return ticker
+    """Return ticker symbol unchanged (no conversion needed for FMP)"""
+    return ticker  # FMP uses the standard ticker format
+
+# NEW: Helper to fetch price series from FMP and return as Series named 'adjusted_close'
+
+def fetch_price_data_fmp(symbol: str, from_date: str, to_date: str) -> pd.Series:
+    """Fetch historical price data for a symbol from FMP and return a Series.
+
+    Parameters
+    ----------
+    symbol : str
+        Ticker symbol (e.g. 'AAPL')
+    from_date : str
+        Start date (YYYY-MM-DD)
+    to_date : str
+        End date (YYYY-MM-DD)
+
+    Returns
+    -------
+    pd.Series
+        Series indexed by date containing the adjusted closing prices.
+    """
+    data = fmp_fetcher.get_historical_price_data(symbol, from_date, to_date)
+    if not data:
+        return pd.Series(dtype="float64")
+
+    df = pd.DataFrame(data)
+    if df.empty or 'date' not in df.columns:
+        return pd.Series(dtype="float64")
+
+    df['date'] = pd.to_datetime(df['date'])
+    df.set_index('date', inplace=True)
+
+    # Prefer adjusted close, then close
+    price_col = None
+    for col in ['adjClose', 'adjusted_close', 'close']:
+        if col in df.columns:
+            price_col = col
+            break
+    if price_col is None:
+        return pd.Series(dtype="float64")
+
+    series = df[price_col].astype(float)
+    series.name = 'adjusted_close'
+    return series
 
 def get_sp500_price_data(start_date, end_date, use_saved_data=False):
-    """Get S&P 500 price data using EODHD or saved data"""
+    """Get S&P 500 price data using FMP or saved data"""
     filename = 'sp500_price_data.csv'
     file_path = data_dir / filename
-    
+
     # Calculate the actual start date (1 year before the specified start date)
-    start_date_dt = pd.to_datetime(start_date)
-    actual_start_date = (start_date_dt - pd.DateOffset(years=1)).strftime('%Y-%m-%d')
-    
-    # Check if file exists and is not empty
+    actual_start_date = (pd.to_datetime(start_date) - pd.DateOffset(years=1)).strftime('%Y-%m-%d')
+
+    # Optionally use cached data if it fully covers the required period
     if use_saved_data and file_path.exists() and file_path.stat().st_size > 0:
-        try:
-            saved_data = load_stock_data(filename)
-            if saved_data is not None and not saved_data.empty:
+        saved_data = load_stock_data(filename)
+        if saved_data is not None and not saved_data.empty:
+            if pd.to_datetime(actual_start_date) >= saved_data.index.min() and pd.to_datetime(end_date) <= saved_data.index.max():
                 return saved_data
-        except Exception as e:
-            print(f"Error loading saved data: {e}")
-    
-    # Try to load local data
-    saved_data = load_stock_data(filename)
-    
-    if saved_data is not None and not saved_data.empty:
-        # Check the date range of saved data
-        saved_start = saved_data.index.min()
-        saved_end = saved_data.index.max()
-        
-        # Verify if the required period is covered by saved data
-        if pd.to_datetime(actual_start_date) >= saved_start and pd.to_datetime(end_date) <= saved_end:
-            return saved_data
-        
-        # Identify missing periods
-        missing_periods = []
-        if pd.to_datetime(actual_start_date) < saved_start:
-            missing_periods.append((actual_start_date, saved_start.strftime('%Y-%m-%d')))
-        if pd.to_datetime(end_date) > saved_end:
-            # Always update if there's any gap
-            missing_periods.append((saved_end.strftime('%Y-%m-%d'), end_date))
-            print(f"Adding missing period from {saved_end.strftime('%Y-%m-%d')} to {end_date}")
-        
-        # Fetch data for missing periods
-        new_data = pd.Series()
-        for period_start, period_end in missing_periods:
-            try:
-                url = f'https://eodhd.com/api/eod/SPY.US'
-                params = {
-                    'from': period_start,
-                    'to': period_end,
-                    'api_token': os.getenv('EODHD_API_KEY'),
-                    'fmt': 'json'
-                }
-                
-                response = session.get(url, params=params)
-                if response.status_code == 200:
-                    period_data = pd.DataFrame(response.json())
-                    if not period_data.empty:
-                        period_data['date'] = pd.to_datetime(period_data['date'])
-                        period_data.set_index('date', inplace=True)
-                        if 'adjusted_close' in period_data.columns:
-                            new_data = pd.concat([new_data, period_data['adjusted_close']])
-            except Exception as e:
-                print(f"Error fetching data for period {period_start} to {period_end}: {e}")
-        
-        # Combine new data with saved data
-        if not new_data.empty:
-            combined_data = pd.concat([saved_data, new_data])
-            combined_data = combined_data[~combined_data.index.duplicated(keep='last')]
-            combined_data = combined_data.sort_index()
-            # Save as a single column with proper name
-            combined_data.name = 'adjusted_close'
-            save_stock_data(combined_data, filename)
-            return combined_data
-        
-        return saved_data
-    
-    # Fetch new data if no saved data exists
-    try:
-        url = f'https://eodhd.com/api/eod/SPY.US'
-        params = {
-            'from': actual_start_date,
-            'to': end_date,
-            'api_token': os.getenv('EODHD_API_KEY'),
-            'fmt': 'json'
-        }
-        
-        response = session.get(url, params=params)
-        if response.status_code == 200:
-            data = pd.DataFrame(response.json())
-            if not data.empty:
-                data['date'] = pd.to_datetime(data['date'])
-                data.set_index('date', inplace=True)
-                
-                if 'adjusted_close' in data.columns:
-                    # Save as a single column with proper name
-                    price_data = data['adjusted_close']
-                    price_data.name = 'adjusted_close'
-                    save_stock_data(price_data, filename)
-                    return price_data
-    except Exception as e:
-        print(f"Error fetching S&P500 data: {e}")
-    
-    return pd.Series()
+
+    # Fetch fresh data from FMP
+    price_series = fetch_price_data_fmp('SPY', actual_start_date, end_date)
+    if not price_series.empty:
+        save_stock_data(price_series, filename)
+    return price_series
 
 def get_multiple_stock_data(tickers, start_date, end_date, use_saved_data=False):
-    """Get data for multiple stocks using EODHD or saved data"""
+    """Get data for multiple stocks using FMP or saved data"""
     filename = 'sp500_all_stocks.csv'
-    file_path = data_dir / filename
-    
-    # Calculate the actual start date (1 year before the specified start date)
-    start_date_dt = pd.to_datetime(start_date)
-    actual_start_date = (start_date_dt - pd.DateOffset(years=1)).strftime('%Y-%m-%d')
-    
-    # Print initial parameters
-    print(f"\nget_multiple_stock_data parameters:")
-    print(f"Original start date: {start_date}")
-    print(f"Actual start date (1 year before): {actual_start_date}")
-    print(f"End date: {end_date}")
-    print(f"Number of tickers: {len(tickers)}")
-    print(f"Sample tickers: {tickers[:5]}")
-    
-    # Try to load local data
-    saved_data = load_stock_data(filename)
-    
-    if saved_data is not None and not saved_data.empty:
-        print(f"\nLoaded saved data:")
-        print(f"Shape: {saved_data.shape}")
-        print(f"Date range: {saved_data.index.min()} to {saved_data.index.max()}")
-        print(f"Sample columns: {list(saved_data.columns[:5])}")
-        
-        # Check the date range of saved data
-        saved_start = saved_data.index.min()
-        saved_end = saved_data.index.max()
-        
-        # Convert dates to datetime for comparison
-        start_date_dt = pd.to_datetime(actual_start_date)
-        end_date_dt = pd.to_datetime(end_date)
-        
-        # Verify if the required period is covered by saved data
-        if start_date_dt >= saved_start and end_date_dt <= saved_end:
-            return saved_data
-        
-        # Identify missing periods
-        missing_periods = []
-        if start_date_dt < saved_start:
-            missing_periods.append((actual_start_date, saved_start.strftime('%Y-%m-%d')))
-        if end_date_dt > saved_end:
-            # Always update if there's any gap
-            missing_periods.append((saved_end.strftime('%Y-%m-%d'), end_date))
-            print(f"Adding missing period from {saved_end.strftime('%Y-%m-%d')} to {end_date}")
-        
-        if not missing_periods:
-            return saved_data
-            
-        # Fetch data for missing periods
-        new_data_list = []
-        print("Fetching missing stock price data...")
-        
-        # Get list of existing tickers in saved data
-        existing_tickers = saved_data.columns.tolist()
-        print(f"\nExisting tickers in saved data: {len(existing_tickers)}")
-        print(f"Sample of existing tickers: {existing_tickers[:5]}")
-        
-        # Dictionary to temporarily store data for each ticker
-        ticker_data_dict = {}
-        
-        for ticker in tqdm(tickers, desc="Stock data retrieval progress"):
-            try:
-                eodhd_ticker = convert_ticker_symbol(ticker)
-                
-                for period_start, period_end in missing_periods:
-                    url = f'https://eodhd.com/api/eod/{eodhd_ticker}.US'
-                    params = {
-                        'from': period_start,
-                        'to': period_end,
-                        'api_token': os.getenv('EODHD_API_KEY'),
-                        'fmt': 'json'
-                    }
-                    
-                    response = session.get(url, params=params)
-                    if response.status_code == 200 and response.text.strip():
-                        try:
-                            data = pd.DataFrame(response.json())
-                            if not data.empty:
-                                data['date'] = pd.to_datetime(data['date'])
-                                data.set_index('date', inplace=True)
-                                
-                                if 'adjusted_close' in data.columns and len(data) > 0:
-                                    # Remove any duplicate indices before adding to list
-                                    data = data[~data.index.duplicated(keep='last')]
-                                    series = data['adjusted_close']
-                                    series.name = ticker  # Use ticker as column name
-                                    
-                                    # If existing data exists, combine it; otherwise create new data
-                                    if ticker in ticker_data_dict:
-                                        ticker_data_dict[ticker] = pd.concat([ticker_data_dict[ticker], series])
-                                        # Remove duplicates and keep the latest data
-                                        ticker_data_dict[ticker] = ticker_data_dict[ticker][~ticker_data_dict[ticker].index.duplicated(keep='last')]
-                                    else:
-                                        ticker_data_dict[ticker] = series
-                        except ValueError as e:
-                            print(f"\nError parsing data for {ticker}: {str(e)}")
-            except Exception as e:
-                print(f"\nError processing {ticker}: {str(e)}")
-                continue
-        
-        # Create a list of data series from the dictionary
-        new_data_list = list(ticker_data_dict.values())
-        
-        # Combine new data with saved data
-        if new_data_list:
-            print(f"\nNumber of new data series: {len(new_data_list)}")
-            new_data = pd.concat(new_data_list, axis=1)
-            print(f"Shape of new_data: {new_data.shape}")
-            print(f"Sample of new_data columns: {new_data.columns[:5]}")
-            
-            # Remove any duplicate indices from saved_data
-            saved_data = saved_data[~saved_data.index.duplicated(keep='last')]
-            print(f"Shape of saved_data: {saved_data.shape}")
-            
-            # Get unique tickers
-            all_tickers = list(set(saved_data.columns) | set(new_data.columns))
-            print(f"Total unique tickers: {len(all_tickers)}")
-            
-            # Initialize the combined DataFrame with NaN values
-            combined_data = pd.DataFrame(index=sorted(set(saved_data.index) | set(new_data.index)))
-            
-            # Fill data from both sources
-            for ticker in all_tickers:
-                if ticker in saved_data.columns:
-                    combined_data.loc[saved_data.index, ticker] = saved_data[ticker]
-                if ticker in new_data.columns:
-                    combined_data.loc[new_data.index, ticker] = new_data[ticker]
-            
-            # Sort index and remove any duplicates
-            combined_data = combined_data.sort_index()
-            combined_data = combined_data[~combined_data.index.duplicated(keep='last')]
-            
-            print(f"Combined data shape: {combined_data.shape}")
-            save_stock_data(combined_data, filename)
-            return combined_data
-        
-        return saved_data
-    
-    # Fetch new data if no saved data exists
-    all_data = []
-    print("Fetching stock price data...")
-    
+
+    # Attempt to load cached data if requested
+    if use_saved_data:
+        saved_data = load_stock_data(filename)
+        if saved_data is not None and not saved_data.empty:
+            if pd.to_datetime(start_date) >= saved_data.index.min() and pd.to_datetime(end_date) <= saved_data.index.max():
+                return saved_data
+
+    actual_start_date = (pd.to_datetime(start_date) - pd.DateOffset(years=1)).strftime('%Y-%m-%d')
+
+    all_series = []
+    print("Fetching stock price data from FMP ...")
     for ticker in tqdm(tickers, desc="Stock data retrieval progress"):
         try:
-            eodhd_ticker = convert_ticker_symbol(ticker)
-            
-            url = f'https://eodhd.com/api/eod/{eodhd_ticker}.US'
-            params = {
-                'from': actual_start_date,
-                'to': end_date,
-                'api_token': os.getenv('EODHD_API_KEY'),
-                'fmt': 'json'
-            }
-            
-            response = session.get(url, params=params)
-            if response.status_code == 200 and response.text.strip():
-                try:
-                    data = pd.DataFrame(response.json())
-                    if not data.empty:
-                        data['date'] = pd.to_datetime(data['date'])
-                        data.set_index('date', inplace=True)
-                        
-                        if 'adjusted_close' in data.columns and len(data) > 200:
-                            # Remove any duplicate indices before adding to list
-                            data = data[~data.index.duplicated(keep='last')]
-                            series = data['adjusted_close']
-                            series.name = ticker  # Use ticker as column name
-                            all_data.append(series)
-                            print(f"\nSuccessfully processed {ticker}: {len(data)} days of data")
-                        else:
-                            print(f"\nSkipping {ticker}: Insufficient data")
-                            print(f"  - Data length: {len(data)} days")
-                            print(f"  - Date range: {data.index.min()} to {data.index.max()}")
-                            print(f"  - Has adjusted_close: {'adjusted_close' in data.columns}")
-                except ValueError as e:
-                    print(f"\nError parsing data for {ticker}: {str(e)}")
-            else:
-                print(f"\nSkipping {ticker}: No data available")
+            series = fetch_price_data_fmp(ticker, actual_start_date, end_date)
+            if len(series) > 200:  # Require reasonable history length
+                series.name = ticker
+                all_series.append(series)
         except Exception as e:
-            print(f"\nError processing {ticker}: {str(e)}")
+            print(f"Error processing {ticker}: {e}")
             continue
-    
-    if all_data:
-        print(f"\nRetrieved data for {len(all_data)} stocks.")
-        combined_data = pd.concat(all_data, axis=1)
-        # Remove any duplicate indices
-        combined_data = combined_data[~combined_data.index.duplicated(keep='last')]
-        combined_data = combined_data.sort_index()
+
+    if all_series:
+        combined_data = pd.concat(all_series, axis=1)
+        combined_data = combined_data[~combined_data.index.duplicated(keep='last')].sort_index()
         save_stock_data(combined_data, filename)
         return combined_data
-    
+
     return pd.DataFrame()
 
 # Calculate whether each stock is above the specified moving average
@@ -455,74 +256,28 @@ def get_last_trading_day(date):
     return last_day.strftime('%Y-%m-%d')
 
 def get_latest_market_date():
-    """Get the latest available market date"""
+    """Get the latest available market date using FMP data"""
     try:
-        # Use SPY as a reference to get the latest market date
-        url = f'https://eodhd.com/api/eod/SPY.US'
-        params = {
-            'api_token': os.getenv('EODHD_API_KEY'),
-            'fmt': 'json',
-            'limit': 1
-        }
-        
-        # Execute API request
-        response = session.get(url, params=params)
-        
-        # Check response status
-        if response.status_code != 200:
-            print(f"Warning: API returned status code {response.status_code}")
-            raise ValueError(f"API request failed with status code {response.status_code}")
-        
-        # Check response content
-        if not response.text.strip():
-            print("Warning: Empty response received from API")
-            raise ValueError("Empty response from API")
-        
-        # Parse JSON data
-        try:
-            json_data = response.json()
-        except ValueError as e:
-            print(f"Warning: Invalid JSON response: {e}")
-            raise
-        
-        # Create and validate dataframe
-        data = pd.DataFrame(json_data)
-        if data.empty:
-            print("Warning: Empty data returned from API")
-            raise ValueError("Empty data received from API")
-        
-        # Check for date column existence
-        if 'date' not in data.columns:
-            print("Warning: 'date' column not found in API response")
-            raise ValueError("Missing 'date' column in API response")
-        
-        # Convert and validate date
-        try:
-            latest_date = pd.to_datetime(data['date'].iloc[0])
-        except (ValueError, TypeError) as e:
-            print(f"Warning: Invalid date format: {e}")
-            raise
-        
-        # Validate date
-        today = datetime.today()
-        
-        # If the date is today, use today's date
-        if latest_date.date() == today.date():
-            return today.strftime('%Y-%m-%d')
-        
-        # If date is too far in the past
-        if (today - latest_date).days > 3650:
-            print("Warning: API returned a date too far in the past")
-            return today.strftime('%Y-%m-%d')
-        
+        today_dt = datetime.today()
+        start_lookup = (today_dt - timedelta(days=7)).strftime('%Y-%m-%d')
+        end_lookup = today_dt.strftime('%Y-%m-%d')
+        data = fmp_fetcher.get_historical_price_data('SPY', start_lookup, end_lookup)
+        if not data:
+            raise ValueError('No data retrieved from FMP')
+
+        df = pd.DataFrame(data)
+        if df.empty or 'date' not in df.columns:
+            raise ValueError('Invalid data format from FMP')
+
+        latest_date = pd.to_datetime(df['date'].iloc[0])  # FMP returns latest first
+
         # Adjust for weekends
-        if latest_date.weekday() >= 5:  # 5 is Saturday, 6 is Sunday
-            latest_date = get_last_trading_day(latest_date)
-        
+        if latest_date.weekday() >= 5:
+            latest_date = pd.to_datetime(get_last_trading_day(latest_date))
+
         return latest_date.strftime('%Y-%m-%d')
-        
-    except (ValueError, TypeError, requests.exceptions.RequestException) as e:
-        print(f"Error getting latest market date: {e}")
+    except Exception as e:
+        print(f"Error getting latest market date from FMP: {e}")
         return datetime.today().strftime('%Y-%m-%d')
 
 def plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, short_ma_period=10, start_date=None, end_date=None):
@@ -675,69 +430,25 @@ def plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, short_ma_period=
 
 def get_stock_price_data(symbol, start_date, end_date, use_saved_data=False):
     """
-    Get stock price data for a given symbol
-    
-    Parameters:
-    -----------
-    symbol : str
-        The stock symbol (e.g., 'AAPL', 'MSFT', etc.)
-    start_date : str
-        Start date in 'YYYY-MM-DD' format
-    end_date : str
-        End date in 'YYYY-MM-DD' format
-    use_saved_data : bool, optional
-        Whether to use saved data instead of fetching from EODHD (default: False)
-        
-    Returns:
-    --------
-    pandas.Series
-        Stock price data (adjusted_close)
+    Get stock price data for a given symbol using FMP
     """
     # Actual start date (get data from 2 years before the specified start date)
     actual_start_date = (pd.to_datetime(start_date) - pd.DateOffset(years=2)).strftime('%Y-%m-%d')
-    
-    # Set filename
     filename = f'{symbol}_price_data.csv'
-    
-    # If using saved data
+
+    # Use cached data if fully covers period
     if use_saved_data:
         saved_data = load_stock_data(filename)
         if saved_data is not None and not saved_data.empty:
-            # Check the date range
-            if (pd.to_datetime(actual_start_date) >= saved_data.index.min() and 
-                pd.to_datetime(end_date) <= saved_data.index.max()):
-                # Extract data for the calculation period
-                mask = (saved_data.index >= pd.to_datetime(actual_start_date)) & \
-                      (saved_data.index <= pd.to_datetime(end_date))
+            if pd.to_datetime(actual_start_date) >= saved_data.index.min() and pd.to_datetime(end_date) <= saved_data.index.max():
+                mask = (saved_data.index >= pd.to_datetime(actual_start_date)) & (saved_data.index <= pd.to_datetime(end_date))
                 return saved_data.loc[mask]
-    
-    # Fetch new data
-    try:
-        url = f'https://eodhd.com/api/eod/{symbol}.US'
-        params = {
-            'from': actual_start_date,
-            'to': end_date,
-            'api_token': os.getenv('EODHD_API_KEY'),
-            'fmt': 'json'
-        }
-        
-        response = session.get(url, params=params)
-        if response.status_code == 200:
-            data = pd.DataFrame(response.json())
-            if not data.empty:
-                data['date'] = pd.to_datetime(data['date'])
-                data.set_index('date', inplace=True)
-                
-                if 'adjusted_close' in data.columns:
-                    # Save as a single column with appropriate name
-                    price_data = data['adjusted_close']
-                    price_data.name = 'adjusted_close'
-                    save_stock_data(price_data, filename)
-                    return price_data
-    except Exception as e:
-        print(f"Error fetching {symbol} data: {e}")
-    
-    return pd.Series()
+
+    # Fetch data from FMP
+    series = fetch_price_data_fmp(symbol, actual_start_date, end_date)
+    if not series.empty:
+        save_stock_data(series, filename)
+    return series
 
 def main():
     parser = argparse.ArgumentParser(description='Market Breadth Analysis')
@@ -745,7 +456,7 @@ def main():
     parser.add_argument('--start_date', type=str, help='Start date (YYYY-MM-DD format)')
     parser.add_argument('--end_date', type=str, help='End date (YYYY-MM-DD format). If not specified, today\'s date will be used.')
     parser.add_argument('--short_ma', type=int, default=8, choices=[5, 8, 10, 20], help='Short-term moving average period (5, 8, 10, or 20)')
-    parser.add_argument('--use_saved_data', action='store_true', help='Use saved data instead of fetching from EODHD')
+    parser.add_argument('--use_saved_data', action='store_true', help='Use saved data instead of fetching from FMP')
 
     # Set up command line arguments
     args = parser.parse_args()
@@ -754,7 +465,7 @@ def main():
         print("Debug mode enabled")
         print(f"Current working directory: {os.getcwd()}")
         print(f"Environment variables:")
-        print(f"EODHD_API_KEY set: {'EODHD_API_KEY' in os.environ}")
+        print(f"FMP_API_KEY set: {'FMP_API_KEY' in os.environ}")
         print(f"Available directories:")
         print(f"reports/ exists: {os.path.exists('reports')}")
         print(f"data/ exists: {os.path.exists('data')}")

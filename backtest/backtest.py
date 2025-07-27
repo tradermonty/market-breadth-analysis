@@ -1140,7 +1140,7 @@ def main():
                       help='Moving average type (default: ema)')
     parser.add_argument('--symbol', type=str, default='SSO',
                       help='Stock symbol (default: SSO)')
-    parser.add_argument('--stop_loss_pct', type=float, default=0.08,
+    parser.add_argument('--stop_loss_pct', type=float, default=0.1,
                       help='Stop loss percentage (default: 8%)')
     parser.add_argument('--disable_short_ma_entry', action='store_true',
                       help='Disable short-term moving average entry')

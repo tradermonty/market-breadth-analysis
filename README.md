@@ -19,8 +19,8 @@ A tool for analyzing and visualizing the market breadth of S&P500 stocks.
 - Python 3.8 or higher
 - Required Python packages (listed in requirements.txt)
 - API Key (Optional):
-  - EODHD API Key (EOD Historical Data — All World plan or higher required)
-    - Pricing details: https://eodhd.com/pricing
+  - FMP API Key (Financial Modeling Prep)
+    - Pricing & docs: https://site.financialmodelingprep.com/developer/docs/
   - Not required if using saved data
 
 ## Installation
@@ -39,7 +39,7 @@ pip install -r requirements.txt
 3. Set up environment variables (Optional - only needed for fetching new data):
 Create a `.env` file and set your API key:
 ```
-EODHD_API_KEY=your_eodhd_api_key
+FMP_API_KEY=your_fmp_api_key
 ```
 Or copy the `.env.sample` file to `.env` and edit it:
 ```bash
@@ -83,7 +83,7 @@ python backtest/run_multi_etf_backtest.py
 - `--start_date`: Start date for analysis (YYYY-MM-DD format)
   - Default: 10 years ago from today
 - `--short_ma`: Short-term moving average period (10 or 20)
-- `--use_saved_data`: Use previously saved data instead of fetching from EODHD
+- `--use_saved_data`: Use previously saved data instead of fetching from FMP
 
 #### Backtesting
 - `--start_date`: Start date for backtesting
@@ -114,20 +114,12 @@ Note: To update the saved data with fresh market data, run without `--use_saved_
 
 ### Data Source
 
-EODHD (End of Day Historical Data)
-- Provides high-quality stock price data
-- Requires API key
-- S&P500 ticker list is fetched from Wikipedia
-- Required plan: EOD Historical Data — All World
-  - Price: $19.99/month ($199.00/year with annual contract)
-  - 100,000 API calls per day
-  - 1,000 API requests per minute
-  - 30+ years of historical data
-  - For personal use
-  - Details: https://eodhd.com/pricing
-- Special ticker symbol handling
-  - Dots (.) in tickers are converted to hyphens (-)
-  - Examples: BRK.B → BRK-B
+Financial Modeling Prep (FMP)
+- Provides US & global stock, ETF, and fundamental data
+- Free "demo" key available (limited speed / features)
+- Higher-tier plans unlock higher rate limits & historical coverage
+- S&P 500 ticker list is fetched from Wikipedia
+- Documentation: https://site.financialmodelingprep.com/developer/docs/
 
 ## Output
 
@@ -171,8 +163,8 @@ In the sample graph above:
 ## Notes
 
 - Keep your API key in the `.env` file and do not upload it to GitHub
-- EODHD is a paid service
-- Commercial use requires a separate EODHD commercial license
+- Some FMP endpoints require a paid plan
+- Check FMP terms for commercial usage
 - Backtesting results are for educational purposes only
 - Past performance does not guarantee future results
 
