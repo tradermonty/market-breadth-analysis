@@ -280,8 +280,8 @@ def get_latest_market_date():
         print(f"Error getting latest market date from FMP: {e}")
         return datetime.today().strftime('%Y-%m-%d')
 
-def plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, short_ma_period=10, start_date=None, end_date=None):
-    """Visualize Breadth Index and S&P 500 price"""
+def extract_chart_data(above_ma_200, sp500_data, short_ma_period=10, start_date=None, end_date=None):
+    """Extract chart data for CSV export"""
     # Ensure both datasets have the same date range
     common_dates = above_ma_200.index.intersection(sp500_data.index)
     if len(common_dates) == 0:
@@ -323,6 +323,38 @@ def plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, short_ma_period=
     # Calculate average values for peaks and troughs
     peaks_avg = breadth_ma_200.iloc[peaks].mean()
     troughs_avg_below_04 = below_04.iloc[troughs_below_04].mean()
+    
+    # Return all calculated data
+    return {
+        'breadth_index_200': breadth_index_200,
+        'breadth_ma_200': breadth_ma_200,
+        'breadth_ma_short': breadth_ma_short,
+        'breadth_ma_200_trend': breadth_ma_200_trend,
+        'sp500_data': sp500_data,
+        'peaks': peaks,
+        'troughs': troughs,
+        'troughs_below_04': troughs_below_04,
+        'below_04': below_04,
+        'peaks_avg': peaks_avg,
+        'troughs_avg_below_04': troughs_avg_below_04
+    }
+
+def plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, short_ma_period=10, start_date=None, end_date=None):
+    """Visualize Breadth Index and S&P 500 price"""
+    # Extract chart data
+    chart_data = extract_chart_data(above_ma_200, sp500_data, short_ma_period, start_date, end_date)
+    
+    breadth_index_200 = chart_data['breadth_index_200']
+    breadth_ma_200 = chart_data['breadth_ma_200']
+    breadth_ma_short = chart_data['breadth_ma_short']
+    breadth_ma_200_trend = chart_data['breadth_ma_200_trend']
+    sp500_data = chart_data['sp500_data']
+    peaks = chart_data['peaks']
+    troughs = chart_data['troughs']
+    troughs_below_04 = chart_data['troughs_below_04']
+    below_04 = chart_data['below_04']
+    peaks_avg = chart_data['peaks_avg']
+    troughs_avg_below_04 = chart_data['troughs_avg_below_04']
 
     # Create plot with larger figure size and adjusted font sizes
     plt.rcParams['font.size'] = 12  # Increase base font size
@@ -450,6 +482,89 @@ def get_stock_price_data(symbol, start_date, end_date, use_saved_data=False):
         save_stock_data(series, filename)
     return series
 
+def export_chart_data_to_csv(chart_data, short_ma_period, filename=None):
+    """Export chart data to CSV file"""
+    if filename is None:
+        current_date = datetime.now().strftime('%Y%m%d')
+        filename = f'market_breadth_data_{current_date}_ma{short_ma_period}.csv'
+    
+    csv_path = reports_dir / filename
+    
+    # Create main DataFrame with time series data
+    df = pd.DataFrame(index=chart_data['breadth_index_200'].index)
+    df['Date'] = df.index
+    df['S&P500_Price'] = chart_data['sp500_data']
+    df['Breadth_Index_Raw'] = chart_data['breadth_index_200']
+    df['Breadth_Index_200MA'] = chart_data['breadth_ma_200']
+    df[f'Breadth_Index_{short_ma_period}MA'] = chart_data['breadth_ma_short']
+    df['Breadth_200MA_Trend'] = chart_data['breadth_ma_200_trend']
+    
+    # Add peak and trough markers
+    df['Is_Peak'] = False
+    df['Is_Trough'] = False
+    df[f'Is_Trough_{short_ma_period}MA_Below_04'] = False
+    
+    if len(chart_data['peaks']) > 0:
+        df.iloc[chart_data['peaks'], df.columns.get_loc('Is_Peak')] = True
+    
+    if len(chart_data['troughs']) > 0:
+        df.iloc[chart_data['troughs'], df.columns.get_loc('Is_Trough')] = True
+    
+    if len(chart_data['troughs_below_04']) > 0:
+        below_04_indices = chart_data['below_04'].index
+        for trough_idx in chart_data['troughs_below_04']:
+            trough_date = below_04_indices[trough_idx]
+            if trough_date in df.index:
+                df.loc[trough_date, f'Is_Trough_{short_ma_period}MA_Below_04'] = True
+    
+    # Add bearish signal indicator
+    df['Bearish_Signal'] = ((chart_data['breadth_ma_200_trend'] == -1) & 
+                           (chart_data['breadth_ma_short'] < chart_data['breadth_ma_200']))
+    
+    # Reorder columns
+    column_order = [
+        'Date', 'S&P500_Price', 'Breadth_Index_Raw', 'Breadth_Index_200MA', 
+        f'Breadth_Index_{short_ma_period}MA', 'Breadth_200MA_Trend', 'Bearish_Signal',
+        'Is_Peak', 'Is_Trough', f'Is_Trough_{short_ma_period}MA_Below_04'
+    ]
+    df = df[column_order]
+    
+    # Save to CSV
+    df.to_csv(csv_path, index=False)
+    print(f"Chart data exported to {csv_path}")
+    
+    # Create summary data
+    summary_data = {
+        'Metric': [
+            f'Average Peaks (200MA)',
+            f'Average Troughs ({short_ma_period}MA < 0.4)',
+            'Total Peaks Count',
+            'Total Troughs Count',
+            f'Total Troughs ({short_ma_period}MA < 0.4) Count',
+            'Analysis Period Start',
+            'Analysis Period End',
+            'Total Trading Days'
+        ],
+        'Value': [
+            f"{chart_data['peaks_avg']:.3f}",
+            f"{chart_data['troughs_avg_below_04']:.3f}",
+            len(chart_data['peaks']),
+            len(chart_data['troughs']),
+            len(chart_data['troughs_below_04']),
+            chart_data['breadth_index_200'].index.min().strftime('%Y-%m-%d'),
+            chart_data['breadth_index_200'].index.max().strftime('%Y-%m-%d'),
+            len(chart_data['breadth_index_200'])
+        ]
+    }
+    
+    summary_df = pd.DataFrame(summary_data)
+    summary_filename = f'market_breadth_summary_{datetime.now().strftime("%Y%m%d")}_ma{short_ma_period}.csv'
+    summary_path = reports_dir / summary_filename
+    summary_df.to_csv(summary_path, index=False)
+    print(f"Summary data exported to {summary_path}")
+    
+    return csv_path, summary_path
+
 def main():
     parser = argparse.ArgumentParser(description='Market Breadth Analysis')
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
@@ -457,6 +572,7 @@ def main():
     parser.add_argument('--end_date', type=str, help='End date (YYYY-MM-DD format). If not specified, today\'s date will be used.')
     parser.add_argument('--short_ma', type=int, default=8, choices=[5, 8, 10, 20], help='Short-term moving average period (5, 8, 10, or 20)')
     parser.add_argument('--use_saved_data', action='store_true', help='Use saved data instead of fetching from FMP')
+    parser.add_argument('--export_csv', action='store_true', help='Export chart data to CSV files')
 
     # Set up command line arguments
     args = parser.parse_args()
@@ -541,6 +657,11 @@ def main():
 
             # Visualize Breadth Index and S&P 500 price with specified date range
             plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, args.short_ma, start_date, end_date)
+            
+            # Export to CSV if requested
+            if args.export_csv:
+                chart_data = extract_chart_data(above_ma_200, sp500_data, args.short_ma, start_date, end_date)
+                export_chart_data_to_csv(chart_data, args.short_ma)
         else:
             print("Error: Ticker list could not be retrieved.")
     except ValueError as e:
