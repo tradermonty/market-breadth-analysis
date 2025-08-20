@@ -32,7 +32,7 @@ class FMPDataFetcher:
         if not self.api_key:
             raise ValueError("FMP API key is required. Set FMP_API_KEY environment variable.")
         
-        self.base_url = "https://financialmodelingprep.com/stable"
+        self.base_url = "https://financialmodelingprep.com/api/v3"
         self.alt_base_url = "https://financialmodelingprep.com/api/v3"
         self.session = requests.Session()
         
@@ -234,7 +234,7 @@ class FMPDataFetcher:
         # 開始日が制限日以降でも、一部が制限範囲に入る場合の警告
         if start_dt < datetime(2020, 9, 1):
             logger.warning(f"Warning: FMP data coverage may be limited for dates close to August 2020. "
-                         f"For comprehensive historical analysis, consider using EODHD data source.")
+                         f"For comprehensive historical analysis, consider upgrading to FMP Premium plan.")
         
         # 期間が90日を超える場合は分割
         max_days = 30  # 30日ごとに分割（安全マージン）
@@ -420,36 +420,17 @@ class FMPDataFetcher:
         """
         logger.debug(f"Fetching company profile for {symbol}")
         
-        # Try different endpoints - profile data is only available on v3 API
-        endpoints_to_try = [
-            ('v3', f'profile/{symbol}'),      # v3 endpoint (correct one)
-            ('stable', f'profile/{symbol}'),  # stable endpoint (backup)
-        ]
+        # Profile data uses v3 API only (removed deprecated stable endpoint)
+        endpoint = f'profile/{symbol}'
+        logger.debug(f"Fetching profile using v3 endpoint: {endpoint}")
         
-        data = None
-        for api_version, endpoint in endpoints_to_try:
-            base_url = self.base_url if api_version == 'stable' else self.alt_base_url
-            logger.debug(f"Trying {api_version} endpoint for profile: {endpoint}")
-            
-            # Temporarily override base URL for this request
-            original_base_url = self.base_url
-            self.base_url = base_url
-            
-            data = self._make_request(endpoint)
-            
-            # Restore original base URL
-            self.base_url = original_base_url
-            
-            if data is not None:
-                logger.debug(f"Successfully fetched profile using: {api_version}/{endpoint}")
-                break
-            else:
-                logger.debug(f"Profile endpoint failed: {api_version}/{endpoint}")
+        data = self._make_request(endpoint)
         
         if data and isinstance(data, list) and len(data) > 0:
+            logger.debug(f"Successfully fetched profile using v3 endpoint")
             return data[0]
         
-        logger.warning(f"Failed to fetch company profile for {symbol} using all available endpoints")
+        logger.warning(f"Failed to fetch company profile for {symbol}")
         return None
     
     def process_earnings_data(self, earnings_data: List[Dict]) -> pd.DataFrame:
@@ -562,15 +543,10 @@ class FMPDataFetcher:
         """
         logger.debug(f"Fetching historical price data for {symbol} from {from_date} to {to_date}")
         
-        # Try different endpoint formats and base URLs for FMP
+        # Try different endpoint formats for FMP API v3 (removed deprecated /stable/ endpoints)
         endpoints_to_try = [
-            # Stable API endpoints
-            ('stable', f'historical-price-full/{symbol}'),
-            ('stable', f'historical-chart/1day/{symbol}'),
-            ('stable', f'historical/{symbol}'),
-            # API v3 endpoints
+            # API v3 endpoints only
             ('v3', f'historical-price-full/{symbol}'),
-            ('v3', f'historical-chart/1day/{symbol}'),
             ('v3', f'historical-daily-prices/{symbol}'),
         ]
         
@@ -583,18 +559,12 @@ class FMPDataFetcher:
         successful_endpoint = None
         
         for api_version, endpoint in endpoints_to_try:
-            base_url = self.base_url if api_version == 'stable' else self.alt_base_url
+            # All endpoints now use v3 API
+            base_url = self.base_url
             logger.debug(f"Trying {api_version} endpoint: {endpoint}")
-            
-            # Temporarily override base URL for this request
-            original_base_url = self.base_url
-            self.base_url = base_url
             
             # 最大パフォーマンスで実行
             data = self._make_request(endpoint, params, max_retries=3)
-            
-            # Restore original base URL
-            self.base_url = original_base_url
             
             if data is not None:
                 successful_endpoint = f"{api_version}/{endpoint}"

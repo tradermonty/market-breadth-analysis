@@ -275,7 +275,7 @@ class MarketBreadthTrader:
         try:
             logger.info("Starting market data analysis")
             
-            # Get past data (using yesterday's date for EODHD)
+            # Get past data (using yesterday's date for FMP)
             if self.testmode:
                 today = pd.Timestamp(self.test_date)
                 logger.info(f"Test mode: Using test date {today.strftime('%Y-%m-%d')} as current date")
@@ -293,8 +293,8 @@ class MarketBreadthTrader:
             sp500_tickers = get_sp500_tickers_from_wikipedia()
             logger.info(f"Got S&P500 ticker list: {len(sp500_tickers)} tickers")
             
-            # Get historical data from EODHD - using data up to yesterday
-            logger.info("Getting historical data from EODHD...")
+            # Get historical data from FMP - using data up to yesterday
+            logger.info("Getting historical data from FMP...")
             historical_data = get_multiple_stock_data(sp500_tickers, start_date, yesterday, use_saved_data=True)
             logger.info(f"Got historical data: {len(historical_data.columns)} tickers, {len(historical_data)} days")
             
