@@ -32,10 +32,14 @@ fmp_fetcher = FMPDataFetcher(api_key=os.getenv('FMP_API_KEY', 'demo'))
 def setup_matplotlib_backend():
     """Set up matplotlib backend based on the operating system"""
     system = platform.system().lower()
-    if system == 'darwin':  # macOS
-        matplotlib.use('TkAgg')  # Use TkAgg backend for macOS
-    elif system == 'windows':
-        matplotlib.use('TkAgg')  # Use TkAgg backend for Windows
+
+    # Try TkAgg first for macOS/Windows, fall back to Agg if not available
+    if system in ['darwin', 'windows']:
+        try:
+            matplotlib.use('TkAgg')
+        except (ImportError, ModuleNotFoundError):
+            print("TkAgg backend not available, using Agg backend")
+            matplotlib.use('Agg')
     else:  # Linux and others
         matplotlib.use('Agg')  # Use Agg backend for other systems
 
@@ -90,15 +94,18 @@ def load_stock_data(filename):
         print(f"File not found: {filename}")
         return None
 
-def get_sp500_tickers_from_wikipedia():
-    """Get S&P500 ticker list from Wikipedia"""
+def get_sp500_tickers_from_fmp():
+    """Get S&P500 ticker list from FMP API"""
     try:
-        url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-        tables = pd.read_html(url)
-        df = tables[0]
-        return df['Symbol'].tolist()
+        tickers = fmp_fetcher.get_sp500_constituents()
+        if tickers:
+            print(f"Successfully fetched {len(tickers)} S&P500 tickers from FMP")
+            return tickers
+        else:
+            print("Error: No tickers returned from FMP API")
+            return []
     except Exception as e:
-        print(f"Error fetching S&P500 tickers from Wikipedia: {e}")
+        print(f"Error fetching S&P500 tickers from FMP: {e}")
         return []
 
 def convert_ticker_symbol(ticker):
@@ -618,8 +625,8 @@ def main():
     print(f"Short-term moving average period: {args.short_ma} days")
 
     try:
-        # Get S&P500 list from Wikipedia
-        ticker_list = get_sp500_tickers_from_wikipedia()
+        # Get S&P500 list from FMP API
+        ticker_list = get_sp500_tickers_from_fmp()
 
         if ticker_list:
             # Get S&P 500 price data
