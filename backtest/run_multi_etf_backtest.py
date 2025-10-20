@@ -87,9 +87,14 @@ def run_multi_etf_backtest(etfs, start_date=None, end_date=None,
             
             # Run backtest
             backtest.run()
-            
+
             # Visualize results (pass no_show_plot parameter)
             backtest.visualize_results(show_plot=not no_show_plot)
+
+            # Save trade log (Phase 1)
+            if backtest.trade_log:
+                backtest.save_trade_log()
+                print(f"Trade log saved for {symbol}: {len(backtest.trade_log)} trades")
             
             # Get results
             result = {

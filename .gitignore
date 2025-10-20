@@ -12,4 +12,9 @@ reports/*
 archive/*
 !archive/.gitkeep
 __pycache__/
-*.pyc .vscode/
+*.pyc
+.vscode/
+venv/
+venv311/
+*.csv
+!backtest_results_summary.csv

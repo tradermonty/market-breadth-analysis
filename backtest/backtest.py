@@ -14,7 +14,7 @@ from market_breadth import (
     get_sp500_price_data,
     calculate_above_ma,
     setup_matplotlib_backend,
-    get_sp500_tickers_from_wikipedia,
+    get_sp500_tickers_from_fmp,
     load_stock_data,
     save_stock_data,
     convert_ticker_symbol,
@@ -66,6 +66,11 @@ class Backtest:
         self.entry_prices = []  # List to record entry prices
         self.stop_loss_prices = []  # List to record stop loss prices
         self.highest_price = None  # Highest price during position holding
+
+        # Trade logging variables (Phase 1)
+        self.trade_log = []  # Detailed trade log for each complete trade
+        self.open_positions = []  # Currently open positions
+        self.next_trade_id = 1  # Counter for trade IDs
         
     def run(self):
         """Execute the backtest"""
@@ -163,7 +168,7 @@ class Backtest:
                     return saved_data.loc[mask]
         
         # Get S&P500 ticker list
-        tickers = get_sp500_tickers_from_wikipedia()
+        tickers = get_sp500_tickers_from_fmp()
         print(f"Number of tickers retrieved: {len(tickers)}")
         
         # Get data for all stocks (from calculation start date)
@@ -493,19 +498,91 @@ class Backtest:
     def _calculate_shares(self, amount, price):
         """Calculate the number of shares that can be purchased"""
         return int(amount / (price * (1 + self.slippage)))
+
+    def _process_exit_fifo(self, exit_date, exit_price, total_shares_to_sell, total_proceeds, exit_reason):
+        """Process exit using FIFO logic and record completed trades (Phase 1)"""
+        remaining_shares = total_shares_to_sell
+
+        while remaining_shares > 0 and self.open_positions:
+            # Get the oldest open position (FIFO)
+            entry_info = self.open_positions[0]
+
+            # Determine how many shares to match with this entry
+            shares_to_match = min(remaining_shares, entry_info['entry_shares'])
+
+            # Calculate proportional proceeds for this portion
+            proceeds_for_this_trade = (total_proceeds / total_shares_to_sell) * shares_to_match
+
+            # Record the completed trade
+            self._record_completed_trade(
+                entry_info, exit_date, exit_price,
+                shares_to_match, proceeds_for_this_trade, exit_reason
+            )
+
+            # Update remaining shares
+            remaining_shares -= shares_to_match
+
+            # Update or remove the open position
+            if shares_to_match >= entry_info['entry_shares']:
+                # Fully matched, remove this position
+                self.open_positions.pop(0)
+            else:
+                # Partially matched, update the position
+                entry_info['entry_shares'] -= shares_to_match
+                entry_info['entry_cost'] = (entry_info['entry_cost'] /
+                                           (entry_info['entry_shares'] + shares_to_match)) * entry_info['entry_shares']
+
+    def _record_completed_trade(self, entry_info, exit_date, exit_price,
+                                exit_shares, exit_proceeds, exit_reason):
+        """Record a completed trade to trade_log (Phase 1)"""
+        # Calculate holding days
+        holding_days = (exit_date - entry_info['entry_date']).days
+
+        # Calculate P&L
+        entry_cost_per_share = entry_info['entry_cost'] / entry_info['entry_shares']
+        entry_cost_for_sold_shares = entry_cost_per_share * exit_shares
+        exit_proceeds_for_sold_shares = (exit_proceeds / exit_shares) * exit_shares if exit_shares > 0 else 0
+
+        pnl_dollar = exit_proceeds_for_sold_shares - entry_cost_for_sold_shares
+        pnl_percent = (pnl_dollar / entry_cost_for_sold_shares) * 100 if entry_cost_for_sold_shares > 0 else 0
+
+        # Calculate cumulative P&L
+        cumulative_pnl = sum(trade['pnl_dollar'] for trade in self.trade_log) + pnl_dollar
+
+        # Create trade record
+        trade_record = {
+            'trade_id': self.next_trade_id,
+            'entry_date': entry_info['entry_date'],
+            'entry_price': entry_info['entry_price'],
+            'entry_shares': exit_shares,
+            'entry_cost': entry_cost_for_sold_shares,
+            'entry_reason': entry_info['entry_reason'],
+            'exit_date': exit_date,
+            'exit_price': exit_price,
+            'exit_shares': exit_shares,
+            'exit_proceeds': exit_proceeds_for_sold_shares,
+            'exit_reason': exit_reason,
+            'holding_days': holding_days,
+            'pnl_dollar': pnl_dollar,
+            'pnl_percent': pnl_percent,
+            'cumulative_pnl': cumulative_pnl
+        }
+
+        self.trade_log.append(trade_record)
+        self.next_trade_id += 1
     
     def _execute_entry(self, date, price, shares, reason=''):
         """Execute entry"""
         entry_price = price * (1 + self.slippage)
         commission = entry_price * shares * self.commission
         total_cost = entry_price * shares + commission
-        
+
         self.current_position += shares  # Changed to += to support buying more
         self.current_capital -= total_cost
-        
+
         # Record entry price
         self.entry_prices.append(entry_price)
-        
+
         self.trades.append({
             'date': date,
             'action': 'BUY',
@@ -515,13 +592,22 @@ class Backtest:
             'total_cost': total_cost,
             'reason': reason
         })
+
+        # Add to open_positions for trade logging (Phase 1)
+        self.open_positions.append({
+            'entry_date': date,
+            'entry_price': entry_price,
+            'entry_shares': shares,
+            'entry_cost': total_cost,
+            'entry_reason': reason
+        })
         
     def _execute_exit(self, date, price, reason=''):
         """Execute exit"""
         exit_price = price * (1 - self.slippage)
         commission = exit_price * self.current_position * self.commission
         total_proceeds = exit_price * self.current_position - commission
-        
+
         # For partial exit, sell only half of the position
         if self.partial_exit and self.current_position > 1:
             shares_to_sell = self.current_position // 2
@@ -529,7 +615,7 @@ class Backtest:
             commission = exit_price * shares_to_sell * self.commission
             total_proceeds = exit_price * shares_to_sell - commission
             self.current_capital += total_proceeds
-            
+
             self.trades.append({
                 'date': date,
                 'action': 'SELL',
@@ -539,12 +625,15 @@ class Backtest:
                 'total_proceeds': total_proceeds,
                 'reason': reason + ' (partial)'
             })
-            
+
+            # Record completed trades using FIFO logic (Phase 1)
+            self._process_exit_fifo(date, exit_price, shares_to_sell, total_proceeds, reason + ' (partial)')
+
             print(f"Partial exit: Sold {shares_to_sell} shares, remaining {self.current_position} shares")
         else:
             # Full exit
             self.current_capital += total_proceeds
-            
+
             self.trades.append({
                 'date': date,
                 'action': 'SELL',
@@ -554,7 +643,10 @@ class Backtest:
                 'total_proceeds': total_proceeds,
                 'reason': reason
             })
-            
+
+            # Record completed trades using FIFO logic (Phase 1)
+            self._process_exit_fifo(date, exit_price, self.current_position, total_proceeds, reason)
+
             self.current_position = 0
             self.entry_prices = []  # Clear entry price list
             self.stop_loss_prices = []  # Clear stop loss price list
@@ -1113,6 +1205,29 @@ class Backtest:
         plt.savefig(f'reports/backtest_results_{self.symbol}.png')
         if show_plot:
             plt.show()  # Display chart
+
+    def save_trade_log(self, filename=None):
+        """Save trade log to CSV file (Phase 1)"""
+        if not self.trade_log:
+            print("No trades to save.")
+            return None
+
+        # Generate default filename if not provided
+        if filename is None:
+            filename = f'reports/trade_log_{self.symbol}_{self.start_date}_{self.end_date}.csv'
+
+        # Convert trade_log to DataFrame
+        trade_df = pd.DataFrame(self.trade_log)
+
+        # Format datetime columns
+        trade_df['entry_date'] = pd.to_datetime(trade_df['entry_date']).dt.strftime('%Y-%m-%d')
+        trade_df['exit_date'] = pd.to_datetime(trade_df['exit_date']).dt.strftime('%Y-%m-%d')
+
+        # Save to CSV
+        trade_df.to_csv(filename, index=False)
+        print(f"\nTrade log saved to: {filename}")
+
+        return filename
 
 def main():
     parser = argparse.ArgumentParser(description='Backtest using Market Breadth indicator')
