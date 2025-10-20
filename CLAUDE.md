@@ -70,15 +70,17 @@ python market_breadth.py --short_ma 20 --use_saved_data
 
 ### Backtesting
 ```bash
-# Single symbol backtest
-cd backtest
-python backtest.py --symbol SPY --start_date 2020-01-01 --end_date 2023-12-31 --use_saved_data
+# Single symbol backtest (run from project root)
+python backtest/backtest.py --symbol SPY --start_date 2020-01-01 --end_date 2023-12-31 --use_saved_data
 
-# Multi-ETF backtest (generates trade logs automatically)
-python run_multi_etf_backtest.py
+# Multi-ETF backtest (ALWAYS run from project root to save to reports/)
+python backtest/run_multi_etf_backtest.py
 
 # Debug mode with verbose output
-python backtest.py --debug --symbol SSO --use_saved_data
+python backtest/backtest.py --debug --symbol SSO --use_saved_data
+
+# IMPORTANT: Always run backtest scripts from project root directory
+# This ensures outputs go to reports/ not backtest/reports/
 ```
 
 ### Key Arguments

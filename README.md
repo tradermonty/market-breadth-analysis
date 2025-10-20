@@ -83,8 +83,11 @@ python backtest/backtest.py --symbol QQQ --debug --use_saved_data
 
 Multi-ETF backtesting (automatically generates trade logs for each symbol):
 ```bash
-cd backtest
-python run_multi_etf_backtest.py
+# Run from project root to save outputs to reports/ directory
+python backtest/run_multi_etf_backtest.py
+
+# NOTE: Always run from the project root directory
+# Running with 'cd backtest' will save outputs to backtest/reports/ instead
 ```
 
 ### Analyzing Trade Logs
