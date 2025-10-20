@@ -13,6 +13,8 @@ A tool for analyzing and visualizing the market breadth of S&P500 stocks.
 - Save and reuse historical data without requiring an API key
 - Backtest trading strategies based on market breadth signals
 - Multi-ETF backtesting capabilities
+- Detailed trade logging with 15 data points per trade (entry/exit dates, prices, P&L, etc.)
+- Export trade logs to CSV for external analysis
 
 ## Prerequisites
 
@@ -67,14 +69,42 @@ python market_breadth.py --start_date 2020-01-01 --short_ma 20 --use_saved_data
 
 ### Backtesting
 
-Single strategy backtesting:
+Single symbol backtesting:
 ```bash
-python backtest/backtest.py
+# Basic backtest with trade logging
+python backtest/backtest.py --symbol SPY --use_saved_data
+
+# Backtest with custom parameters
+python backtest/backtest.py --symbol SSO --start_date 2020-01-01 --end_date 2023-12-31 --stop_loss_pct 0.08 --use_saved_data
+
+# Debug mode to see detailed trade matching
+python backtest/backtest.py --symbol QQQ --debug --use_saved_data
 ```
 
-Multi-ETF backtesting:
+Multi-ETF backtesting (automatically generates trade logs for each symbol):
 ```bash
-python backtest/run_multi_etf_backtest.py
+cd backtest
+python run_multi_etf_backtest.py
+```
+
+### Analyzing Trade Logs
+
+After running a backtest, trade logs are saved to `reports/trade_log_{SYMBOL}_{START}_{END}.csv`. You can analyze them with:
+
+```python
+import pandas as pd
+
+# Load trade log
+df = pd.read_csv('reports/trade_log_SPY_2020-01-01_2023-12-31.csv')
+
+# View summary statistics
+print(f"Total Trades: {len(df)}")
+print(f"Win Rate: {(df['pnl_dollar'] > 0).sum() / len(df) * 100:.1f}%")
+print(f"Average P&L: ${df['pnl_dollar'].mean():.2f}")
+print(f"Total P&L: ${df['pnl_dollar'].sum():.2f}")
+
+# Analyze by entry reason
+print(df.groupby('entry_reason')['pnl_dollar'].agg(['count', 'mean', 'sum']))
 ```
 
 ### Command Line Arguments
@@ -86,12 +116,16 @@ python backtest/run_multi_etf_backtest.py
 - `--use_saved_data`: Use previously saved data instead of fetching from FMP
 
 #### Backtesting
-- `--start_date`: Start date for backtesting
-- `--end_date`: End date for backtesting
-- `--initial_capital`: Initial capital for backtesting
-- `--position_size`: Position size as percentage of capital
-- `--stop_loss`: Stop loss percentage
-- `--take_profit`: Take profit percentage
+- `--start_date`: Start date for backtesting (YYYY-MM-DD)
+- `--end_date`: End date for backtesting (YYYY-MM-DD)
+- `--symbol`: Symbol to backtest (e.g., SPY, QQQ, SSO)
+- `--initial_capital`: Initial capital for backtesting (default: 50000)
+- `--stop_loss_pct`: Stop loss percentage (default: 0.08)
+- `--use_trailing_stop`: Enable trailing stop instead of fixed stop
+- `--trailing_stop_pct`: Trailing stop percentage (default: 0.2)
+- `--ma_type`: Moving average type: 'ema' or 'sma' (default: ema)
+- `--debug`: Enable debug mode with verbose output
+- `--no_show_plot`: Save charts without displaying (useful for batch processing)
 
 ### Data Storage and Reuse
 
@@ -126,10 +160,23 @@ Financial Modeling Prep (FMP)
 The following files are generated in the `reports/` directory:
 - `market_breadth_YYYYMMDD.png`: Graph showing breadth indicators and S&P500 price movements
 - `market_breadth_YYYYMMDD.csv`: Numerical data of breadth indicators
-- `backtest_results_YYYYMMDD.csv`: Backtesting results and performance metrics
-- `multi_etf_backtest_results_YYYYMMDD.csv`: Multi-ETF backtesting results
+- `backtest_results_{SYMBOL}.png`: Individual backtest chart for each symbol
+- `trade_log_{SYMBOL}_{START}_{END}.csv`: Detailed trade log with 15 columns per trade
 - `backtest_results_summary.md`: Detailed results report in Markdown format
 - `backtest_results_summary.csv`: Results data in CSV format
+
+### Trade Log Format
+
+Each trade log CSV contains the following columns:
+- `trade_id`: Sequential trade number
+- `entry_date`, `entry_price`, `entry_shares`, `entry_cost`: Entry details
+- `entry_reason`: Signal that triggered entry (e.g., "short_ma_bottom", "long_ma_bottom")
+- `exit_date`, `exit_price`, `exit_shares`, `exit_proceeds`: Exit details
+- `exit_reason`: Signal that triggered exit (e.g., "peak exit", "stop loss")
+- `holding_days`: Number of days position was held
+- `pnl_dollar`: Profit/loss in dollars
+- `pnl_percent`: Profit/loss as percentage
+- `cumulative_pnl`: Running total of all profits/losses
 
 ### Graph Color Coding
 
