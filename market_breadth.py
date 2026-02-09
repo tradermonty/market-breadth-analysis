@@ -498,7 +498,7 @@ def plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, short_ma_period=
     for start, end in bearish_regions:
         fig.add_vrect(
             x0=start, x1=end,
-            fillcolor='rgba(255, 182, 220, 0.45)',
+            fillcolor='rgba(255, 210, 240, 0.35)',
             line_width=0,
             row='all', col=1,
         )

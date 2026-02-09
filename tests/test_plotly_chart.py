@@ -370,7 +370,7 @@ class TestPlotlyBearishBackground(unittest.TestCase):
         if len(self.vrects) == 0:
             self.skipTest("No vrects to check")
         for v in self.vrects:
-            self.assertEqual(v.fillcolor, 'rgba(255, 182, 220, 0.45)',
+            self.assertEqual(v.fillcolor, 'rgba(255, 210, 240, 0.35)',
                              f"Unexpected fillcolor: {v.fillcolor}")
 
     def test_26_vrect_covers_both_panels(self):
