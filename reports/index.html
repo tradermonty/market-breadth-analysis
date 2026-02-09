@@ -9,35 +9,49 @@
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
             line-height: 1.6;
             margin: 0;
-            padding: 20px;
+            padding: 10px;
             background-color: #f5f5f5;
         }
         .container {
-            max-width: 1200px;
+            max-width: 1400px;
             margin: 0 auto;
             background-color: white;
-            padding: 20px;
+            padding: 15px;
             border-radius: 8px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
         h1 {
             color: #333;
             text-align: center;
+            font-size: clamp(1.2rem, 4vw, 1.8rem);
+            margin: 10px 0;
         }
         .chart-container {
-            margin: 20px 0;
+            margin: 10px 0;
             text-align: center;
+            position: relative;
+            width: 100%;
+            /* 16:12 aspect ratio via padding-top for responsive height */
+            padding-top: 75%;
+        }
+        .chart-container iframe,
+        .chart-container img {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            border: none;
+            border-radius: 4px;
         }
         .chart-container img {
-            max-width: 100%;
-            height: auto;
-            border-radius: 4px;
+            object-fit: contain;
         }
         .last-update {
             text-align: center;
             color: #666;
             font-size: 0.9em;
-            margin-top: 20px;
+            margin-top: 10px;
         }
         .error-message {
             color: #721c24;
@@ -47,6 +61,23 @@
             margin: 10px 0;
             border-radius: 4px;
             display: none;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 1;
+        }
+
+        /* Mobile: taller aspect ratio for readability */
+        @media (max-width: 768px) {
+            body { padding: 5px; }
+            .container { padding: 8px; }
+            .chart-container { padding-top: 120%; }
+        }
+
+        /* Tablet */
+        @media (min-width: 769px) and (max-width: 1024px) {
+            .chart-container { padding-top: 85%; }
         }
     </style>
 </head>
@@ -58,9 +89,7 @@
                 Failed to load the chart. Please try again later.
             </div>
             <!-- Primary: Interactive HTML chart -->
-            <iframe id="chart-iframe"
-                    style="width:100%; height:950px; border:none; display:none;">
-            </iframe>
+            <iframe id="chart-iframe" style="display:none;"></iframe>
             <!-- Fallback: Static PNG image -->
             <img id="chart-image" alt="Market Breadth Analysis Chart" style="display:none;">
         </div>
@@ -69,13 +98,6 @@
         </div>
     </div>
     <script>
-        function formatDate(date) {
-            const year = date.getFullYear();
-            const month = String(date.getMonth() + 1).padStart(2, '0');
-            const day = String(date.getDate()).padStart(2, '0');
-            return `${year}${month}${day}`;
-        }
-
         function updateLastModifiedDate(resourcePath) {
             fetch(resourcePath)
                 .then(response => {
@@ -95,21 +117,7 @@
                         document.getElementById('last-update').textContent = lastModifiedDate.toLocaleString('en-US', options);
                     }
                 })
-                .catch(error => {
-                    console.error('Fetch error:', error);
-                    const now = new Date();
-                    const options = {
-                        timeZone: 'America/New_York',
-                        year: 'numeric',
-                        month: '2-digit',
-                        day: '2-digit',
-                        hour: '2-digit',
-                        minute: '2-digit',
-                        second: '2-digit',
-                        timeZoneName: 'short'
-                    };
-                    document.getElementById('last-update').textContent = now.toLocaleString('en-US', options);
-                });
+                .catch(() => {});
         }
 
         function loadChart() {
@@ -117,7 +125,6 @@
             const img = document.getElementById('chart-image');
             const errorMessage = document.getElementById('error-message');
 
-            // Step 1: Check if HTML chart exists, then show iframe
             fetch('market_breadth.html', { method: 'HEAD' })
                 .then(response => {
                     if (response.ok) {
@@ -134,8 +141,6 @@
 
             function tryPngFallback() {
                 iframe.style.display = 'none';
-
-                // Step 2: Try PNG fallback
                 img.src = 'market_breadth.png';
 
                 img.onload = function() {
@@ -145,14 +150,12 @@
                 };
 
                 img.onerror = function() {
-                    // Step 3: All attempts failed
                     img.style.display = 'none';
                     errorMessage.style.display = 'block';
                 };
             }
         }
 
-        // Load the chart when the page loads
         window.onload = function() {
             loadChart();
         };

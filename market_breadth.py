@@ -553,6 +553,7 @@ def plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, short_ma_period=
             'displayModeBar': True,
             'modeBarButtonsToRemove': ['lasso2d', 'select2d'],
             'displaylogo': False,
+            'responsive': True,
         },
     )
     print(f"Interactive chart saved to {html_file}")
