@@ -2,8 +2,10 @@ name: Daily Market Breadth Analysis
 
 on:
   schedule:
-    # Run at 4:00 AM US West Coast time (11:00 AM UTC during PDT, 12:00 PM UTC during PST)
-    - cron: '0 11 * * 1-5'  # Run at 11:00 AM UTC from Monday to Friday
+    # Pre-market: ~4:00 AM West Coast (11:00 UTC)
+    - cron: '0 11 * * 1-5'
+    # Post-market: ~2:00 PM PST / 3:00 PM PDT (22:00 UTC)
+    - cron: '0 22 * * 1-5'
   workflow_dispatch:  # Enable manual execution
 
 # Set required permissions for GitHub Pages deployment
