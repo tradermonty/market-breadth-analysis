@@ -55,9 +55,15 @@
         <h1>Market Breadth Analysis</h1>
         <div class="chart-container">
             <div class="error-message" id="error-message">
-                Failed to load the image. Please try again later.
+                Failed to load the chart. Please try again later.
             </div>
-            <img id="chart-image" alt="Market Breadth Analysis Chart">
+            <!-- Primary: Interactive HTML chart -->
+            <iframe id="chart-iframe"
+                    style="width:100%; height:950px; border:none; display:none;"
+                    src="market_breadth.html">
+            </iframe>
+            <!-- Fallback: Static PNG image -->
+            <img id="chart-image" alt="Market Breadth Analysis Chart" style="display:none;">
         </div>
         <div class="last-update">
             Last Update: <span id="last-update"></span>
@@ -71,39 +77,12 @@
             return `${year}${month}${day}`;
         }
 
-        function loadImage() {
-            const img = document.getElementById('chart-image');
-            const errorMessage = document.getElementById('error-message');
-            const today = new Date();
-            
-            function updateLastModifiedDate(imagePath) {
-                console.log('Fetching:', imagePath);
-                fetch(imagePath)
-                    .then(response => {
-                        console.log('Response headers:', response.headers);
-                        const lastModified = response.headers.get('last-modified');
-                        console.log('Last modified:', lastModified);
-                        if (lastModified) {
-                            const lastModifiedDate = new Date(lastModified);
-                            const options = {
-                                timeZone: 'America/New_York',
-                                year: 'numeric',
-                                month: '2-digit',
-                                day: '2-digit',
-                                hour: '2-digit',
-                                minute: '2-digit',
-                                second: '2-digit',
-                                timeZoneName: 'short'
-                            };
-                            document.getElementById('last-update').textContent = lastModifiedDate.toLocaleString('en-US', options);
-                        } else {
-                            console.log('No last-modified header found');
-                        }
-                    })
-                    .catch(error => {
-                        console.error('Fetch error:', error);
-                        // If we can't get the last modified date, show current time
-                        const now = new Date();
+        function updateLastModifiedDate(resourcePath) {
+            fetch(resourcePath)
+                .then(response => {
+                    const lastModified = response.headers.get('last-modified');
+                    if (lastModified) {
+                        const lastModifiedDate = new Date(lastModified);
                         const options = {
                             timeZone: 'America/New_York',
                             year: 'numeric',
@@ -114,57 +93,76 @@
                             second: '2-digit',
                             timeZoneName: 'short'
                         };
-                        document.getElementById('last-update').textContent = now.toLocaleString('en-US', options);
-                    });
-            }
-            
-            // First, try to load the latest market breadth image
-            const latestImagePath = 'market_breadth.png';
-            img.src = latestImagePath;
-            
-            img.onload = function() {
-                errorMessage.style.display = 'none';
-                img.style.display = 'block';
-                updateLastModifiedDate(latestImagePath);
-            };
-            
-            img.onerror = function() {
-                // If the latest image fails, try today's MA10 image
-                const todayFormatted = formatDate(today);
-                const todayMA10ImagePath = `market_breadth_${todayFormatted}_ma10.png`;
-                
-                img.src = todayMA10ImagePath;
-                
-                img.onload = function() {
-                    errorMessage.style.display = 'none';
-                    img.style.display = 'block';
-                    updateLastModifiedDate(todayMA10ImagePath);
-                };
-                
-                img.onerror = function() {
-                    // If today's MA10 image fails, try today's MA5 image
-                    const todayMA5ImagePath = `market_breadth_${todayFormatted}_ma5.png`;
-                    
-                    img.src = todayMA5ImagePath;
-                    
-                    img.onload = function() {
-                        errorMessage.style.display = 'none';
-                        img.style.display = 'block';
-                        updateLastModifiedDate(todayMA5ImagePath);
+                        document.getElementById('last-update').textContent = lastModifiedDate.toLocaleString('en-US', options);
+                    }
+                })
+                .catch(error => {
+                    console.error('Fetch error:', error);
+                    const now = new Date();
+                    const options = {
+                        timeZone: 'America/New_York',
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        second: '2-digit',
+                        timeZoneName: 'short'
                     };
-                    
-                    img.onerror = function() {
-                        // If all attempts fail, show error message
-                        errorMessage.style.display = 'block';
-                        img.style.display = 'none';
-                    };
-                };
-            };
+                    document.getElementById('last-update').textContent = now.toLocaleString('en-US', options);
+                });
         }
 
-        // Load the image when the page loads
+        function loadChart() {
+            const iframe = document.getElementById('chart-iframe');
+            const img = document.getElementById('chart-image');
+            const errorMessage = document.getElementById('error-message');
+
+            // Step 1: Try interactive HTML chart via iframe
+            iframe.onload = function() {
+                iframe.style.display = 'block';
+                errorMessage.style.display = 'none';
+                updateLastModifiedDate('market_breadth.html');
+            };
+
+            iframe.onerror = function() {
+                tryPngFallback();
+            };
+
+            // Also detect 404 by fetching the HTML file directly
+            fetch('market_breadth.html', { method: 'HEAD' })
+                .then(response => {
+                    if (!response.ok) {
+                        tryPngFallback();
+                    }
+                })
+                .catch(() => {
+                    tryPngFallback();
+                });
+
+            function tryPngFallback() {
+                iframe.style.display = 'none';
+
+                // Step 2: Try PNG fallback
+                img.src = 'market_breadth.png';
+
+                img.onload = function() {
+                    img.style.display = 'block';
+                    errorMessage.style.display = 'none';
+                    updateLastModifiedDate('market_breadth.png');
+                };
+
+                img.onerror = function() {
+                    // Step 3: All attempts failed
+                    img.style.display = 'none';
+                    errorMessage.style.display = 'block';
+                };
+            }
+        }
+
+        // Load the chart when the page loads
         window.onload = function() {
-            loadImage();
+            loadChart();
         };
     </script>
 </body>

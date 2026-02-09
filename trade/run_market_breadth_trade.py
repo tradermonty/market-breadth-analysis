@@ -21,8 +21,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from market_breadth import (
     get_sp500_price_data,
     calculate_above_ma,
-    setup_matplotlib_backend,
-    get_sp500_tickers_from_wikipedia,
+    get_sp500_tickers_from_fmp,
     load_stock_data,
     save_stock_data,
     convert_ticker_symbol,

@@ -1,20 +1,17 @@
 import requests
 import pandas as pd
 import io
-import matplotlib.pyplot as plt
 from scipy.signal import find_peaks
-import matplotlib
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import os
 from tqdm import tqdm
 import pathlib
-from matplotlib.ticker import FixedLocator, FixedFormatter, NullFormatter
 import argparse
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-import platform
-from matplotlib.patches import Patch
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from fmp_data_fetcher import FMPDataFetcher  # NEW: FMP API client
 
 # Load environment variables
@@ -28,23 +25,6 @@ data_dir.mkdir(exist_ok=True)
 
 # Instantiate global FMP data fetcher (use 'demo' key if environment variable is not set to allow tests).
 fmp_fetcher = FMPDataFetcher(api_key=os.getenv('FMP_API_KEY', 'demo'))
-
-def setup_matplotlib_backend():
-    """Set up matplotlib backend based on the operating system"""
-    system = platform.system().lower()
-
-    # Try TkAgg first for macOS/Windows, fall back to Agg if not available
-    if system in ['darwin', 'windows']:
-        try:
-            matplotlib.use('TkAgg')
-        except (ImportError, ModuleNotFoundError):
-            print("TkAgg backend not available, using Agg backend")
-            matplotlib.use('Agg')
-    else:  # Linux and others
-        matplotlib.use('Agg')  # Use Agg backend for other systems
-
-# Set up backend first
-setup_matplotlib_backend()
 
 # Configure retry strategy for API calls
 retry_strategy = Retry(
@@ -346,12 +326,44 @@ def extract_chart_data(above_ma_200, sp500_data, short_ma_period=10, start_date=
         'troughs_avg_below_04': troughs_avg_below_04
     }
 
-def plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, short_ma_period=10, start_date=None, end_date=None):
-    """Visualize Breadth Index and S&P 500 price"""
+def detect_bearish_regions(breadth_ma_200_trend, breadth_ma_short, breadth_ma_200):
+    """Convert day-level bearish mask into a list of (start, end) continuous intervals.
+
+    A day is bearish when breadth_ma_200_trend == -1 AND breadth_ma_short < breadth_ma_200.
+
+    Returns
+    -------
+    list[tuple[Timestamp, Timestamp]]
+        Each tuple is (start_date, end_date) of a contiguous bearish region.
+    """
+    bearish_mask = (breadth_ma_200_trend == -1) & (breadth_ma_short < breadth_ma_200)
+
+    regions = []
+    in_bearish = False
+    start = None
+
+    for i in range(len(bearish_mask)):
+        if bearish_mask.iloc[i] and not in_bearish:
+            start = breadth_ma_short.index[i]
+            in_bearish = True
+        elif not bearish_mask.iloc[i] and in_bearish:
+            regions.append((start, breadth_ma_short.index[i - 1]))
+            in_bearish = False
+
+    if in_bearish:
+        regions.append((start, breadth_ma_short.index[-1]))
+
+    return regions
+
+def plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, short_ma_period=10,
+                                       start_date=None, end_date=None, output_dir='reports'):
+    """Visualize Breadth Index and S&P 500 price using Plotly.
+
+    Returns the Plotly Figure object for programmatic inspection / testing.
+    """
     # Extract chart data
     chart_data = extract_chart_data(above_ma_200, sp500_data, short_ma_period, start_date, end_date)
-    
-    breadth_index_200 = chart_data['breadth_index_200']
+
     breadth_ma_200 = chart_data['breadth_ma_200']
     breadth_ma_short = chart_data['breadth_ma_short']
     breadth_ma_200_trend = chart_data['breadth_ma_200_trend']
@@ -363,109 +375,197 @@ def plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, short_ma_period=
     peaks_avg = chart_data['peaks_avg']
     troughs_avg_below_04 = chart_data['troughs_avg_below_04']
 
-    # Create plot with larger figure size and adjusted font sizes
-    plt.rcParams['font.size'] = 12  # Increase base font size
-    plt.rcParams['axes.titlesize'] = 16  # Increase title font size
-    plt.rcParams['axes.labelsize'] = 14  # Increase axis label font size
-    plt.rcParams['xtick.labelsize'] = 10  # Set x-axis tick label font size
-    plt.rcParams['ytick.labelsize'] = 10  # Set y-axis tick label font size
-    plt.rcParams['legend.fontsize'] = 10  # Set legend font size
+    # Create subplots
+    fig = make_subplots(
+        rows=2, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.08,
+        row_heights=[0.5, 0.5],
+        subplot_titles=['S&P 500 Price',
+                        f'S&P 500 Breadth Index with 200-Day MA and {short_ma_period}-Day MA'],
+    )
 
-    fig, axs = plt.subplots(2, 1, figsize=(12, 12), sharex=True)  # Create larger figure size
+    # --- Panel 1: S&P 500 Price ---
+    fig.add_trace(
+        go.Scatter(
+            x=sp500_data.index,
+            y=sp500_data.values,
+            name='S&P 500 Price',
+            line=dict(color='#00FFFF', width=2),
+            hovertemplate='%{x|%Y-%m-%d}<br>Price: $%{y:.2f}<extra></extra>',
+        ),
+        row=1, col=1,
+    )
 
-    # Plot S&P 500 price first
-    axs[0].plot(sp500_data.index, sp500_data, label='S&P 500 Price', color='cyan', zorder=2, linewidth=2)
-    
-    # Create a custom patch for the background color legend
-    background_patch = Patch(facecolor=(1.0, 0.9, 0.96), alpha=0.5, 
-                           label='Bearish Signal (MA200 Down & Short MA < MA200)')
-    
-    # Add background color
-    for i in range(len(breadth_ma_short) - 1):
-        if (breadth_ma_200_trend.iloc[i] == -1) and (breadth_ma_short.iloc[i] < breadth_ma_200.iloc[i]):
-            axs[0].axvspan(breadth_ma_short.index[i], breadth_ma_short.index[i + 1], 
-                          color=(1.0, 0.9, 0.96), alpha=0.3, zorder=1)
-            axs[1].axvspan(breadth_ma_short.index[i], breadth_ma_short.index[i + 1], 
-                          color=(1.0, 0.9, 0.96), alpha=0.3, zorder=1)
-
-    axs[0].set_title('S&P 500 Price', pad=20, fontsize=16)  # Set title font size directly
-    axs[0].set_xlabel('Date', fontsize=14)  # Set x-axis label font size directly
-    axs[0].set_ylabel('Price', fontsize=14)  # Set y-axis label font size directly
-    axs[0].set_yscale('log')
-    
-    # Configure logarithmic axis format with larger font sizes
-    major_ticks = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]
-    axs[0].yaxis.set_major_locator(FixedLocator(major_ticks))
-    axs[0].yaxis.set_major_formatter(FixedFormatter([str(x) for x in major_ticks]))
-    
-    # Configure minor ticks
-    minor_ticks = []
-    for major in major_ticks[:-1]:
-        next_major = major_ticks[major_ticks.index(major) + 1]
-        step = (next_major - major) / 5
-        for i in range(1, 5):
-            minor_ticks.append(major + step * i)
-    
-    axs[0].yaxis.set_minor_locator(FixedLocator(minor_ticks))
-    axs[0].yaxis.set_minor_formatter(NullFormatter())
-    
-    # Add marks on S&P500 at the same timing with larger markers
+    # Trough markers on S&P 500 (panel 1)
     if len(troughs_below_04) > 0:
         s_and_p_troughs = sp500_data.loc[below_04.index[troughs_below_04]]
-        axs[0].scatter(s_and_p_troughs.index, s_and_p_troughs, color='purple', marker='v', s=150, 
-                      label=f'Troughs ({short_ma_period}MA < 0.4) on S&P 500', zorder=3)
-    
-    # Add custom legend with the background patch and larger markers
-    handles, labels = axs[0].get_legend_handles_labels()
-    handles.insert(1, background_patch)
-    axs[0].legend(handles=handles, loc='center left', bbox_to_anchor=(0.02, 0.5))
-    
-    axs[0].grid(True)
+        fig.add_trace(
+            go.Scatter(
+                x=s_and_p_troughs.index,
+                y=s_and_p_troughs.values,
+                name=f'Troughs ({short_ma_period}MA < 0.4) on S&P 500',
+                mode='markers',
+                marker=dict(color='#800080', size=12, symbol='triangle-down'),
+            ),
+            row=1, col=1,
+        )
 
-    # Plot Breadth Index with thicker lines
-    axs[1].plot(breadth_ma_200.index, breadth_ma_200, label='Breadth Index (200-Day MA)', color='green', zorder=2, linewidth=2)
-    axs[1].plot(breadth_ma_short.index, breadth_ma_short, label=f'Breadth Index ({short_ma_period}-Day MA)', color='orange', zorder=2, linewidth=2)
-    
-    # Add all markers with higher zorder and larger size
+    # Y axis: log scale
+    fig.update_yaxes(type='log', row=1, col=1, title_text='Price')
+
+    # --- Panel 2: Breadth Index ---
+    fig.add_trace(
+        go.Scatter(
+            x=breadth_ma_200.index,
+            y=breadth_ma_200.values,
+            name='Breadth Index (200-Day MA)',
+            line=dict(color='#008000', width=2),
+        ),
+        row=2, col=1,
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=breadth_ma_short.index,
+            y=breadth_ma_short.values,
+            name=f'Breadth Index ({short_ma_period}-Day MA)',
+            line=dict(color='#FFA500', width=2),
+        ),
+        row=2, col=1,
+    )
+
+    # Peak markers
     if len(peaks) > 0:
-        axs[1].plot(breadth_ma_200.index[peaks], breadth_ma_200.iloc[peaks], 'r^', label='Peaks (Tops)', zorder=3, markersize=10)
+        fig.add_trace(
+            go.Scatter(
+                x=breadth_ma_200.index[peaks],
+                y=breadth_ma_200.iloc[peaks].values,
+                name='Peaks (Tops)',
+                mode='markers',
+                marker=dict(color='#FF0000', size=10, symbol='triangle-up'),
+            ),
+            row=2, col=1,
+        )
+
+    # Trough markers
     if len(troughs) > 0:
-        axs[1].plot(breadth_ma_200.index[troughs], breadth_ma_200.iloc[troughs], 'bv', label='Troughs (Bottoms)', zorder=3, markersize=10)
+        fig.add_trace(
+            go.Scatter(
+                x=breadth_ma_200.index[troughs],
+                y=breadth_ma_200.iloc[troughs].values,
+                name='Troughs (Bottoms)',
+                mode='markers',
+                marker=dict(color='#0000FF', size=10, symbol='triangle-down'),
+            ),
+            row=2, col=1,
+        )
+
+    # Troughs below 0.4 on breadth panel
     if len(troughs_below_04) > 0:
-        axs[1].scatter(below_04.index[troughs_below_04], below_04.iloc[troughs_below_04], color='purple', marker='v', s=150,
-                      label=f'Troughs ({short_ma_period}MA < 0.4)', zorder=3)
+        fig.add_trace(
+            go.Scatter(
+                x=below_04.index[troughs_below_04],
+                y=below_04.iloc[troughs_below_04].values,
+                name=f'Troughs ({short_ma_period}MA < 0.4)',
+                mode='markers',
+                marker=dict(color='#800080', size=12, symbol='triangle-down'),
+            ),
+            row=2, col=1,
+        )
 
-    # Draw horizontal lines for peak and trough averages with thicker lines
-    axs[1].axhline(peaks_avg, color='red', linestyle='--', label=f'Average Peaks (200MA) = {peaks_avg:.2f}', zorder=2, linewidth=2)
-    axs[1].axhline(troughs_avg_below_04, color='blue', linestyle='--', label=f'Average Troughs ({short_ma_period}MA < 0.4) = {troughs_avg_below_04:.2f}', zorder=2, linewidth=2)
+    # Average Peaks horizontal line
+    fig.add_hline(
+        y=peaks_avg, row=2, col=1,
+        line=dict(color='#FF0000', dash='dash', width=2),
+        annotation_text=f'Avg Peaks = {peaks_avg:.2f}',
+        annotation_position='bottom right',
+    )
 
-    axs[1].set_title(f'S&P 500 Breadth Index with 200-Day MA and {short_ma_period}-Day MA', pad=20, fontsize=16)  # Set title font size directly
-    axs[1].set_ylabel('Breadth Index Percentage', fontsize=14)  # Set y-axis label font size directly
-    axs[1].legend(loc='center left', bbox_to_anchor=(0.02, 0.5))
-    axs[1].grid(True)
+    # Average Troughs horizontal line
+    fig.add_hline(
+        y=troughs_avg_below_04, row=2, col=1,
+        line=dict(color='#0000FF', dash='dash', width=2),
+        annotation_text=f'Avg Troughs = {troughs_avg_below_04:.2f}',
+        annotation_position='top right',
+    )
 
-    plt.tight_layout()
-    
-    # Get current date and add to filename
-    filename = 'reports/market_breadth.png'
-    
-    # Save image with higher DPI and better quality settings
+    # Y axis range for breadth panel
+    fig.update_yaxes(range=[0, 1], row=2, col=1, title_text='Breadth Index Percentage')
+
+    # --- Bearish background (both panels) ---
+    bearish_regions = detect_bearish_regions(breadth_ma_200_trend, breadth_ma_short, breadth_ma_200)
+    for start, end in bearish_regions:
+        fig.add_vrect(
+            x0=start, x1=end,
+            fillcolor='rgba(255, 182, 220, 0.45)',
+            line_width=0,
+            row='all', col=1,
+        )
+
+    # --- Layout ---
+    fig.update_layout(
+        height=900,
+        width=1200,
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        hovermode='x unified',
+        legend=dict(
+            orientation='h',
+            yanchor='bottom',
+            y=-0.15,
+            xanchor='center',
+            x=0.5,
+            font=dict(size=11),
+        ),
+        margin=dict(l=60, r=20, t=60, b=80),
+    )
+
+    # Grid lines
+    fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='#E0E0E0')
+    fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='#E0E0E0')
+
+    # Range selector on panel 1
+    fig.update_xaxes(
+        rangeselector=dict(
+            buttons=[
+                dict(count=1, label='1Y', step='year', stepmode='backward'),
+                dict(count=3, label='3Y', step='year', stepmode='backward'),
+                dict(count=5, label='5Y', step='year', stepmode='backward'),
+                dict(step='all', label='ALL'),
+            ],
+            bgcolor='#f0f0f0',
+            activecolor='#d0d0d0',
+        ),
+        row=1, col=1,
+    )
+
+    # --- Output ---
+    output_path = pathlib.Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    html_file = output_path / 'market_breadth.html'
+    fig.write_html(
+        str(html_file),
+        include_plotlyjs=True,
+        full_html=True,
+        config={
+            'displayModeBar': True,
+            'modeBarButtonsToRemove': ['lasso2d', 'select2d'],
+            'displaylogo': False,
+        },
+    )
+    print(f"Interactive chart saved to {html_file}")
+
+    # PNG output (backward compatibility)
+    png_file = output_path / 'market_breadth.png'
     try:
-        plt.savefig(filename, dpi=400, bbox_inches='tight', format='png', facecolor='white', edgecolor='none')
-        print(f"Chart saved to {filename}")
+        fig.write_image(str(png_file), width=1200, height=900, scale=2)
+        print(f"PNG chart saved to {png_file}")
     except Exception as e:
-        print(f"Error saving chart: {e}")
-        # Try alternative save method
-        try:
-            plt.savefig(filename, dpi=400, bbox_inches='tight', format='png')
-            print(f"Chart saved to {filename} (alternative method)")
-        except Exception as e:
-            print(f"Failed to save chart: {e}")
-    
-    # Display the graph
-    plt.show()
-    
-    plt.close()  # Close the figure to free memory
+        print(f"PNG export skipped (kaleido not installed): {e}")
+
+    return fig
 
 def get_stock_price_data(symbol, start_date, end_date, use_saved_data=False):
     """

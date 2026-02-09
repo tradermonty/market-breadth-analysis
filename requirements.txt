@@ -5,4 +5,6 @@ scipy>=1.7.0
 python-dotenv>=0.19.0
 tqdm>=4.65.0
 PyQt5>=5.15.0  # Required for Windows matplotlib backend compatibility
-lxml>=4.9.0  # Required for pandas read_html 
+lxml>=4.9.0  # Required for pandas read_html
+plotly>=5.18.0
+kaleido>=0.2.1

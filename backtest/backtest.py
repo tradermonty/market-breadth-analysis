@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np
+import matplotlib
 import matplotlib.pyplot as plt
+import platform
 from datetime import datetime
 import argparse
 from scipy.signal import find_peaks
@@ -13,7 +15,6 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from market_breadth import (
     get_sp500_price_data,
     calculate_above_ma,
-    setup_matplotlib_backend,
     get_sp500_tickers_from_fmp,
     load_stock_data,
     save_stock_data,
@@ -23,6 +24,18 @@ from market_breadth import (
     get_multiple_stock_data,
     get_stock_price_data
 )
+
+
+def _setup_matplotlib_backend():
+    """Set up matplotlib backend based on the operating system."""
+    system = platform.system().lower()
+    if system in ('darwin', 'windows'):
+        try:
+            matplotlib.use('TkAgg')
+        except (ImportError, ModuleNotFoundError):
+            matplotlib.use('Agg')
+    else:
+        matplotlib.use('Agg')
 
 # Create necessary directories
 reports_dir = pathlib.Path('reports')
@@ -133,6 +146,13 @@ class Backtest:
         self.short_ma_line = self.short_ma_line.loc[mask]
         self.long_ma_line = self.long_ma_line.loc[mask]
         self.long_ma_trend = self.long_ma_trend.loc[mask]
+
+        # Sort all data by date in ascending order (oldest to newest)
+        self.price_data = self.price_data.sort_index()
+        self.breadth_index = self.breadth_index.sort_index()
+        self.short_ma_line = self.short_ma_line.sort_index()
+        self.long_ma_line = self.long_ma_line.sort_index()
+        self.long_ma_trend = self.long_ma_trend.sort_index()
         
         # Initialize variables for signal detection
         self.short_ma_bottoms = []
@@ -236,12 +256,12 @@ class Backtest:
                                 # Only add if the bottom has not been detected yet
                                 if bottom_date not in detected_short_ma_bottoms:
                                     detected_short_ma_bottoms.add(bottom_date)
-                                    # Use the end date of the Data period as the signal date
-                                    signal_date = pd.to_datetime(data_end_date)
+                                    # Use current date as signal date (when we can confirm the bottom)
+                                    signal_date = date
                                     self.short_ma_bottoms.append(signal_date)
                                     print(f"New {self.short_ma}{self.ma_type.upper()} bottom detected at: {bottom_date.strftime('%Y-%m-%d')}")
                                     print(f"  Data period: {data_start_date} to {data_end_date}")
-                                    print(f"  Signal date: {signal_date.strftime('%Y-%m-%d')}")
+                                    print(f"  Signal date (trade execution): {signal_date.strftime('%Y-%m-%d')}")
             
             # Detect 200MA bottoms
             if len(current_long_ma_line) > self.long_ma:
@@ -261,12 +281,12 @@ class Backtest:
                         if past_20days_min <= 0.5:  # Check actual value conditions
                             if bottom_date not in detected_long_ma_bottoms:
                                 detected_long_ma_bottoms.add(bottom_date)
-                                # Use the end date of the Data period as the signal date
-                                signal_date = pd.to_datetime(data_end_date)
+                                # Use current date as signal date (when we can confirm the bottom)
+                                signal_date = date
                                 self.long_ma_bottoms.append(signal_date)
                                 print(f"New {self.long_ma}{self.ma_type.upper()} bottom detected at: {bottom_date.strftime('%Y-%m-%d')}")
                                 print(f"  Data period: {data_start_date} to {data_end_date}")
-                                print(f"  Signal date: {signal_date.strftime('%Y-%m-%d')}")
+                                print(f"  Signal date (trade execution): {signal_date.strftime('%Y-%m-%d')}")
             
             # Detect 200MA peaks
             if len(current_long_ma_line) > self.long_ma:
@@ -281,12 +301,12 @@ class Backtest:
                     if current_long_ma_line.iloc[peak_idx] >= 0.5:
                         if peak_date not in detected_peaks:
                             detected_peaks.add(peak_date)
-                            # Use the end date of the Data period as the signal date
-                            signal_date = pd.to_datetime(data_end_date)
+                            # Use current date as signal date (when we can confirm the peak)
+                            signal_date = date
                             self.peaks.append(signal_date)
                             print(f"New {self.long_ma}{self.ma_type.upper()} peak detected at: {peak_date.strftime('%Y-%m-%d')}")
                             print(f"  Data period: {data_start_date} to {data_end_date}")
-                            print(f"  Signal date: {signal_date.strftime('%Y-%m-%d')}")
+                            print(f"  Signal date (trade execution): {signal_date.strftime('%Y-%m-%d')}")
                             print(f"  {self.long_ma}{self.ma_type.upper()} value: {current_long_ma_line.iloc[peak_idx]:.4f}")
             
             # Entry at 20MA bottom (only if disable_short_ma_entry is False)
@@ -1042,7 +1062,7 @@ class Backtest:
     
     def visualize_results(self, show_plot=True):
         """Visualize results"""
-        setup_matplotlib_backend()
+        _setup_matplotlib_backend()
         
         # Create subplots
         fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(15, 16))
@@ -1310,6 +1330,10 @@ def main():
     )
     
     backtest.run()
+
+    # Save trade log if trades were executed
+    if backtest.trade_log:
+        backtest.save_trade_log()
 
 if __name__ == '__main__':
     main() 
