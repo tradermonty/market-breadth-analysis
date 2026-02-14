@@ -3,12 +3,11 @@ Test code for trade logging functionality (Phase 1)
 TDD approach - Tests written before implementation
 """
 
-import unittest
-import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
-import sys
 import os
+import sys
+import unittest
+
+import pandas as pd
 
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -32,7 +31,7 @@ class TestTradeLogging(unittest.TestCase):
             end_date=self.end_date,
             symbol=self.symbol,
             use_saved_data=True,
-            no_show_plot=True
+            no_show_plot=True,
         )
 
         # Verify that trade_log and open_positions exist and are empty
@@ -48,7 +47,7 @@ class TestTradeLogging(unittest.TestCase):
             end_date=self.end_date,
             symbol=self.symbol,
             use_saved_data=True,
-            no_show_plot=True
+            no_show_plot=True,
         )
 
         # Simulate an entry
@@ -78,7 +77,7 @@ class TestTradeLogging(unittest.TestCase):
             end_date=self.end_date,
             symbol=self.symbol,
             use_saved_data=True,
-            no_show_plot=True
+            no_show_plot=True,
         )
 
         # First entry
@@ -99,7 +98,7 @@ class TestTradeLogging(unittest.TestCase):
             end_date=self.end_date,
             symbol=self.symbol,
             use_saved_data=True,
-            no_show_plot=True
+            no_show_plot=True,
         )
 
         # Entry
@@ -137,7 +136,7 @@ class TestTradeLogging(unittest.TestCase):
             end_date=self.end_date,
             symbol=self.symbol,
             use_saved_data=True,
-            no_show_plot=True
+            no_show_plot=True,
         )
 
         # Entry and exit with known dates
@@ -161,7 +160,7 @@ class TestTradeLogging(unittest.TestCase):
             slippage=0.001,
             commission=0.001,
             use_saved_data=True,
-            no_show_plot=True
+            no_show_plot=True,
         )
 
         # Entry
@@ -197,7 +196,7 @@ class TestTradeLogging(unittest.TestCase):
             end_date=self.end_date,
             symbol=self.symbol,
             use_saved_data=True,
-            no_show_plot=True
+            no_show_plot=True,
         )
 
         # First entry: 50 shares
@@ -230,7 +229,7 @@ class TestTradeLogging(unittest.TestCase):
             end_date=self.end_date,
             symbol=self.symbol,
             use_saved_data=True,
-            no_show_plot=True
+            no_show_plot=True,
         )
 
         # Trade 1: Entry and exit
@@ -245,22 +244,11 @@ class TestTradeLogging(unittest.TestCase):
         self.assertEqual(len(backtest.trade_log), 2)
 
         # First trade cumulative P&L should equal its own P&L
-        self.assertAlmostEqual(
-            backtest.trade_log[0]['cumulative_pnl'],
-            backtest.trade_log[0]['pnl_dollar'],
-            places=2
-        )
+        self.assertAlmostEqual(backtest.trade_log[0]['cumulative_pnl'], backtest.trade_log[0]['pnl_dollar'], places=2)
 
         # Second trade cumulative P&L should be sum of both
-        expected_cumulative = (
-            backtest.trade_log[0]['pnl_dollar'] +
-            backtest.trade_log[1]['pnl_dollar']
-        )
-        self.assertAlmostEqual(
-            backtest.trade_log[1]['cumulative_pnl'],
-            expected_cumulative,
-            places=2
-        )
+        expected_cumulative = backtest.trade_log[0]['pnl_dollar'] + backtest.trade_log[1]['pnl_dollar']
+        self.assertAlmostEqual(backtest.trade_log[1]['cumulative_pnl'], expected_cumulative, places=2)
 
     def test_09_save_trade_log_csv(self):
         """Test: save_trade_log() creates CSV file with correct structure"""
@@ -269,7 +257,7 @@ class TestTradeLogging(unittest.TestCase):
             end_date=self.end_date,
             symbol=self.symbol,
             use_saved_data=True,
-            no_show_plot=True
+            no_show_plot=True,
         )
 
         # Create some trades
@@ -286,9 +274,21 @@ class TestTradeLogging(unittest.TestCase):
         df = pd.read_csv(filename)
 
         expected_columns = [
-            'trade_id', 'entry_date', 'entry_price', 'entry_shares', 'entry_cost',
-            'entry_reason', 'exit_date', 'exit_price', 'exit_shares', 'exit_proceeds',
-            'exit_reason', 'holding_days', 'pnl_dollar', 'pnl_percent', 'cumulative_pnl'
+            'trade_id',
+            'entry_date',
+            'entry_price',
+            'entry_shares',
+            'entry_cost',
+            'entry_reason',
+            'exit_date',
+            'exit_price',
+            'exit_shares',
+            'exit_proceeds',
+            'exit_reason',
+            'holding_days',
+            'pnl_dollar',
+            'pnl_percent',
+            'cumulative_pnl',
         ]
 
         for col in expected_columns:
@@ -309,7 +309,7 @@ class TestTradeLogging(unittest.TestCase):
             end_date=self.end_date,
             symbol=self.symbol,
             use_saved_data=True,
-            no_show_plot=True
+            no_show_plot=True,
         )
 
         # Create a trade

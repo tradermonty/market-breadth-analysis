@@ -1,3 +1,3 @@
 """
 Market Breadth Trading System
-""" 
+"""

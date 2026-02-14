@@ -123,13 +123,13 @@ The signal detection process works as follows:
    - Executes trades only when the signal date matches the current date
 
 5. **Signal Conditions**
-   - **Short MA Bottom**: 
+   - **Short MA Bottom**:
      - 8MA below threshold
      - Past 20-day Breadth minimum (from bottom date) below 0.3
-   - **Long MA Bottom**: 
+   - **Long MA Bottom**:
      - 200MA below threshold
      - Past 20-day Breadth minimum (from bottom date) below 0.5
-   - **Long MA Peak**: 
+   - **Long MA Peak**:
      - 200MA above 0.5 and peak detected
 
 ```mermaid
@@ -141,7 +141,7 @@ graph LR
         D --> E[Day 5]
         E --> F[Day 6]
     end
-    
+
     subgraph Analysis
         B -.-> G[Analyze Days 1-2]
         C -.-> H[Analyze Days 1-3]
@@ -149,14 +149,14 @@ graph LR
         E -.-> J[Analyze Days 1-5]
         F -.-> K[Analyze Days 1-6]
     end
-    
+
     subgraph Signal & Entry
         %% Only generate signal when pattern is confirmed
         I -.-> L[No Signal]
         J -.-> M[Bottom Signal for Day 3<br/>Entry on Day 5]
         K -.-> N[No Signal]
     end
-    
+
     %% Mark actual bottom
     style C fill:#f00,stroke:#333,stroke-width:2px
     %% Mark signal detection and generation
@@ -165,13 +165,13 @@ graph LR
     style M fill:#ff0,stroke:#333,stroke-width:2px
     %% Mark entry day
     style E fill:#0f0,stroke:#333,stroke-width:2px
-    
+
     %% Add labels
     C:::bottom
     J:::signal
     M:::signal_text
     E:::entry_day
-    
+
     classDef bottom fill:#f00,stroke:#333,stroke-width:2px
     classDef signal fill:#0f0,stroke:#333,stroke-width:2px
     classDef signal_text fill:#ff0,stroke:#333,stroke-width:2px
@@ -191,7 +191,7 @@ graph LR
    - Analyzes data sequentially in chronological order
    - Detects bottom and peak patterns from historical data
    - Generates signals at the detection point (actual bottoms or peaks occurred on previous dates)
-   - **Time Lag Consideration**: 
+   - **Time Lag Consideration**:
      - Peaks and bottoms require time to be confirmed
      - Signals are generated only after sufficient data confirms the pattern
      - This lag ensures more reliable signal generation but means trading slightly after the actual bottom/peak
@@ -316,4 +316,3 @@ Sell signals are generated when:
 - Add trading rules (split trading, multiple signal combinations, etc.)
 
 ---
-

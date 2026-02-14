@@ -39,4 +39,4 @@
 - [x] コードのドキュメント化（design_market_breadth_trade.mdの作成）
 - [x] 使用方法の説明（design_market_breadth_trade.mdに含まれる）
 
-## 完了日: 2024年3月 
+## 完了日: 2024年3月

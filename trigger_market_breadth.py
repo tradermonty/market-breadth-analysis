@@ -22,22 +22,20 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-BASE_URL = "https://tradermonty.github.io/market-breadth-analysis"
-DATA_CSV_URL = f"{BASE_URL}/market_breadth_data.csv"
-SUMMARY_CSV_URL = f"{BASE_URL}/market_breadth_summary.csv"
+BASE_URL = 'https://tradermonty.github.io/market-breadth-analysis'
+DATA_CSV_URL = f'{BASE_URL}/market_breadth_data.csv'
+SUMMARY_CSV_URL = f'{BASE_URL}/market_breadth_summary.csv'
 
 GITHUB_API_URL = (
-    "https://api.github.com/repos/tradermonty/market-breadth-analysis"
-    "/actions/workflows/daily-market-breadth.yml/dispatches"
+    'https://api.github.com/repos/tradermonty/market-breadth-analysis'
+    '/actions/workflows/daily-market-breadth.yml/dispatches'
 )
 
 
 def _get_github_token():
-    token = os.getenv("GITHUB_TOKEN")
+    token = os.getenv('GITHUB_TOKEN')
     if not token:
-        raise EnvironmentError(
-            "GITHUB_TOKEN not set. Add it to .env or export it."
-        )
+        raise OSError('GITHUB_TOKEN not set. Add it to .env or export it.')
     return token
 
 
@@ -45,10 +43,11 @@ def _parse_last_modified(url):
     """Send HEAD request and return Last-Modified as aware datetime, or None."""
     resp = requests.head(url, timeout=10, allow_redirects=True)
     resp.raise_for_status()
-    lm = resp.headers.get("Last-Modified")
+    lm = resp.headers.get('Last-Modified')
     if not lm:
         return None
     from email.utils import parsedate_to_datetime
+
     return parsedate_to_datetime(lm)
 
 
@@ -67,9 +66,9 @@ def fetch_csv():
     lm = _parse_last_modified(DATA_CSV_URL)
 
     return {
-        "csv_text": data_resp.text,
-        "summary_text": summary_resp.text,
-        "last_modified": lm,
+        'csv_text': data_resp.text,
+        'summary_text': summary_resp.text,
+        'last_modified': lm,
     }
 
 
@@ -83,20 +82,19 @@ def trigger_workflow():
     resp = requests.post(
         GITHUB_API_URL,
         headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
+            'Authorization': f'Bearer {token}',
+            'Accept': 'application/vnd.github+json',
+            'X-GitHub-Api-Version': '2022-11-28',
         },
-        json={"ref": "main"},
+        json={'ref': 'main'},
         timeout=15,
     )
     if resp.status_code == 204:
         return {
-            "status": "triggered",
-            "message": "Workflow triggered. Data will be ready in ~5 minutes.",
-            "runs_url": (
-                "https://github.com/tradermonty/market-breadth-analysis"
-                "/actions/workflows/daily-market-breadth.yml"
+            'status': 'triggered',
+            'message': 'Workflow triggered. Data will be ready in ~5 minutes.',
+            'runs_url': (
+                'https://github.com/tradermonty/market-breadth-analysis/actions/workflows/daily-market-breadth.yml'
             ),
         }
     resp.raise_for_status()
@@ -118,15 +116,14 @@ def fetch_market_breadth(max_age_hours=12):
           - message: Human-readable status description
     """
     base = {
-        "data_url": DATA_CSV_URL,
-        "summary_url": SUMMARY_CSV_URL,
+        'data_url': DATA_CSV_URL,
+        'summary_url': SUMMARY_CSV_URL,
     }
 
     try:
         last_modified = _parse_last_modified(DATA_CSV_URL)
     except requests.RequestException as e:
-        return {**base, "status": "error", "last_modified": None,
-                "message": f"Failed to check data freshness: {e}"}
+        return {**base, 'status': 'error', 'last_modified': None, 'message': f'Failed to check data freshness: {e}'}
 
     age_hours = None
     if last_modified:
@@ -138,83 +135,83 @@ def fetch_market_breadth(max_age_hours=12):
         try:
             result = fetch_csv()
         except requests.RequestException as e:
-            return {**base, "status": "error", "last_modified": last_modified,
-                    "message": f"Data is fresh but download failed: {e}"}
+            return {
+                **base,
+                'status': 'error',
+                'last_modified': last_modified,
+                'message': f'Data is fresh but download failed: {e}',
+            }
         return {
             **base,
-            "status": "fresh",
-            "last_modified": last_modified,
-            "csv_text": result["csv_text"],
-            "summary_text": result["summary_text"],
-            "message": f"Data is fresh (age: {age_hours:.1f}h).",
+            'status': 'fresh',
+            'last_modified': last_modified,
+            'csv_text': result['csv_text'],
+            'summary_text': result['summary_text'],
+            'message': f'Data is fresh (age: {age_hours:.1f}h).',
         }
 
     # Data is stale or age unknown — trigger workflow
     try:
         trigger_result = trigger_workflow()
-    except EnvironmentError as e:
-        return {**base, "status": "error", "last_modified": last_modified,
-                "message": str(e)}
+    except OSError as e:
+        return {**base, 'status': 'error', 'last_modified': last_modified, 'message': str(e)}
     except requests.RequestException as e:
-        return {**base, "status": "error", "last_modified": last_modified,
-                "message": f"Failed to trigger workflow: {e}"}
+        return {
+            **base,
+            'status': 'error',
+            'last_modified': last_modified,
+            'message': f'Failed to trigger workflow: {e}',
+        }
 
-    age_msg = f" (age: {age_hours:.1f}h)" if age_hours is not None else ""
+    age_msg = f' (age: {age_hours:.1f}h)' if age_hours is not None else ''
     return {
         **base,
         **trigger_result,
-        "last_modified": last_modified,
-        "message": f"Data is stale{age_msg}. {trigger_result['message']}",
+        'last_modified': last_modified,
+        'message': f'Data is stale{age_msg}. {trigger_result["message"]}',
     }
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Fetch market breadth data or trigger workflow"
-    )
+    parser = argparse.ArgumentParser(description='Fetch market breadth data or trigger workflow')
     parser.add_argument(
-        "--trigger-only", action="store_true",
-        help="Force trigger the workflow without checking freshness"
+        '--trigger-only', action='store_true', help='Force trigger the workflow without checking freshness'
     )
+    parser.add_argument('--fetch-only', action='store_true', help='Fetch CSV data only (no workflow trigger)')
     parser.add_argument(
-        "--fetch-only", action="store_true",
-        help="Fetch CSV data only (no workflow trigger)"
-    )
-    parser.add_argument(
-        "--max-age", type=float, default=12,
-        help="Max data age in hours before triggering (default: 12)"
+        '--max-age', type=float, default=12, help='Max data age in hours before triggering (default: 12)'
     )
     args = parser.parse_args()
 
     if args.trigger_only and args.fetch_only:
-        print("Error: --trigger-only and --fetch-only are mutually exclusive.")
+        print('Error: --trigger-only and --fetch-only are mutually exclusive.')
         sys.exit(1)
 
     if args.trigger_only:
         result = trigger_workflow()
-        print(result["message"])
-        print(f"Monitor: {result['runs_url']}")
+        print(result['message'])
+        print(f'Monitor: {result["runs_url"]}')
         return
 
     if args.fetch_only:
         result = fetch_csv()
-        lm = result["last_modified"]
-        print(f"Last-Modified: {lm.isoformat() if lm else 'unknown'}")
-        print(f"Data rows: {result['csv_text'].count(chr(10)) - 1}")
-        print(result["csv_text"][:500])
+        lm = result['last_modified']
+        print(f'Last-Modified: {lm.isoformat() if lm else "unknown"}')
+        print(f'Data rows: {result["csv_text"].count(chr(10)) - 1}')
+        print(result['csv_text'][:500])
         return
 
     # Default: auto mode
     result = fetch_market_breadth(max_age_hours=args.max_age)
-    print(f"Status: {result['status']}")
-    print(f"Message: {result['message']}")
-    if result.get("last_modified"):
-        print(f"Last-Modified: {result['last_modified'].isoformat()}")
-    if result["status"] == "fresh":
-        lines = result["csv_text"].strip().split("\n")
-        print(f"Data rows: {len(lines) - 1}")
-        print(f"Preview:\n{chr(10).join(lines[:3])}")
+    print(f'Status: {result["status"]}')
+    print(f'Message: {result["message"]}')
+    if result.get('last_modified'):
+        print(f'Last-Modified: {result["last_modified"].isoformat()}')
+    if result['status'] == 'fresh':
+        lines = result['csv_text'].strip().split('\n')
+        print(f'Data rows: {len(lines) - 1}')
+        print(f'Preview:\n{chr(10).join(lines[:3])}')
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

@@ -4,11 +4,11 @@ Uses synthetic deterministic data (np.random.seed(42)) so no API key is needed.
 All file output tests use tempfile.mkdtemp() to avoid polluting reports/.
 """
 
-import sys
 import os
-import unittest
-import tempfile
 import shutil
+import sys
+import tempfile
+import unittest
 
 import numpy as np
 import pandas as pd
@@ -18,10 +18,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from market_breadth import detect_bearish_regions, extract_chart_data, plot_breadth_and_sp500_with_peaks
 
-
 # ---------------------------------------------------------------------------
 # Shared synthetic data helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_synthetic_data(n_days=500, n_stocks=50, seed=42):
     """Create deterministic synthetic above_ma_200 and sp500_data.
@@ -40,8 +40,7 @@ def _make_synthetic_data(n_days=500, n_stocks=50, seed=42):
         phase = np.sin(2 * np.pi * i / 200) * 0.3 + 0.5
         base[i] = np.random.rand(n_stocks) < phase
 
-    above_ma_200 = pd.DataFrame(base, index=dates,
-                                columns=[f'STOCK{j}' for j in range(n_stocks)])
+    above_ma_200 = pd.DataFrame(base, index=dates, columns=[f'STOCK{j}' for j in range(n_stocks)])
 
     # S&P500 price: trending upward with noise
     sp500_values = 2700 + np.cumsum(np.random.randn(n_days) * 5)
@@ -58,14 +57,13 @@ def _get_chart_data_and_fig(short_ma=10, output_dir=None):
     if output_dir is None:
         output_dir = tempfile.mkdtemp()
 
-    fig, _ = plot_breadth_and_sp500_with_peaks(
-        above_ma, sp500, short_ma_period=short_ma, output_dir=output_dir
-    )
+    fig, _ = plot_breadth_and_sp500_with_peaks(above_ma, sp500, short_ma_period=short_ma, output_dir=output_dir)
     return chart_data, fig, output_dir
 
 
 # Cache to avoid re-generating figure for every test
 _CACHED = {}
+
 
 def _cached_fig(key='default'):
     if key not in _CACHED:
@@ -145,15 +143,22 @@ class TestBearishRegionDetection(unittest.TestCase):
 # Test Class 2: TestExtractChartDataKeys
 # ===================================================================
 class TestExtractChartDataKeys(unittest.TestCase):
-
     def test_05_extract_chart_data_returns_expected_keys(self):
         """extract_chart_data() returns dict with all required keys."""
         above_ma, sp500 = _make_synthetic_data()
         chart_data = extract_chart_data(above_ma, sp500)
         expected_keys = {
-            'breadth_index_200', 'breadth_ma_200', 'breadth_ma_short',
-            'breadth_ma_200_trend', 'sp500_data', 'peaks', 'troughs',
-            'troughs_below_04', 'below_04', 'peaks_avg', 'troughs_avg_below_04',
+            'breadth_index_200',
+            'breadth_ma_200',
+            'breadth_ma_short',
+            'breadth_ma_200_trend',
+            'sp500_data',
+            'peaks',
+            'troughs',
+            'troughs_below_04',
+            'below_04',
+            'peaks_avg',
+            'troughs_avg_below_04',
         }
         self.assertEqual(set(chart_data.keys()), expected_keys)
 
@@ -219,8 +224,12 @@ class TestPlotlyTraces(unittest.TestCase):
     def test_12_breadth_short_ma_trace(self):
         """Breadth short MA: orange line, panel 2."""
         # Name includes the MA period
-        matching = [t for t in self.fig.data if 'Breadth Index' in (t.name or '') and 'Day MA)' in (t.name or '') and '200' not in (t.name or '')]
-        self.assertTrue(len(matching) > 0, "Short MA trace not found")
+        matching = [
+            t
+            for t in self.fig.data
+            if 'Breadth Index' in (t.name or '') and 'Day MA)' in (t.name or '') and '200' not in (t.name or '')
+        ]
+        self.assertTrue(len(matching) > 0, 'Short MA trace not found')
         t = matching[0]
         self.assertEqual(t.line.color, '#FFA500')
         self.assertEqual(t.yaxis, 'y2')
@@ -243,37 +252,41 @@ class TestPlotlyTraces(unittest.TestCase):
 
     def test_15_trough_below_04_breadth(self):
         """Troughs (<0.4) on breadth panel: purple marker, panel 2."""
-        matching = [t for t in self.fig.data
-                    if t.name and 'MA < 0.4)' in t.name and 'S&P' not in t.name]
+        matching = [t for t in self.fig.data if t.name and 'MA < 0.4)' in t.name and 'S&P' not in t.name]
         if len(self.chart_data['troughs_below_04']) == 0:
-            self.skipTest("No troughs below 0.4 in synthetic data")
-        self.assertTrue(len(matching) > 0, "Troughs below 0.4 trace not found")
+            self.skipTest('No troughs below 0.4 in synthetic data')
+        self.assertTrue(len(matching) > 0, 'Troughs below 0.4 trace not found')
         t = matching[0]
         self.assertEqual(t.marker.color, '#800080')
         self.assertEqual(t.yaxis, 'y2')
 
     def test_16_trough_below_04_sp500(self):
         """Troughs (<0.4) on S&P panel: purple marker, panel 1."""
-        matching = [t for t in self.fig.data
-                    if t.name and 'MA < 0.4)' in t.name and 'S&P' in t.name]
+        matching = [t for t in self.fig.data if t.name and 'MA < 0.4)' in t.name and 'S&P' in t.name]
         if len(self.chart_data['troughs_below_04']) == 0:
-            self.skipTest("No troughs below 0.4 in synthetic data")
-        self.assertTrue(len(matching) > 0, "Troughs on S&P trace not found")
+            self.skipTest('No troughs below 0.4 in synthetic data')
+        self.assertTrue(len(matching) > 0, 'Troughs on S&P trace not found')
         t = matching[0]
         self.assertEqual(t.marker.color, '#800080')
         self.assertIn(t.yaxis, ('y', 'y1', None))
 
     def test_17_average_peaks_hline(self):
         """Average peaks horizontal line: red dashed."""
-        shapes = [s for s in self.fig.layout.shapes
-                  if s.type == 'line' and s.line.color == '#FF0000' and s.line.dash == 'dash']
-        self.assertTrue(len(shapes) > 0, "Red dashed hline for average peaks not found")
+        shapes = [
+            s
+            for s in self.fig.layout.shapes
+            if s.type == 'line' and s.line.color == '#FF0000' and s.line.dash == 'dash'
+        ]
+        self.assertTrue(len(shapes) > 0, 'Red dashed hline for average peaks not found')
 
     def test_18_average_troughs_hline(self):
         """Average troughs horizontal line: blue dashed."""
-        shapes = [s for s in self.fig.layout.shapes
-                  if s.type == 'line' and s.line.color == '#0000FF' and s.line.dash == 'dash']
-        self.assertTrue(len(shapes) > 0, "Blue dashed hline for average troughs not found")
+        shapes = [
+            s
+            for s in self.fig.layout.shapes
+            if s.type == 'line' and s.line.color == '#0000FF' and s.line.dash == 'dash'
+        ]
+        self.assertTrue(len(shapes) > 0, 'Blue dashed hline for average troughs not found')
 
 
 # ===================================================================
@@ -290,7 +303,7 @@ class TestPlotlyInteractiveFeatures(unittest.TestCase):
         """Range selector should have 1Y, 3Y, 5Y, ALL buttons."""
         # Range selector is on xaxis (panel 1)
         rs = self.fig.layout.xaxis.rangeselector
-        self.assertIsNotNone(rs, "Range selector not found on xaxis")
+        self.assertIsNotNone(rs, 'Range selector not found on xaxis')
         labels = [b.label for b in rs.buttons]
         for expected in ['1Y', '3Y', '5Y', 'ALL']:
             self.assertIn(expected, labels, f"Button '{expected}' missing from range selector")
@@ -315,9 +328,7 @@ class TestPlotlyOutput(unittest.TestCase):
     def setUpClass(cls):
         cls.tmpdir = tempfile.mkdtemp()
         above_ma, sp500 = _make_synthetic_data()
-        cls.fig, _ = plot_breadth_and_sp500_with_peaks(
-            above_ma, sp500, short_ma_period=10, output_dir=cls.tmpdir
-        )
+        cls.fig, _ = plot_breadth_and_sp500_with_peaks(above_ma, sp500, short_ma_period=10, output_dir=cls.tmpdir)
 
     @classmethod
     def tearDownClass(cls):
@@ -326,7 +337,7 @@ class TestPlotlyOutput(unittest.TestCase):
     def test_22_html_file_generated(self):
         """HTML file should be generated in output_dir."""
         html_path = os.path.join(self.tmpdir, 'market_breadth.html')
-        self.assertTrue(os.path.exists(html_path), f"HTML not found at {html_path}")
+        self.assertTrue(os.path.exists(html_path), f'HTML not found at {html_path}')
         # Should be non-trivial size
         self.assertGreater(os.path.getsize(html_path), 1000)
 
@@ -335,7 +346,8 @@ class TestPlotlyOutput(unittest.TestCase):
         png_path = os.path.join(self.tmpdir, 'market_breadth.png')
         try:
             import kaleido  # noqa: F401
-            self.assertTrue(os.path.exists(png_path), "kaleido available but PNG not found")
+
+            self.assertTrue(os.path.exists(png_path), 'kaleido available but PNG not found')
         except ImportError:
             # kaleido not installed, PNG generation is optional
             pass
@@ -360,26 +372,24 @@ class TestPlotlyBearishBackground(unittest.TestCase):
         long = self.chart_data['breadth_ma_200']
         regions = detect_bearish_regions(trend, short, long)
         if len(regions) > 0:
-            self.assertTrue(len(self.vrects) > 0,
-                            "Bearish regions exist but no vrect shapes found")
+            self.assertTrue(len(self.vrects) > 0, 'Bearish regions exist but no vrect shapes found')
         else:
-            self.skipTest("No bearish regions in synthetic data")
+            self.skipTest('No bearish regions in synthetic data')
 
     def test_25_vrect_color_correct(self):
         """Vrect fillcolor should be 'rgba(255, 230, 245, 0.3)'."""
         if len(self.vrects) == 0:
-            self.skipTest("No vrects to check")
+            self.skipTest('No vrects to check')
         for v in self.vrects:
-            self.assertEqual(v.fillcolor, 'rgba(255, 210, 240, 0.35)',
-                             f"Unexpected fillcolor: {v.fillcolor}")
+            self.assertEqual(v.fillcolor, 'rgba(255, 210, 240, 0.35)', f'Unexpected fillcolor: {v.fillcolor}')
 
     def test_26_vrect_covers_both_panels(self):
         """Vrects should span both panels (yref covers full y domain)."""
         if len(self.vrects) == 0:
-            self.skipTest("No vrects to check")
+            self.skipTest('No vrects to check')
         # When row='all' is used, vrects are duplicated for each subplot
         # or use paper coordinates. Either way, check some vrects reference y/y2
-        yrefs = set(v.yref for v in self.vrects)
+        {v.yref for v in self.vrects}
         # Plotly may use 'y', 'y2', 'paper', or 'y domain'/'y2 domain'
         # At minimum, vrects should exist
         self.assertTrue(len(self.vrects) > 0)
@@ -398,7 +408,7 @@ class TestPlotlyIntegration(unittest.TestCase):
         sp500_file = os.path.join(data_dir, 'sp500_price_data.csv')
 
         if not (os.path.exists(stocks_file) and os.path.exists(sp500_file)):
-            self.skipTest("Saved data not available in data/")
+            self.skipTest('Saved data not available in data/')
 
         # Load real data
         stock_data = pd.read_csv(stocks_file, index_col=0, parse_dates=True)
@@ -408,12 +418,13 @@ class TestPlotlyIntegration(unittest.TestCase):
 
         # Calculate breadth
         from market_breadth import calculate_above_ma
+
         above_ma_200 = calculate_above_ma(stock_data, window=200)
 
         # Align dates
         common_dates = above_ma_200.index.intersection(sp500_data.index)
         if len(common_dates) < 200:
-            self.skipTest("Not enough common dates in saved data")
+            self.skipTest('Not enough common dates in saved data')
 
         above_ma_200 = above_ma_200.loc[common_dates]
         sp500_data = sp500_data.loc[common_dates]
@@ -421,13 +432,11 @@ class TestPlotlyIntegration(unittest.TestCase):
         # Generate chart
         tmpdir = tempfile.mkdtemp()
         try:
-            fig, _ = plot_breadth_and_sp500_with_peaks(
-                above_ma_200, sp500_data, short_ma_period=10, output_dir=tmpdir
-            )
+            fig, _ = plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, short_ma_period=10, output_dir=tmpdir)
             # Basic sanity checks
-            self.assertGreater(len(fig.data), 0, "No traces in figure")
+            self.assertGreater(len(fig.data), 0, 'No traces in figure')
             html_path = os.path.join(tmpdir, 'market_breadth.html')
-            self.assertTrue(os.path.exists(html_path), "HTML file not generated")
+            self.assertTrue(os.path.exists(html_path), 'HTML file not generated')
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
 

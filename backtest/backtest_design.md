@@ -154,7 +154,7 @@ sequenceDiagram
 - `numpy`: Numerical computation
 - `matplotlib`: Chart generation
 - `scipy`: Peak detection
-- `EODHD`: Stock price data retrieval API 
+- `EODHD`: Stock price data retrieval API
 
 ## 4. Multi-ETF Backtest Functionality
 
