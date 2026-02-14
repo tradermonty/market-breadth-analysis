@@ -1024,9 +1024,11 @@ class Backtest:
         trades_copy = []
         for trade in self.trades:
             trade_copy = trade.copy()
-            # Copy number of shares
+            # Keep mutable remaining shares and immutable original shares for cost allocation.
             if 'shares' in trade_copy:
-                trade_copy['shares'] = trade_copy['shares']
+                trade_copy['shares'] = int(trade_copy['shares'])
+            if trade_copy.get('action') == 'BUY' and 'shares' in trade_copy:
+                trade_copy['original_shares'] = trade_copy['shares']
             trades_copy.append(trade_copy)
 
         # Debug information
@@ -1058,6 +1060,7 @@ class Backtest:
                         continue
 
                     matched_shares = min(remaining_shares, buy_trade['shares'])
+                    original_shares = buy_trade.get('original_shares', buy_trade['shares'])
 
                     trade_pairs.append(
                         {
@@ -1066,7 +1069,7 @@ class Backtest:
                             'shares': matched_shares,
                             'buy_price': buy_trade['price'],
                             'sell_price': trade['price'],
-                            'buy_cost': buy_trade['total_cost'] * (matched_shares / buy_trade['shares']),
+                            'buy_cost': buy_trade['total_cost'] * (matched_shares / original_shares),
                             'sell_proceeds': trade['total_proceeds'] * (matched_shares / trade['shares']),
                         }
                     )

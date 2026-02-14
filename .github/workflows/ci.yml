@@ -87,3 +87,4 @@ jobs:
           python tests/test_trade_logging.py
           python tests/test_plotly_chart.py
           PYTHONPATH=. python tests/test_market_breadth_utils.py
+          python tests/test_market_breadth_trader.py

@@ -7,7 +7,6 @@ import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-import alpaca_trade_api as tradeapi
 import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
@@ -95,7 +94,7 @@ class MarketBreadthTrader:
         self.test_dt = None  # Variable to hold current time in test mode
 
         # Initialize Alpaca API
-        self.api = tradeapi.REST(ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL, api_version='v2')
+        self.api = self._initialize_alpaca()
 
         # Initialize variables
         self.current_position = 0
@@ -111,6 +110,17 @@ class MarketBreadthTrader:
         logger.info(f'MarketBreadthTrader initialized with symbol: {self.symbol}')
         if self.testmode:
             logger.info(f'Test mode enabled for date: {self.test_date}')
+
+    def _initialize_alpaca(self):
+        """Initialize Alpaca API client only when needed."""
+        try:
+            import alpaca_trade_api as tradeapi
+        except ImportError as exc:
+            raise ImportError(
+                'alpaca-trade-api is required for live trading. Install it with: pip install alpaca-trade-api'
+            ) from exc
+
+        return tradeapi.REST(ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL, api_version='v2')
 
     def is_closing_time_range(self, range_minutes=20):
         """Check if current time is within the specified minutes before market close"""
@@ -293,7 +303,9 @@ class MarketBreadthTrader:
 
             # Get historical data from FMP - using data up to yesterday
             logger.info('Getting historical data from FMP...')
-            historical_data = get_multiple_stock_data(sp500_tickers, start_date, yesterday, use_saved_data=True)
+            historical_data = get_multiple_stock_data(
+                sp500_tickers, start_date, yesterday, use_saved_data=self.use_saved_data
+            )
             logger.info(f'Got historical data: {len(historical_data.columns)} tickers, {len(historical_data)} days')
 
             # Get today's latest data from Alpaca

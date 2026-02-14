@@ -328,6 +328,51 @@ class TestTradeLogging(unittest.TestCase):
         if os.path.exists(custom_filename):
             os.remove(custom_filename)
 
+    def test_11_buy_cost_allocation_with_split_exits(self):
+        """Test: Split exits allocate buy_cost proportionally to original BUY shares."""
+        backtest = Backtest(
+            start_date=self.start_date,
+            end_date=self.end_date,
+            symbol=self.symbol,
+            use_saved_data=True,
+            no_show_plot=True,
+        )
+
+        # 1 BUY split into 2 SELLs (equivalent to partial-exit style accounting).
+        backtest.trades = [
+            {
+                'date': pd.Timestamp('2023-01-01'),
+                'action': 'BUY',
+                'price': 10.0,
+                'shares': 100,
+                'total_cost': 1000.0,
+            },
+            {
+                'date': pd.Timestamp('2023-01-10'),
+                'action': 'SELL',
+                'price': 12.0,
+                'shares': 50,
+                'total_proceeds': 600.0,
+            },
+            {
+                'date': pd.Timestamp('2023-01-20'),
+                'action': 'SELL',
+                'price': 9.0,
+                'shares': 50,
+                'total_proceeds': 450.0,
+            },
+        ]
+
+        trade_pairs = backtest._get_trade_pairs()
+        self.assertEqual(len(trade_pairs), 2)
+        self.assertAlmostEqual(trade_pairs[0]['buy_cost'], 500.0, places=6)
+        self.assertAlmostEqual(trade_pairs[1]['buy_cost'], 500.0, places=6)
+        self.assertAlmostEqual(sum(pair['buy_cost'] for pair in trade_pairs), 1000.0, places=6)
+
+        # Win/loss metrics should reflect the two split exits correctly.
+        self.assertAlmostEqual(backtest._calculate_win_rate(), 0.5, places=6)
+        self.assertAlmostEqual(backtest._calculate_profit_factor(), 2.0, places=6)
+
 
 if __name__ == '__main__':
     # Run tests with verbose output

@@ -21,10 +21,11 @@ logging.basicConfig(level=logging.INFO)
 
 
 class TestMarketBreadthTrader(unittest.TestCase):
-    @patch('alpaca_trade_api.REST')
-    def setUp(self, mock_rest):
+    @patch('trade.run_market_breadth_trade.MarketBreadthTrader._initialize_alpaca')
+    def setUp(self, mock_initialize_alpaca):
         """Test setup"""
-        self.mock_api = mock_rest.return_value
+        self.mock_api = Mock()
+        mock_initialize_alpaca.return_value = self.mock_api
         self.trader = MarketBreadthTrader(
             short_ma=8, long_ma=200, initial_capital=50000, symbol='SSO', use_saved_data=True
         )
@@ -118,10 +119,9 @@ class TestMarketBreadthTrader(unittest.TestCase):
         mock_calendar.close = '16:00'
         mock_api.get_calendar.return_value = [mock_calendar]
 
-        # Create MarketBreadthTrader instance
-        trader = MarketBreadthTrader()
-        # Replace api attribute with mock
-        trader.api = mock_api
+        # Create MarketBreadthTrader instance with mocked API initialization
+        with patch('trade.run_market_breadth_trade.MarketBreadthTrader._initialize_alpaca', return_value=mock_api):
+            trader = MarketBreadthTrader()
 
         # Case: 1 hour before market close
         with patch('trade.run_market_breadth_trade.datetime') as mock_datetime:
@@ -147,7 +147,7 @@ class TestMarketBreadthTrader(unittest.TestCase):
             mock_datetime.strptime = lambda date_str, format_str: datetime.strptime(date_str, format_str)
             self.assertFalse(trader.is_closing_time_range(60))
 
-    @patch('trade.run_market_breadth_trade.get_sp500_tickers_from_wikipedia')
+    @patch('trade.run_market_breadth_trade.get_sp500_tickers_from_fmp')
     @patch('trade.run_market_breadth_trade.get_multiple_stock_data')
     def test_analyze_market(self, mock_get_data, mock_get_tickers):
         """Test market analysis"""

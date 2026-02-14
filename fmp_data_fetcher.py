@@ -553,7 +553,7 @@ class FMPDataFetcher:
                                     'symbol': symbol,
                                     'date': earning.get('date'),
                                     'epsActual': earning.get('actualEarningResult'),
-                                    'epsEstimate': earning.get('estimatedEarning'),
+                                    'epsEstimated': earning.get('estimatedEarning'),
                                     'time': None,  # Not available in Starter
                                     'revenueActual': None,  # Not available in earnings-surprises
                                     'revenueEstimate': None,  # Not available in earnings-surprises
