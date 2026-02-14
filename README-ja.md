@@ -14,6 +14,17 @@ S&P500銘柄のマーケットブレッドを分析・可視化するツール�
 - マーケットブレッドシグナルに基づく取引戦略のバックテスト
 - 複数ETFのバックテスト機能
 
+## ライブデータ（GitHub Pages）
+
+最新の Market Breadth データは1日2回自動更新され、GitHub Pages で公開されています:
+
+| リソース | URL |
+|---|---|
+| インタラクティブチャート | [market_breadth.html](https://tradermonty.github.io/market-breadth-analysis/market_breadth.html) |
+| ダッシュボード | [index.html](https://tradermonty.github.io/market-breadth-analysis/) |
+| データCSV | [market_breadth_data.csv](https://tradermonty.github.io/market-breadth-analysis/market_breadth_data.csv) |
+| サマリーCSV | [market_breadth_summary.csv](https://tradermonty.github.io/market-breadth-analysis/market_breadth_summary.csv) |
+
 ## 必要条件
 
 - Python 3.8以上
@@ -21,7 +32,10 @@ S&P500銘柄のマーケットブレッドを分析・可視化するツール�
 - APIキー（オプション）:
   - FMP APIキー（Financial Modeling Prep）
     - 料金・ドキュメント: https://site.financialmodelingprep.com/developer/docs/
-  - 保存データを使用する場合は不要
+    - 保存データを使用する場合は不要
+  - GitHub Token（ワークフロー更新トリガー用）
+    - Fine-grained PAT、Actions: Read and write 権限
+    - `trigger_market_breadth.py` 使用時のみ必要
 
 ## インストール
 
@@ -36,14 +50,14 @@ cd market_breadth
 pip install -r requirements.txt
 ```
 
-3. 環境変数の設定（オプション - 新規データ取得時のみ必要）:
-`.env`ファイルを作成し、APIキーを設定:
-```
-FMP_API_KEY=your_fmp_api_key
-```
-または`.env.sample`ファイルを`.env`にコピーして編集:
+3. 環境変数の設定（オプション）:
+`.env.sample`ファイルを`.env`にコピーして編集:
 ```bash
 cp .env.sample .env
+```
+```
+FMP_API_KEY=your_fmp_api_key        # FMPからの新規データ取得用
+GITHUB_TOKEN=your_github_pat_here   # ワークフロー更新トリガー用（オプション）
 ```
 
 ## 使用方法
@@ -75,6 +89,35 @@ python backtest/backtest.py
 複数ETFのバックテスト:
 ```bash
 python backtest/run_multi_etf_backtest.py
+```
+
+### データ取得 / ワークフロートリガー
+
+GitHub Pages から最新データを取得、またはデータが古い場合にワークフローをトリガー:
+
+```bash
+# 自動モード: 新鮮ならフェッチ、古ければワークフロー起動（デフォルト: 12時間閾値）
+python trigger_market_breadth.py
+
+# CSVデータのフェッチのみ（トリガーなし）
+python trigger_market_breadth.py --fetch-only
+
+# GitHub Actions ワークフローを強制トリガー
+python trigger_market_breadth.py --trigger-only
+
+# 鮮度閾値を6時間に変更
+python trigger_market_breadth.py --max-age 6
+```
+
+Python から利用（LLM連携など）:
+```python
+from trigger_market_breadth import fetch_market_breadth
+
+result = fetch_market_breadth(max_age_hours=12)
+if result["status"] == "fresh":
+    csv_data = result["csv_text"]  # そのまま分析に使用
+elif result["status"] == "triggered":
+    print(result["message"])  # "Workflow triggered. Data will be ready in ~5 minutes."
 ```
 
 ### コマンドライン引数

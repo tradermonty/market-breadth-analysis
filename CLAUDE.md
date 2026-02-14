@@ -68,6 +68,21 @@ python market_breadth.py --start_date 2020-01-01
 python market_breadth.py --short_ma 20 --use_saved_data
 ```
 
+### Data Fetch / Workflow Trigger
+```bash
+# Auto mode: fetch if fresh, trigger workflow if stale
+python trigger_market_breadth.py
+
+# Fetch CSV only (no trigger)
+python trigger_market_breadth.py --fetch-only
+
+# Force trigger GitHub Actions workflow
+python trigger_market_breadth.py --trigger-only
+
+# Custom staleness threshold (6 hours)
+python trigger_market_breadth.py --max-age 6
+```
+
 ### Backtesting
 ```bash
 # Single symbol backtest (run from project root)
@@ -151,6 +166,7 @@ See `docs/trade_logging_design.md` for complete specification including:
 # ALWAYS use environment variables
 load_dotenv()
 api_key = os.getenv('FMP_API_KEY')
+github_token = os.getenv('GITHUB_TOKEN')
 
 # NEVER hardcode keys
 # NEVER commit .env files

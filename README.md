@@ -16,14 +16,28 @@ A tool for analyzing and visualizing the market breadth of S&P500 stocks.
 - Detailed trade logging with 15 data points per trade (entry/exit dates, prices, P&L, etc.)
 - Export trade logs to CSV for external analysis
 
+## Live Data (GitHub Pages)
+
+The latest market breadth data is automatically updated twice daily and published to GitHub Pages:
+
+| Resource | URL |
+|---|---|
+| Interactive Chart | [market_breadth.html](https://tradermonty.github.io/market-breadth-analysis/market_breadth.html) |
+| Dashboard | [index.html](https://tradermonty.github.io/market-breadth-analysis/) |
+| Data CSV | [market_breadth_data.csv](https://tradermonty.github.io/market-breadth-analysis/market_breadth_data.csv) |
+| Summary CSV | [market_breadth_summary.csv](https://tradermonty.github.io/market-breadth-analysis/market_breadth_summary.csv) |
+
 ## Prerequisites
 
 - Python 3.8 or higher
 - Required Python packages (listed in requirements.txt)
-- API Key (Optional):
+- API Keys (Optional):
   - FMP API Key (Financial Modeling Prep)
     - Pricing & docs: https://site.financialmodelingprep.com/developer/docs/
-  - Not required if using saved data
+    - Not required if using saved data
+  - GitHub Token (for triggering workflow updates)
+    - Fine-grained PAT with Actions: Read and write permission
+    - Only needed for `trigger_market_breadth.py`
 
 ## Installation
 
@@ -38,14 +52,14 @@ cd market_breadth
 pip install -r requirements.txt
 ```
 
-3. Set up environment variables (Optional - only needed for fetching new data):
-Create a `.env` file and set your API key:
-```
-FMP_API_KEY=your_fmp_api_key
-```
-Or copy the `.env.sample` file to `.env` and edit it:
+3. Set up environment variables (Optional):
+Copy the `.env.sample` file to `.env` and edit it:
 ```bash
 cp .env.sample .env
+```
+```
+FMP_API_KEY=your_fmp_api_key        # For fetching fresh stock data from FMP
+GITHUB_TOKEN=your_github_pat_here   # For triggering workflow updates (optional)
 ```
 
 ## Usage
@@ -88,6 +102,35 @@ python backtest/run_multi_etf_backtest.py
 
 # NOTE: Always run from the project root directory
 # Running with 'cd backtest' will save outputs to backtest/reports/ instead
+```
+
+### Fetching Data / Triggering Workflow
+
+Fetch the latest market breadth data from GitHub Pages, or trigger a workflow update if data is stale:
+
+```bash
+# Auto mode: fetch if fresh, trigger workflow if stale (default: 12h threshold)
+python trigger_market_breadth.py
+
+# Fetch CSV data only (no workflow trigger)
+python trigger_market_breadth.py --fetch-only
+
+# Force trigger the GitHub Actions workflow
+python trigger_market_breadth.py --trigger-only
+
+# Custom staleness threshold (6 hours)
+python trigger_market_breadth.py --max-age 6
+```
+
+Use from Python (e.g., LLM integration):
+```python
+from trigger_market_breadth import fetch_market_breadth
+
+result = fetch_market_breadth(max_age_hours=12)
+if result["status"] == "fresh":
+    csv_data = result["csv_text"]  # Ready to analyze
+elif result["status"] == "triggered":
+    print(result["message"])  # "Workflow triggered. Data will be ready in ~5 minutes."
 ```
 
 ### Analyzing Trade Logs
