@@ -191,13 +191,47 @@ setup_matplotlib_backend()  # Call before any plt imports
 - macOS/Windows: Tries TkAgg, falls back to Agg
 - Linux: Uses Agg (non-interactive)
 
+## Code Quality
+
+### Pre-Commit Hooks
+Pre-commit hooks enforce code quality on every commit:
+```bash
+# First-time setup
+pip install pre-commit
+pre-commit install
+
+# Run all hooks manually
+pre-commit run --all-files
+```
+
+### Linting & Formatting
+```bash
+ruff check .              # Lint check
+ruff check --fix .        # Lint with auto-fix
+ruff format .             # Format code
+codespell                 # Spell check
+bandit -c pyproject.toml -r . --exclude archive,venv311,tests  # Security scan
+```
+
+Configuration is centralized in `pyproject.toml`. Key settings:
+- Line length: 120 (data analysis friendly)
+- Quote style: single
+- Japanese comments: RUF001-003 ignored
+
+### CI Pipeline
+GitHub Actions runs on PRs and pushes to `main`:
+- **lint**: ruff check + format check + codespell
+- **security**: bandit + pip-audit + detect-secrets
+- **test**: unit tests (API-free)
+
 ## Git Workflow
 
 ### Before Committing
-1. Run all tests: `python tests/test_trade_logging.py`
-2. Ensure venv and CSV files are not staged (check .gitignore)
-3. Place test files in `tests/` directory
-4. Design docs go in `docs/` directory
+1. Pre-commit hooks run automatically (`pre-commit install` required once)
+2. Run all tests: `python tests/test_trade_logging.py`
+3. Ensure venv and CSV files are not staged (check .gitignore)
+4. Place test files in `tests/` directory
+5. Design docs go in `docs/` directory
 
 ### Commit Message Format
 ```

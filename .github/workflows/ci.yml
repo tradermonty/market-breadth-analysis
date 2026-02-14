@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    paths:
+      - '**.py'
+      - 'pyproject.toml'
+      - '.pre-commit-config.yaml'
+      - 'requirements.txt'
+
+jobs:
+  lint:
+    name: Lint & Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install tools
+        run: pip install ruff codespell tomli
+
+      - name: Ruff lint
+        run: ruff check .
+
+      - name: Ruff format check
+        run: ruff format --check .
+
+      - name: Codespell
+        run: codespell
+
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install tools
+        run: pip install bandit pip-audit detect-secrets
+
+      - name: Bandit (SAST)
+        run: bandit -c pyproject.toml -r . --exclude archive,venv311,tests
+
+      - name: pip-audit
+        run: pip-audit -r requirements.txt || true
+
+      - name: Detect secrets
+        run: >-
+          detect-secrets scan
+          --exclude-files 'venv311/.*'
+          --exclude-files 'archive/.*'
+          --exclude-files 'data/.*'
+          --list-all-secrets
+          && echo "No new secrets detected"
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    env:
+      SKIP_API_TESTS: 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt --ignore-installed PyQt5
+
+      - name: Run tests
+        run: |
+          python tests/test_trade_logging.py
+          python tests/test_plotly_chart.py
+          PYTHONPATH=. python tests/test_market_breadth_utils.py

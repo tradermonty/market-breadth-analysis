@@ -245,6 +245,36 @@ In the sample graph above:
 - Pink background: Area indicating market strength and trend direction
 - Black dots: Peak points (market reversal points)
 
+## Development Setup
+
+### Pre-Commit Hooks
+
+This project uses pre-commit hooks to enforce code quality:
+
+```bash
+pip install pre-commit
+pre-commit install
+```
+
+After setup, the following checks run automatically on every commit:
+- **ruff**: Linting and formatting (replaces flake8/isort/black)
+- **codespell**: Spell checking
+- **bandit**: Security scanning (SAST)
+- **detect-secrets**: Credential leak prevention
+- Trailing whitespace, EOF fixes, YAML validation
+
+To run all hooks manually:
+```bash
+pre-commit run --all-files
+```
+
+### CI Pipeline
+
+GitHub Actions CI runs on PRs and pushes to `main` with three jobs:
+- **lint**: ruff check + format check + codespell
+- **security**: bandit + pip-audit + detect-secrets
+- **test**: Unit tests (no API key required)
+
 ## System Requirements
 
 - macOS: TkAgg backend
@@ -283,4 +313,4 @@ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
 AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE. 
+SOFTWARE.

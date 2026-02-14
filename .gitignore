@@ -13,6 +13,7 @@ archive/*
 !archive/.gitkeep
 __pycache__/
 *.pyc
+.pytest_cache/
 .vscode/
 venv/
 venv311/

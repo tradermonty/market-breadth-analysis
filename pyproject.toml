@@ -1,0 +1,55 @@
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+exclude = ["archive/", "venv311/"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "I",    # isort
+    "W",    # pycodestyle warnings
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "PIE",  # flake8-pie
+    "SIM",  # flake8-simplify
+    "RUF",  # ruff-specific rules
+]
+ignore = [
+    "E501",    # line too long (handled by formatter)
+    "RUF001",  # ambiguous unicode (Japanese comments in fmp_data_fetcher.py)
+    "RUF002",  # ambiguous unicode docstring
+    "RUF003",  # ambiguous unicode comment
+    "SIM102",  # nested if (intentional for readability in complex trading logic)
+    "SIM108",  # ternary operator (reduces readability for complex conditions)
+    "SIM110",  # reimplemented builtin (any/all) - not always clearer
+    "B905",    # zip without strict= (Python 3.10+ only)
+    "UP015",   # redundant open mode (explicit is fine)
+    "C408",    # unnecessary dict() call (idiomatic for Plotly keyword args)
+    "RUF013",  # implicit Optional (existing type annotations)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*.py" = ["E501", "E402"]
+
+[tool.ruff.format]
+quote-style = "single"
+indent-style = "space"
+
+[tool.codespell]
+skip = "*.csv,*.json,*.html,*.png,./data/*,./reports/*,./venv311/*,./archive/*,./.git/*"
+ignore-words-list = "ags,hist,thr,assertIn,trough"
+
+[tool.bandit]
+exclude_dirs = ["tests", "archive", "venv311"]
+skips = ["B101"]
+
+# [tool.mypy]
+# python_version = "3.10"
+# warn_return_any = true
+# warn_unused_configs = true
+# ignore_missing_imports = true
+# exclude = ["archive/", "venv311/"]
+# # TODO: Enable when type hints are added across the codebase
+# # Currently only fmp_data_fetcher.py has type annotations
