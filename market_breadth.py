@@ -566,7 +566,7 @@ def plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, short_ma_period=
     except Exception as e:
         print(f"PNG export skipped (kaleido not installed): {e}")
 
-    return fig
+    return fig, chart_data
 
 def get_stock_price_data(symbol, start_date, end_date, use_saved_data=False):
     """
@@ -637,10 +637,15 @@ def export_chart_data_to_csv(chart_data, short_ma_period, filename=None):
     ]
     df = df[column_order]
     
-    # Save to CSV
+    # Save to CSV (date-stamped)
     df.to_csv(csv_path, index=False)
     print(f"Chart data exported to {csv_path}")
-    
+
+    # Save stable-name CSV for programmatic access (e.g., LLM consumption)
+    stable_csv_path = reports_dir / 'market_breadth_data.csv'
+    df.to_csv(stable_csv_path, index=False)
+    print(f"Stable CSV exported to {stable_csv_path}")
+
     # Create summary data
     summary_data = {
         'Metric': [
@@ -670,7 +675,12 @@ def export_chart_data_to_csv(chart_data, short_ma_period, filename=None):
     summary_path = reports_dir / summary_filename
     summary_df.to_csv(summary_path, index=False)
     print(f"Summary data exported to {summary_path}")
-    
+
+    # Save stable-name summary CSV
+    stable_summary_path = reports_dir / 'market_breadth_summary.csv'
+    summary_df.to_csv(stable_summary_path, index=False)
+    print(f"Stable summary exported to {stable_summary_path}")
+
     return csv_path, summary_path
 
 def main():
@@ -680,7 +690,7 @@ def main():
     parser.add_argument('--end_date', type=str, help='End date (YYYY-MM-DD format). If not specified, today\'s date will be used.')
     parser.add_argument('--short_ma', type=int, default=8, choices=[5, 8, 10, 20], help='Short-term moving average period (5, 8, 10, or 20)')
     parser.add_argument('--use_saved_data', action='store_true', help='Use saved data instead of fetching from FMP')
-    parser.add_argument('--export_csv', action='store_true', help='Export chart data to CSV files')
+    parser.add_argument('--no_export_csv', action='store_true', help='Skip CSV data export')
 
     # Set up command line arguments
     args = parser.parse_args()
@@ -764,11 +774,10 @@ def main():
             print(f"Number of common dates: {len(common_dates)}")
 
             # Visualize Breadth Index and S&P 500 price with specified date range
-            plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, args.short_ma, start_date, end_date)
-            
-            # Export to CSV if requested
-            if args.export_csv:
-                chart_data = extract_chart_data(above_ma_200, sp500_data, args.short_ma, start_date, end_date)
+            fig, chart_data = plot_breadth_and_sp500_with_peaks(above_ma_200, sp500_data, args.short_ma, start_date, end_date)
+
+            # Export CSV data for LLM/programmatic consumption (default: enabled)
+            if not args.no_export_csv:
                 export_chart_data_to_csv(chart_data, args.short_ma)
         else:
             print("Error: Ticker list could not be retrieved.")

@@ -55,6 +55,8 @@ jobs:
         test -f reports/market_breadth.html && echo "OK: HTML chart exists" || echo "WARN: HTML chart missing"
         test -f reports/market_breadth.png && echo "OK: PNG fallback exists" || echo "WARN: PNG fallback missing (kaleido issue)"
         test -f reports/index.html && echo "OK: index.html exists" || echo "ERROR: index.html missing"
+        test -f reports/market_breadth_data.csv && echo "OK: CSV data exists" || echo "WARN: CSV data missing"
+        test -f reports/market_breadth_summary.csv && echo "OK: CSV summary exists" || echo "WARN: CSV summary missing"
 
     - name: Create .nojekyll file
       run: touch reports/.nojekyll

@@ -58,7 +58,7 @@ def _get_chart_data_and_fig(short_ma=10, output_dir=None):
     if output_dir is None:
         output_dir = tempfile.mkdtemp()
 
-    fig = plot_breadth_and_sp500_with_peaks(
+    fig, _ = plot_breadth_and_sp500_with_peaks(
         above_ma, sp500, short_ma_period=short_ma, output_dir=output_dir
     )
     return chart_data, fig, output_dir
@@ -315,7 +315,7 @@ class TestPlotlyOutput(unittest.TestCase):
     def setUpClass(cls):
         cls.tmpdir = tempfile.mkdtemp()
         above_ma, sp500 = _make_synthetic_data()
-        cls.fig = plot_breadth_and_sp500_with_peaks(
+        cls.fig, _ = plot_breadth_and_sp500_with_peaks(
             above_ma, sp500, short_ma_period=10, output_dir=cls.tmpdir
         )
 
@@ -421,7 +421,7 @@ class TestPlotlyIntegration(unittest.TestCase):
         # Generate chart
         tmpdir = tempfile.mkdtemp()
         try:
-            fig = plot_breadth_and_sp500_with_peaks(
+            fig, _ = plot_breadth_and_sp500_with_peaks(
                 above_ma_200, sp500_data, short_ma_period=10, output_dir=tmpdir
             )
             # Basic sanity checks
