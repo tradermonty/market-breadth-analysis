@@ -13,6 +13,13 @@ S&P500銘柄のマーケットブレッドを分析・可視化するツール�
 - APIキー不要で履歴データの保存と再利用
 - マーケットブレッドシグナルに基づく取引戦略のバックテスト
 - 複数ETFのバックテスト機能
+- 1トレードあたり15項目の詳細トレードログ（エントリー/エグジット日時、価格、損益など）
+- トレードログCSVエクスポート機能
+- TradingView Pine Script互換バックテストモード
+- 2段階エグジット戦略（50%利確＋トレンドブレイク）
+- ボラティリティベース（ATR）ストップロス
+- 強気相場でのピークエグジット抑制機能
+- Plotlyベースのインタラクティブチャート
 
 ## ライブデータ（GitHub Pages）
 
@@ -81,14 +88,25 @@ python market_breadth.py --start_date 2020-01-01 --short_ma 20 --use_saved_data
 
 ### バックテスト
 
-単一戦略のバックテスト:
+単一銘柄のバックテスト:
 ```bash
-python backtest/backtest.py
+# 基本的なバックテスト（トレードログ付き）
+python backtest/backtest.py --symbol SPY --use_saved_data
+
+# パラメータ指定
+python backtest/backtest.py --symbol SSO --start_date 2020-01-01 --end_date 2023-12-31 --stop_loss_pct 0.08 --use_saved_data
+
+# デバッグモード（詳細なトレードマッチング表示）
+python backtest/backtest.py --symbol QQQ --debug --use_saved_data
 ```
 
-複数ETFのバックテスト:
+複数ETFのバックテスト（各銘柄のトレードログを自動生成）:
 ```bash
+# プロジェクトルートから実行（reports/に出力するため）
 python backtest/run_multi_etf_backtest.py
+
+# 注意: 必ずプロジェクトルートから実行してください
+# cd backtest で実行すると backtest/reports/ に出力されます
 ```
 
 ### データ取得 / ワークフロートリガー
@@ -129,12 +147,23 @@ elif result["status"] == "triggered":
 - `--use_saved_data`: FMPから取得せずに保存済みデータを使用
 
 #### バックテスト
-- `--start_date`: バックテスト開始日
-- `--end_date`: バックテスト終了日
-- `--initial_capital`: バックテストの初期資金
-- `--position_size`: 資金に対するポジションサイズの割合
-- `--stop_loss`: ストップロス率
-- `--take_profit`: 利確率
+- `--start_date`: バックテスト開始日（YYYY-MM-DD）
+- `--end_date`: バックテスト終了日（YYYY-MM-DD）
+- `--symbol`: バックテスト対象銘柄（例: SPY, QQQ, SSO）
+- `--initial_capital`: 初期資金（デフォルト: 50000）
+- `--stop_loss_pct`: ストップロス率（デフォルト: 0.08）
+- `--use_trailing_stop`: トレーリングストップを使用
+- `--trailing_stop_pct`: トレーリングストップ率（デフォルト: 0.2）
+- `--ma_type`: 移動平均の種類: 'ema' または 'sma'（デフォルト: ema）
+- `--debug`: デバッグモード（詳細出力）
+- `--no_show_plot`: チャートを表示せずに保存のみ
+- `--tv_mode`: TradingView互換シグナル検出を有効化
+- `--tv_pine_compat`: Pine互換TVバックテストモード（厳密なデフォルト値）
+- `--tv_breadth_csv`: ブレッドCSVのパス（例: S5THエクスポート）
+- `--tv_price_csv`: TV出力の価格CSVのパス
+- `--two_stage_exit`: 2段階エグジット（50%利確＋トレンドブレイク）
+- `--use_volatility_stop`: ATRベースのボラティリティストップを使用
+- `--bullish_regime_suppression`: 強気相場でのピークエグジット抑制
 
 ### データの保存と再利用
 
@@ -161,7 +190,7 @@ Financial Modeling Prep (FMP)
 - 米国株・世界株、ETF、ファンダメンタル等を提供
 - 無料 "demo" キーが利用可能（速度・機能制限あり）
 - 上位プランでより高いレートリミット・履歴期間を利用可能
-- S&P500ティッカーリストはWikipediaから取得
+- S&P500ティッカーリストはFMP APIから取得
 - ドキュメント: https://site.financialmodelingprep.com/developer/docs/
 - 特殊ティッカーシンボルの処理
   - ティッカー内のドット(.)はハイフン(-)に変換
@@ -172,8 +201,8 @@ Financial Modeling Prep (FMP)
 以下のファイルが`reports/`ディレクトリに生成されます:
 - `market_breadth_YYYYMMDD.png`: ブレッド指標とS&P500の価格変動を示すグラフ
 - `market_breadth_YYYYMMDD.csv`: ブレッド指標の数値データ
-- `backtest_results_YYYYMMDD.csv`: バックテスト結果とパフォーマンス指標
-- `multi_etf_backtest_results_YYYYMMDD.csv`: 複数ETFバックテスト結果
+- `backtest_results_{SYMBOL}.png`: 各銘柄のバックテストチャート
+- `trade_log_{SYMBOL}_{START}_{END}.csv`: 1トレードあたり15列の詳細トレードログ
 - `backtest_results_summary.md`: 詳細な結果レポート（Markdown形式）
 - `backtest_results_summary.csv`: 結果データ（CSV形式）
 

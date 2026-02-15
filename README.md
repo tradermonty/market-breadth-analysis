@@ -15,6 +15,11 @@ A tool for analyzing and visualizing the market breadth of S&P500 stocks.
 - Multi-ETF backtesting capabilities
 - Detailed trade logging with 15 data points per trade (entry/exit dates, prices, P&L, etc.)
 - Export trade logs to CSV for external analysis
+- TradingView Pine Script compatible backtest mode
+- Two-stage exit strategy (50% profit-take + trend break)
+- Volatility-based (ATR) stop loss
+- Bullish regime suppression for peak exits
+- Plotly-based interactive charts (market breadth visualization)
 
 ## Live Data (GitHub Pages)
 
@@ -172,6 +177,13 @@ print(df.groupby('entry_reason')['pnl_dollar'].agg(['count', 'mean', 'sum']))
 - `--ma_type`: Moving average type: 'ema' or 'sma' (default: ema)
 - `--debug`: Enable debug mode with verbose output
 - `--no_show_plot`: Save charts without displaying (useful for batch processing)
+- `--tv_mode`: Enable TradingView-aligned signal detection
+- `--tv_pine_compat`: Enable Pine-compatible TV backtest mode (strict defaults)
+- `--tv_breadth_csv`: Path to breadth CSV (e.g., S5TH export)
+- `--tv_price_csv`: Path to TV-exported price CSV
+- `--two_stage_exit`: Enable two-stage exit (50% profit-take + trend break)
+- `--use_volatility_stop`: Use ATR-based volatility stop instead of fixed stop
+- `--bullish_regime_suppression`: Suppress peak exits when breadth is above threshold
 
 ### Data Storage and Reuse
 
@@ -198,7 +210,7 @@ Financial Modeling Prep (FMP)
 - Provides US & global stock, ETF, and fundamental data
 - Free "demo" key available (limited speed / features)
 - Higher-tier plans unlock higher rate limits & historical coverage
-- S&P 500 ticker list is fetched from Wikipedia
+- S&P 500 ticker list is fetched via FMP API
 - Documentation: https://site.financialmodelingprep.com/developer/docs/
 
 ## Output
@@ -277,9 +289,8 @@ GitHub Actions CI runs on PRs and pushes to `main` with three jobs:
 
 ## System Requirements
 
-- macOS: TkAgg backend
-- Windows: Qt5Agg backend
-- Linux: Agg backend (non-interactive)
+- Market breadth charts use Plotly (browser-based, no OS-specific backend needed)
+- Backtest charts use Matplotlib (macOS: TkAgg, Windows: Qt5Agg, Linux: Agg)
 - Minimum 8GB RAM recommended for backtesting
 - SSD storage recommended for faster data access
 

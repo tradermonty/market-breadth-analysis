@@ -27,6 +27,10 @@ Market Breadth Analysis Tool - A quantitative trading system that analyzes S&P50
 - Trade logging system records 15 data points per completed trade
 - Uses `_process_exit_fifo()` to match exits with entries chronologically
 - `save_trade_log()` exports CSV files: `reports/trade_log_{SYMBOL}_{START}_{END}.csv`
+- TradingView Pine Script compatible mode (`--tv_pine_compat`) with strict parameter defaults
+- Two-stage exit (`--two_stage_exit`): 50% profit-take at peak + trend-break exit for remainder
+- Volatility-based stop (`--use_volatility_stop`): ATR-based dynamic stop loss
+- Bullish regime suppression (`--bullish_regime_suppression`): suppress peak exits when breadth is high
 
 **Market Breadth Calculation** (`market_breadth.py`)
 - `calculate_above_ma()` computes percentage of stocks above 200-day MA
@@ -38,7 +42,9 @@ Market Breadth Analysis Tool - A quantitative trading system that analyzes S&P50
 
 ### Run All Tests
 ```bash
-python tests/test_trade_logging.py      # Trade logging unit tests (10 cases)
+python tests/test_trade_logging.py      # Trade logging unit tests (11 cases)
+python tests/test_tv_pine_compat.py     # TradingView Pine compat tests (7 cases)
+python tests/test_market_breadth_trader.py  # Market breadth trader tests (9 cases)
 python tests/test_sp500_fetch.py        # Data fetching tests
 python tests/test_market_breadth_utils.py
 ```
@@ -105,6 +111,13 @@ python backtest/backtest.py --debug --symbol SSO --use_saved_data
 - `--stop_loss_pct`: Fixed stop loss percentage (default: 0.08)
 - `--use_trailing_stop`: Enable trailing stop instead of fixed stop
 - `--ma_type`: 'ema' or 'sma' for moving average calculation
+- `--tv_mode`: Enable TradingView-aligned signal detection
+- `--tv_pine_compat`: Enable Pine-compatible TV backtest mode (strict defaults)
+- `--tv_breadth_csv`: Path to breadth CSV (e.g., S5TH export with date/close columns)
+- `--tv_price_csv`: Path to TV-exported price CSV (date,open,high,low,close)
+- `--two_stage_exit`: Enable two-stage exit (50% profit-take + trend break)
+- `--use_volatility_stop`: Use ATR-based volatility stop instead of fixed stop
+- `--bullish_regime_suppression`: Suppress peak exits when breadth is above threshold
 
 ## Data Management
 
@@ -183,13 +196,14 @@ from market_breadth import (
 )
 ```
 
-### Matplotlib Backend Handling
-The system auto-detects OS and sets appropriate backend:
-```python
-setup_matplotlib_backend()  # Call before any plt imports
-```
-- macOS/Windows: Tries TkAgg, falls back to Agg
-- Linux: Uses Agg (non-interactive)
+### Charting Libraries
+- **market_breadth.py**: Uses Plotly for interactive charts (browser-based, no OS-specific backend needed)
+  - `plot_breadth_and_sp500_with_peaks()` returns a Plotly `Figure` object
+  - Exports to HTML (interactive) and optionally PNG (requires kaleido)
+- **backtest/backtest.py**: Uses Matplotlib for backtest charts
+  - Has its own `_setup_matplotlib_backend()` method
+  - macOS/Windows: Tries TkAgg, falls back to Agg
+  - Linux: Uses Agg (non-interactive)
 
 ## Code Quality
 
@@ -257,7 +271,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 ### When Adding New Entry/Exit Signals
 1. Add reason string to `_execute_entry()` or `_execute_exit()` calls
 2. Entry reasons: "short_ma_bottom", "long_ma_bottom", "background_color_change"
-3. Exit reasons: "peak exit", "stop loss", "background color change"
+3. Exit reasons: "peak exit", "peak exit (stage 1)", "trend break exit (stage 2)", "stop loss", "background color change"
 4. These appear in trade log CSV for signal analysis
 
 ### FMP API Compliance
@@ -280,3 +294,5 @@ if long_ma_trend[i] == -1 and short_ma[i] < long_ma[i]:
 - Design docs: `docs/` directory
 - Archives: `archive/` (old versions, not active)
 - Trading automation: `trade/` (separate from backtesting)
+- Scripts: `scripts/` (TV-Python comparison tools)
+- RSP breadth strategy: `rsp_breadth_strategy/` (RSP breadth sub-project)
