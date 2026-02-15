@@ -378,7 +378,14 @@ def detect_bearish_regions(breadth_ma_200_trend, breadth_ma_short, breadth_ma_20
 
 
 def plot_breadth_and_sp500_with_peaks(
-    above_ma_200, sp500_data, short_ma_period=10, start_date=None, end_date=None, output_dir='reports'
+    above_ma_200,
+    sp500_data,
+    short_ma_period=10,
+    start_date=None,
+    end_date=None,
+    output_dir='reports',
+    tv_peak_signals=None,
+    tv_trough_signals=None,
 ):
     """Visualize Breadth Index and S&P 500 price using Plotly.
 
@@ -503,6 +510,128 @@ def plot_breadth_and_sp500_with_peaks(
             row=2,
             col=1,
         )
+
+    # --- TV mode signal markers ---
+    if tv_peak_signals:
+        pivot_dates = [pv[0] for pv in tv_peak_signals.values()]
+        confirm_dates = list(tv_peak_signals.keys())
+        # Filter to dates within the chart range
+        valid_pivot = [d for d in pivot_dates if d in breadth_ma_200.index]
+        valid_confirm = [d for d in confirm_dates if d in breadth_ma_200.index]
+
+        if valid_pivot:
+            fig.add_trace(
+                go.Scatter(
+                    x=valid_pivot,
+                    y=breadth_ma_200.loc[valid_pivot].values,
+                    name='TV Peak (pivot)',
+                    mode='markers',
+                    marker=dict(color='#FF0000', size=14, symbol='diamond'),
+                ),
+                row=2,
+                col=1,
+            )
+            sp_valid = [d for d in valid_pivot if d in sp500_data.index]
+            if sp_valid:
+                fig.add_trace(
+                    go.Scatter(
+                        x=sp_valid,
+                        y=sp500_data.loc[sp_valid].values,
+                        name='TV Peak (pivot) on S&P',
+                        mode='markers',
+                        marker=dict(color='#FF0000', size=10, symbol='diamond'),
+                    ),
+                    row=1,
+                    col=1,
+                )
+        if valid_confirm:
+            fig.add_trace(
+                go.Scatter(
+                    x=valid_confirm,
+                    y=breadth_ma_200.loc[valid_confirm].values,
+                    name='TV Peak (confirm)',
+                    mode='markers+text',
+                    marker=dict(color='#FF0000', size=12, symbol='x'),
+                    text=['\u2192 confirm'] * len(valid_confirm),
+                    textposition='top right',
+                    textfont=dict(size=9, color='#FF0000'),
+                ),
+                row=2,
+                col=1,
+            )
+            sp_confirm = [d for d in valid_confirm if d in sp500_data.index]
+            if sp_confirm:
+                fig.add_trace(
+                    go.Scatter(
+                        x=sp_confirm,
+                        y=sp500_data.loc[sp_confirm].values,
+                        name='TV Peak (confirm) on S&P',
+                        mode='markers',
+                        marker=dict(color='#FF0000', size=10, symbol='x'),
+                    ),
+                    row=1,
+                    col=1,
+                )
+
+    if tv_trough_signals:
+        pivot_dates = [pv[0] for pv in tv_trough_signals.values()]
+        confirm_dates = list(tv_trough_signals.keys())
+        valid_pivot = [d for d in pivot_dates if d in breadth_ma_200.index]
+        valid_confirm = [d for d in confirm_dates if d in breadth_ma_200.index]
+
+        if valid_pivot:
+            fig.add_trace(
+                go.Scatter(
+                    x=valid_pivot,
+                    y=breadth_ma_200.loc[valid_pivot].values,
+                    name='TV Trough (pivot)',
+                    mode='markers',
+                    marker=dict(color='#00CC00', size=14, symbol='diamond'),
+                ),
+                row=2,
+                col=1,
+            )
+            sp_valid = [d for d in valid_pivot if d in sp500_data.index]
+            if sp_valid:
+                fig.add_trace(
+                    go.Scatter(
+                        x=sp_valid,
+                        y=sp500_data.loc[sp_valid].values,
+                        name='TV Trough (pivot) on S&P',
+                        mode='markers',
+                        marker=dict(color='#00CC00', size=10, symbol='diamond'),
+                    ),
+                    row=1,
+                    col=1,
+                )
+        if valid_confirm:
+            fig.add_trace(
+                go.Scatter(
+                    x=valid_confirm,
+                    y=breadth_ma_200.loc[valid_confirm].values,
+                    name='TV Trough (confirm)',
+                    mode='markers+text',
+                    marker=dict(color='#00CC00', size=12, symbol='x'),
+                    text=['\u2192 confirm'] * len(valid_confirm),
+                    textposition='top right',
+                    textfont=dict(size=9, color='#00CC00'),
+                ),
+                row=2,
+                col=1,
+            )
+            sp_confirm = [d for d in valid_confirm if d in sp500_data.index]
+            if sp_confirm:
+                fig.add_trace(
+                    go.Scatter(
+                        x=sp_confirm,
+                        y=sp500_data.loc[sp_confirm].values,
+                        name='TV Trough (confirm) on S&P',
+                        mode='markers',
+                        marker=dict(color='#00CC00', size=10, symbol='x'),
+                    ),
+                    row=1,
+                    col=1,
+                )
 
     # Average Peaks horizontal line
     fig.add_hline(

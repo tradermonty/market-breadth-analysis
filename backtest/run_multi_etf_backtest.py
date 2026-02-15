@@ -29,6 +29,25 @@ def run_multi_etf_backtest(
     ma_type='ema',
     stop_loss_pct=0.10,
     no_show_plot=True,
+    # TradingView alignment parameters
+    tv_mode=False,
+    pivot_len_long=20,
+    pivot_len_short=10,
+    prom_thresh_long=0.005,
+    prom_thresh_short=0.03,
+    peak_level=0.70,
+    trough_level_long=0.40,
+    trough_level_short=0.20,
+    no_pyramiding=False,
+    # Enhanced TV mode parameters
+    two_stage_exit=False,
+    stage2_exit_mode='trend_break',
+    use_volatility_stop=False,
+    vol_atr_period=14,
+    vol_atr_multiplier=2.5,
+    vol_trailing_mode=True,
+    bullish_regime_suppression=False,
+    bullish_breadth_threshold=0.55,
 ):
     """
     Run backtest for multiple ETFs and output a summary table in MD format
@@ -63,7 +82,51 @@ def run_multi_etf_backtest(
         Stop loss percentage
     no_show_plot : bool, optional
         Whether to not show plots (default: True)
+    tv_mode : bool, optional
+        Enable TradingView-aligned signal detection
+    pivot_len_long : int, optional
+        Pivot confirmation bars for long MA (default: 20)
+    pivot_len_short : int, optional
+        Pivot confirmation bars for short MA (default: 10)
+    prom_thresh_long : float, optional
+        Prominence threshold for long MA pivots (default: 0.005)
+    prom_thresh_short : float, optional
+        Prominence threshold for short MA pivots (default: 0.03)
+    peak_level : float, optional
+        Peak exit level threshold (default: 0.70)
+    trough_level_long : float, optional
+        Long MA trough entry level (default: 0.40)
+    trough_level_short : float, optional
+        Short MA trough level (default: 0.20)
+    no_pyramiding : bool, optional
+        Single position, 100% equity (default: False)
+    two_stage_exit : bool, optional
+        Enable two-stage exit: 50% at peak, rest at trend break (default: False)
+    stage2_exit_mode : str, optional
+        Stage 2 exit trigger: 'trend_break' or 'ma_cross' (default: 'trend_break')
+    use_volatility_stop : bool, optional
+        Use volatility-based stop instead of fixed (default: False)
+    vol_atr_period : int, optional
+        Volatility calculation period (default: 14)
+    vol_atr_multiplier : float, optional
+        Volatility stop multiplier (default: 2.5)
+    vol_trailing_mode : bool, optional
+        Volatility stop trails highest price (default: True)
+    bullish_regime_suppression : bool, optional
+        Suppress peak exits in bullish regime (default: False)
+    bullish_breadth_threshold : float, optional
+        Breadth threshold for bullish regime (default: 0.55)
     """
+
+    # ETF-specific parameter overrides for leveraged/volatile ETFs
+    ETF_OVERRIDES = {
+        'TQQQ': {'peak_level': 0.80, 'prom_thresh_long': 0.01, 'vol_atr_multiplier': 3.0},
+        'SOXL': {'peak_level': 0.80, 'prom_thresh_long': 0.01, 'vol_atr_multiplier': 3.0},
+        'QLD': {'peak_level': 0.80, 'prom_thresh_long': 0.008},
+        'SPXL': {'peak_level': 0.75, 'prom_thresh_long': 0.008},
+        'TNA': {'peak_level': 0.75, 'prom_thresh_long': 0.008},
+    }
+
     # If dates are not specified, default to 10 years ago to present
     if end_date is None:
         end_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
@@ -81,6 +144,9 @@ def run_multi_etf_backtest(
         print(f'{"=" * 50}')
 
         try:
+            # Apply ETF-specific overrides
+            overrides = ETF_OVERRIDES.get(symbol, {})
+
             # Execute backtest
             backtest = Backtest(
                 start_date=start_date,
@@ -97,6 +163,23 @@ def run_multi_etf_backtest(
                 symbol=symbol,
                 stop_loss_pct=stop_loss_pct,
                 no_show_plot=no_show_plot,
+                tv_mode=tv_mode,
+                pivot_len_long=overrides.get('pivot_len_long', pivot_len_long),
+                pivot_len_short=overrides.get('pivot_len_short', pivot_len_short),
+                prom_thresh_long=overrides.get('prom_thresh_long', prom_thresh_long),
+                prom_thresh_short=overrides.get('prom_thresh_short', prom_thresh_short),
+                peak_level=overrides.get('peak_level', peak_level),
+                trough_level_long=overrides.get('trough_level_long', trough_level_long),
+                trough_level_short=overrides.get('trough_level_short', trough_level_short),
+                no_pyramiding=no_pyramiding,
+                two_stage_exit=two_stage_exit,
+                stage2_exit_mode=stage2_exit_mode,
+                use_volatility_stop=use_volatility_stop,
+                vol_atr_period=vol_atr_period,
+                vol_atr_multiplier=overrides.get('vol_atr_multiplier', vol_atr_multiplier),
+                vol_trailing_mode=vol_trailing_mode,
+                bullish_regime_suppression=bullish_regime_suppression,
+                bullish_breadth_threshold=bullish_breadth_threshold,
             )
 
             # Run backtest
@@ -196,7 +279,21 @@ def run_multi_etf_backtest(
         f.write(f'- Slippage: {slippage:.3f}\n')
         f.write(f'- Commission: {commission:.3f}\n')
         f.write(f'- MA Type: {ma_type.upper()}\n')
-        f.write(f'- Stop Loss: {stop_loss_pct:.1%}\n\n')
+        f.write(f'- Stop Loss: {stop_loss_pct:.1%}\n')
+        if tv_mode:
+            f.write('- TV Mode: Enabled\n')
+            f.write(f'- Pivot Len (Long/Short): {pivot_len_long}/{pivot_len_short}\n')
+            f.write(f'- Prom Thresh (Long/Short): {prom_thresh_long}/{prom_thresh_short}\n')
+            f.write(f'- Peak Level: {peak_level}\n')
+            f.write(f'- Trough Level (Long/Short): {trough_level_long}/{trough_level_short}\n')
+            f.write(f'- No Pyramiding: {no_pyramiding}\n')
+        if two_stage_exit:
+            f.write(f'- Two-Stage Exit: Enabled (mode={stage2_exit_mode})\n')
+        if use_volatility_stop:
+            f.write(f'- Volatility Stop: Enabled (period={vol_atr_period}, mult={vol_atr_multiplier})\n')
+        if bullish_regime_suppression:
+            f.write(f'- Bullish Regime Suppression: Enabled (threshold={bullish_breadth_threshold})\n')
+        f.write('\n')
         f.write(md_table)
 
     print('\nResults saved to reports/backtest_results_summary.md')
@@ -253,7 +350,7 @@ if __name__ == '__main__':
         etfs=etfs,
         start_date='2001-01-01',
         end_date='2025-09-30',
-        short_ma=8,
+        short_ma=5,
         long_ma=200,
         initial_capital=50000,
         slippage=0.001,
@@ -264,4 +361,9 @@ if __name__ == '__main__':
         ma_type='ema',
         stop_loss_pct=0.08,
         no_show_plot=True,
+        tv_mode=True,
+        no_pyramiding=True,
+        two_stage_exit=True,
+        use_volatility_stop=False,
+        bullish_regime_suppression=True,
     )
