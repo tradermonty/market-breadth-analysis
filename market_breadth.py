@@ -78,6 +78,56 @@ def load_stock_data(filename):
         return None
 
 
+def load_breadth_series_from_csv(csv_path, value_col='close'):
+    """Load a breadth time series from CSV.
+
+    Expected schema is a date column plus one value column (typically `close` in 0-100 scale).
+    If `csv_path` is relative, it is resolved under `data/`.
+    """
+    path = pathlib.Path(csv_path)
+    if not path.is_absolute():
+        # If the relative path already exists (e.g. "data/breadth.csv"), use as-is.
+        # Otherwise try resolving under data_dir (e.g. "breadth.csv" → "data/breadth.csv").
+        if not path.exists():
+            path = data_dir / path
+
+    if not path.exists():
+        raise FileNotFoundError(f'Breadth CSV not found: {path}')
+
+    df = pd.read_csv(path)
+    if df.empty:
+        return pd.Series(dtype='float64', name='breadth')
+
+    column_lookup = {c.lower(): c for c in df.columns}
+
+    # Parse date column (prefer explicit "date", fallback to first column).
+    if 'date' in column_lookup:
+        date_col = column_lookup['date']
+    else:
+        date_col = df.columns[0]
+    df[date_col] = pd.to_datetime(df[date_col], utc=True).dt.tz_localize(None)
+    df.set_index(date_col, inplace=True)
+
+    # Resolve value column with sensible fallbacks.
+    value_candidates = [value_col, 'close', 'breadth', 'value', 's5th']
+    series = None
+    for candidate in value_candidates:
+        resolved = column_lookup.get(candidate.lower())
+        if resolved and resolved in df.columns:
+            series = pd.to_numeric(df[resolved], errors='coerce')
+            break
+
+    if series is None:
+        # Fallback to the first non-date column.
+        if df.shape[1] == 0:
+            return pd.Series(dtype='float64', name='breadth')
+        series = pd.to_numeric(df.iloc[:, 0], errors='coerce')
+
+    series = series.dropna().sort_index()
+    series.name = 'breadth'
+    return series
+
+
 def get_sp500_tickers_from_fmp():
     """Get S&P500 ticker list from FMP API"""
     try:
@@ -141,6 +191,68 @@ def fetch_price_data_fmp(symbol: str, from_date: str, to_date: str) -> pd.Series
     series = df[price_col].astype(float)
     series.name = 'adjusted_close'
     return series
+
+
+def fetch_price_ohlc_fmp(symbol: str, from_date: str, to_date: str) -> pd.DataFrame:
+    """Fetch OHLC price data for a symbol from FMP.
+
+    Returns a DataFrame with columns: open, high, low, close, adjusted_close.
+    """
+    data = fmp_fetcher.get_historical_price_data(symbol, from_date, to_date)
+    if not data:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(data)
+    if df.empty or 'date' not in df.columns:
+        return pd.DataFrame()
+
+    df['date'] = pd.to_datetime(df['date'])
+    df.set_index('date', inplace=True)
+
+    # Build OHLC DataFrame from available columns
+    result = pd.DataFrame(index=df.index)
+    for col in ('open', 'high', 'low', 'close'):
+        if col in df.columns:
+            result[col] = df[col].astype(float)
+
+    # Adjusted close (prefer adjClose, then close)
+    for col in ('adjClose', 'adjusted_close', 'close'):
+        if col in df.columns:
+            result['adjusted_close'] = df[col].astype(float)
+            break
+
+    if result.empty or 'adjusted_close' not in result.columns:
+        return pd.DataFrame()
+
+    return result.sort_index()
+
+
+def get_stock_price_ohlc(symbol, start_date, end_date, use_saved_data=False):
+    """Get OHLC price data for a symbol with caching."""
+    actual_start_date = (pd.to_datetime(start_date) - pd.DateOffset(years=2)).strftime('%Y-%m-%d')
+    filename = f'{symbol}_ohlc_data.csv'
+    file_path = data_dir / filename
+
+    if use_saved_data and file_path.exists() and file_path.stat().st_size > 0:
+        try:
+            saved = pd.read_csv(file_path, index_col=0, parse_dates=True)
+            if not saved.empty and 'adjusted_close' in saved.columns:
+                if (
+                    pd.to_datetime(actual_start_date) >= saved.index.min()
+                    and pd.to_datetime(end_date) <= saved.index.max()
+                ):
+                    mask = (saved.index >= pd.to_datetime(actual_start_date)) & (
+                        saved.index <= pd.to_datetime(end_date)
+                    )
+                    return saved.loc[mask]
+        except Exception:
+            pass
+
+    ohlc = fetch_price_ohlc_fmp(symbol, actual_start_date, end_date)
+    if not ohlc.empty:
+        ohlc.to_csv(file_path)
+        print(f'Saved OHLC data to {file_path}')
+    return ohlc
 
 
 def get_sp500_price_data(start_date, end_date, use_saved_data=False):

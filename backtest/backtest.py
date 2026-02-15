@@ -19,6 +19,8 @@ from market_breadth import (
     get_multiple_stock_data,
     get_sp500_tickers_from_fmp,
     get_stock_price_data,
+    get_stock_price_ohlc,
+    load_breadth_series_from_csv,
     load_stock_data,
     plot_breadth_and_sp500_with_peaks,
     save_stock_data,
@@ -67,6 +69,9 @@ class Backtest:
         no_show_plot=False,
         # TradingView alignment parameters
         tv_mode=False,
+        tv_pine_compat=False,
+        tv_breadth_csv=None,
+        tv_price_csv=None,
         pivot_len_long=20,
         pivot_len_short=10,
         prom_thresh_long=0.005,
@@ -112,6 +117,9 @@ class Backtest:
 
         # TradingView alignment parameters
         self.tv_mode = tv_mode
+        self.tv_pine_compat = tv_pine_compat
+        self.tv_breadth_csv = tv_breadth_csv
+        self.tv_price_csv = tv_price_csv
         self.pivot_len_long = pivot_len_long
         self.pivot_len_short = pivot_len_short
         self.prom_thresh_long = prom_thresh_long
@@ -155,42 +163,201 @@ class Backtest:
         self._stage1_exit_date = None
         self._pending_trend_break = False
 
+        # Next-bar execution queue (tv_pine_compat only)
+        self._pending_entry = None  # (reason, capital_frac) or None
+        self._pending_exit = None  # (reason,) or None
+
+        # Force Pine-compatible defaults if requested.
+        if self.tv_pine_compat:
+            self._apply_tv_pine_compat_defaults()
+
+    def _apply_tv_pine_compat_defaults(self):
+        """Apply TradingView Pine-script-compatible defaults.
+
+        This mode intentionally disables non-Pine extensions so behavior can be
+        compared against the original Pine strategy more directly.
+        """
+        self.tv_mode = True
+        self.no_pyramiding = True
+
+        # Disable extended exit features that do not exist in the reference Pine.
+        self.two_stage_exit = False
+        self.use_volatility_stop = False
+        self.bullish_regime_suppression = False
+        self.use_trailing_stop = False
+        self.use_background_color_signals = False
+        self.partial_exit = False
+
+        # Align trading costs / stop model to Pine defaults.
+        self.stop_loss_pct = 0.08
+        self.slippage = 0.0
+        self.commission = 0.0002
+
+        # Lock signal detection parameters to match reference Pine script.
+        self.short_ma = 5
+        self.long_ma = 200
+        self.ma_type = 'ema'
+        self.pivot_len_long = 20
+        self.pivot_len_short = 10
+        self.prom_thresh_long = 0.005
+        self.prom_thresh_short = 0.03
+        self.peak_level = 0.70
+        self.trough_level_long = 0.40
+        self.trough_level_short = 0.20
+        self.disable_short_ma_entry = False
+
+        if not self.tv_breadth_csv:
+            import warnings
+
+            warnings.warn('tv_pine_compat is most accurate with --tv_breadth_csv', UserWarning, stacklevel=2)
+
+    def _load_tv_price_data(self):
+        """Load OHLC price data from a TV-exported CSV."""
+        import pathlib as _pathlib
+
+        path = _pathlib.Path(self.tv_price_csv)
+        if not path.exists():
+            raise FileNotFoundError(f'TV price CSV not found: {path}')
+
+        df = pd.read_csv(path)
+        if df.empty:
+            raise ValueError(f'TV price CSV is empty: {path}')
+
+        # Case-insensitive column lookup
+        col_map = {c.lower(): c for c in df.columns}
+
+        # Resolve date column
+        date_col = None
+        for candidate in ('date', 'time'):
+            if candidate in col_map:
+                date_col = col_map[candidate]
+                break
+        if date_col is None:
+            date_col = df.columns[0]
+
+        df[date_col] = pd.to_datetime(df[date_col], utc=True).dt.tz_localize(None)
+        df.set_index(date_col, inplace=True)
+
+        # Map standard columns
+        ohlc_map = {'open': 'open', 'high': 'high', 'low': 'low', 'close': 'close'}
+        result = pd.DataFrame(index=df.index)
+        for std_name, _ in ohlc_map.items():
+            src = col_map.get(std_name)
+            if src and src in df.columns:
+                result[std_name] = pd.to_numeric(df[src], errors='coerce')
+
+        if 'close' in result.columns:
+            result['adjusted_close'] = result['close']
+
+        # Validation
+        if self.tv_pine_compat:
+            required = {'open', 'high', 'low', 'close', 'adjusted_close'}
+            missing = required - set(result.columns)
+            if missing:
+                raise ValueError(f'TV price CSV missing required columns for pine_compat: {missing}')
+        else:
+            if 'adjusted_close' not in result.columns:
+                raise ValueError('TV price CSV must contain at least a close column')
+
+        result = result.sort_index()
+        if self.debug:
+            print(f'\nLoaded TV price data from {path}')
+            print(f'  Shape: {result.shape}, Columns: {list(result.columns)}')
+            print(f'  Range: {result.index.min()} to {result.index.max()}')
+
+        return result
+
+    def _load_tv_breadth_index(self):
+        """Load breadth index from user-provided CSV (typically TV export)."""
+        if not self.tv_breadth_csv:
+            raise ValueError('tv_breadth_csv is not configured')
+
+        breadth_series = load_breadth_series_from_csv(self.tv_breadth_csv)
+        if breadth_series.empty:
+            raise ValueError(f'No breadth data found in CSV: {self.tv_breadth_csv}')
+
+        breadth_series = breadth_series.astype(float).sort_index()
+        if breadth_series.max() > 1.5:
+            breadth_series = breadth_series / 100.0
+
+        breadth_series.name = 'breadth_index'
+        if self.debug:
+            print('\nLoaded TV breadth series:')
+            print(f'  Source: {self.tv_breadth_csv}')
+            print(f'  Range: {breadth_series.index.min()} to {breadth_series.index.max()}')
+            print(f'  Min/Max: {breadth_series.min():.4f} / {breadth_series.max():.4f}')
+
+        return breadth_series
+
     def run(self):
         """Execute the backtest"""
-        # Get data for all S&P500 stocks (including past data for calculation)
-        self.sp500_data = self._get_sp500_data()
+        # SP500 data is only needed when breadth or price must be derived from it.
+        needs_sp500 = not self.tv_breadth_csv or not (getattr(self, 'tv_price_csv', None) or self.tv_pine_compat)
+        if needs_sp500:
+            self.sp500_data = self._get_sp500_data()
+            if self.sp500_data.empty:
+                print('Failed to retrieve data.')
+                return
+            print(f'\nData period: {self.sp500_data.index.min()} to {self.sp500_data.index.max()}')
+        else:
+            self.sp500_data = pd.DataFrame()
 
-        if self.sp500_data.empty:
-            print('Failed to retrieve data.')
-            return
-
-        print(f'\nData period: {self.sp500_data.index.min()} to {self.sp500_data.index.max()}')
-
-        # Extract price data for the specified symbol
-        if self.symbol in self.sp500_data.columns:
+        # Extract price data for the specified symbol.
+        # Priority: tv_price_csv > tv_pine_compat OHLC > sp500_data column > individual fetch.
+        if getattr(self, 'tv_price_csv', None):
+            self.price_data = self._load_tv_price_data()
+        elif self.tv_pine_compat:
+            ohlc = get_stock_price_ohlc(
+                self.symbol,
+                self.start_date,
+                self.end_date,
+                use_saved_data=self.use_saved_data,
+            )
+            if not ohlc.empty and 'adjusted_close' in ohlc.columns:
+                self.price_data = ohlc
+            elif self.symbol in self.sp500_data.columns:
+                self.price_data = pd.DataFrame(self.sp500_data[self.symbol], columns=['adjusted_close'])
+            else:
+                self.price_data = get_stock_price_data(
+                    self.symbol,
+                    self.start_date,
+                    self.end_date,
+                    use_saved_data=self.use_saved_data,
+                )
+                if isinstance(self.price_data, pd.Series):
+                    self.price_data = pd.DataFrame(self.price_data, columns=['adjusted_close'])
+        elif self.symbol in self.sp500_data.columns:
             self.price_data = pd.DataFrame(self.sp500_data[self.symbol], columns=['adjusted_close'])
         else:
-            # If the symbol is not included, retrieve it separately
-            calculation_start_date = (pd.to_datetime(self.start_date) - pd.DateOffset(years=2)).strftime('%Y-%m-%d')
             self.price_data = get_stock_price_data(
                 self.symbol,
-                calculation_start_date,  # Use calculation start date
+                self.start_date,
                 self.end_date,
                 use_saved_data=self.use_saved_data,
             )
             if isinstance(self.price_data, pd.Series):
                 self.price_data = pd.DataFrame(self.price_data, columns=['adjusted_close'])
 
-        # Calculate Breadth Index
-        self.above_ma = calculate_above_ma(self.sp500_data)
+        # Build breadth source (S&P500-derived breadth or external TV-compatible breadth CSV).
+        if self.tv_breadth_csv:
+            self.breadth_index = self._load_tv_breadth_index()
+            # Keep a DataFrame so existing chart/report code paths remain compatible.
+            self.above_ma = pd.DataFrame({'TV_BREADTH': self.breadth_index}, index=self.breadth_index.index)
+        else:
+            self.above_ma = calculate_above_ma(self.sp500_data)
+            self.breadth_index = self.above_ma.mean(axis=1)
+
+        # Strip timezone info to prevent tz-aware vs tz-naive mismatch in intersection
+        if self.price_data.index.tz is not None:
+            self.price_data.index = self.price_data.index.tz_localize(None)
+        if self.breadth_index.index.tz is not None:
+            self.breadth_index.index = self.breadth_index.index.tz_localize(None)
 
         # Ensure data period consistency
-        common_dates = self.price_data.index.intersection(self.above_ma.index)
+        common_dates = self.price_data.index.intersection(self.breadth_index.index)
         self.price_data = self.price_data.loc[common_dates]
+        self.breadth_index = self.breadth_index.loc[common_dates]
         self.above_ma = self.above_ma.loc[common_dates]
-
-        # Calculate moving averages
-        self.breadth_index = self.above_ma.mean(axis=1)
 
         # Calculate based on the type of moving average
         if self.ma_type == 'ema':
@@ -395,8 +562,126 @@ class Backtest:
                                     f'{current_long_ma_line.iloc[peak_idx]:.4f}'
                                 )
 
-            # --- TV MODE: restructured trade logic ---
-            if self.tv_mode:
+            # --- TV PINE COMPAT: next-bar execution model ---
+            if self.tv_pine_compat:
+                skip_stop = False
+
+                # Phase 0: Fill pending orders from previous bar at this bar's open
+                if self._pending_exit is not None or self._pending_entry is not None:
+                    fill_price = self.price_data.loc[date, 'open'] if 'open' in self.price_data.columns else price
+
+                    # Process pending exit first (Pine order: exit before entry)
+                    if self._pending_exit is not None and self.current_position > 0:
+                        pend_reason = self._pending_exit[0]
+                        if self.debug:
+                            print(
+                                f'\n[COMPAT] Filling pending exit at {date.strftime("%Y-%m-%d")} '
+                                f'open=${fill_price:.2f}, reason={pend_reason}'
+                            )
+                        self._execute_exit(date, fill_price, reason=pend_reason)
+                        available_capital = self.current_capital
+                        self._pending_exit = None
+
+                    # Process pending entry
+                    if self._pending_entry is not None:
+                        pend_reason, pend_frac = self._pending_entry
+                        entry_amount = available_capital * pend_frac
+                        if entry_amount > 0:
+                            shares = self._calculate_shares(entry_amount, fill_price)
+                            if shares > 0:
+                                if self.debug:
+                                    print(
+                                        f'\n[COMPAT] Filling pending entry at {date.strftime("%Y-%m-%d")} '
+                                        f'open=${fill_price:.2f}, reason={pend_reason}, shares={shares}'
+                                    )
+                                self._execute_entry(date, fill_price, shares, reason=pend_reason)
+                                available_capital -= entry_amount
+                                if available_capital < 0:
+                                    available_capital = 0
+                                self.highest_price = fill_price
+                                skip_stop = True  # No same-bar stop for freshly filled entry
+                        self._pending_entry = None
+
+                # Phase 1: Stop loss (immediate, no pending queue)
+                stop_loss_fired = False
+                if not skip_stop and self.current_position > 0 and self.entry_prices:
+                    avg_entry = self._calculate_avg_entry_price()
+                    if self.highest_price is None or price > self.highest_price:
+                        self.highest_price = price
+                    stop_loss_price = avg_entry * (1 - self.stop_loss_pct)
+
+                    triggered = False
+                    fill_at = price  # default: close-based
+                    if 'low' in self.price_data.columns:
+                        bar_low = self.price_data.loc[date, 'low']
+                        bar_open = self.price_data.loc[date, 'open']
+                        if pd.notna(bar_low) and pd.notna(bar_open):
+                            if bar_low <= stop_loss_price:
+                                fill_at = min(bar_open, stop_loss_price)
+                                triggered = True
+                        elif price <= stop_loss_price:
+                            triggered = True
+                    elif price <= stop_loss_price:
+                        triggered = True
+
+                    if triggered:
+                        if self.debug:
+                            print(
+                                f'\n[COMPAT] Stop loss at {date.strftime("%Y-%m-%d")}, '
+                                f'fill=${fill_at:.2f}, stop=${stop_loss_price:.2f}'
+                            )
+                        self._execute_exit(date, fill_at, reason='stop loss')
+                        available_capital = self.current_capital
+                        stop_loss_fired = True
+                        # Invalidate any pending orders (position is gone)
+                        self._pending_entry = None
+                        self._pending_exit = None
+
+                # Phase 2: Exit signal → queue for next bar
+                if not stop_loss_fired and self.current_position > 0:
+                    if self._pending_exit is None and date in self._tv_peak_signals:
+                        pivot_date, pivot_val = self._tv_peak_signals[date]
+                        if self.debug:
+                            print(
+                                f'\n[COMPAT] Queueing exit at peak '
+                                f'(pivot {pivot_date.strftime("%Y-%m-%d")}, val={pivot_val:.4f}), '
+                                f'bar={date.strftime("%Y-%m-%d")}'
+                            )
+                        self._pending_exit = ('peak exit',)
+
+                # Phase 3: Entry signal → queue for next bar
+                if not stop_loss_fired:
+                    can_enter = (self.current_position == 0) or (self._pending_exit is not None)
+                    if can_enter and self._pending_entry is None:
+                        entered = False
+                        if not self.disable_short_ma_entry and date in self._tv_short_trough_signals:
+                            pivot_date, pivot_val = self._tv_short_trough_signals[date]
+                            frac = 1.0 if self.no_pyramiding else 0.5
+                            if self.debug:
+                                print(
+                                    f'\n[COMPAT] Queueing entry at short trough '
+                                    f'(pivot {pivot_date.strftime("%Y-%m-%d")}, val={pivot_val:.4f}), '
+                                    f'bar={date.strftime("%Y-%m-%d")}'
+                                )
+                            self._pending_entry = ('short_ma_bottom', frac)
+                            entered = True
+                        if not entered and date in self._tv_long_trough_signals:
+                            pivot_date, pivot_val = self._tv_long_trough_signals[date]
+                            if self.debug:
+                                print(
+                                    f'\n[COMPAT] Queueing entry at long trough '
+                                    f'(pivot {pivot_date.strftime("%Y-%m-%d")}, val={pivot_val:.4f}), '
+                                    f'bar={date.strftime("%Y-%m-%d")}'
+                                )
+                            self._pending_entry = ('long_ma_bottom', 1.0)
+
+                # Update highest price tracking for positions
+                if self.current_position > 0 and not stop_loss_fired:
+                    if self.highest_price is None or price > self.highest_price:
+                        self.highest_price = price
+
+            # --- TV MODE: restructured trade logic (same-bar execution) ---
+            elif self.tv_mode:
                 stop_loss_fired = False
                 exit_fired = False
 
@@ -1674,17 +1959,17 @@ def main():
     parser.add_argument(
         '--initial_capital', type=float, default=50000, help='Initial investment amount (default: 50000 dollars)'
     )
-    parser.add_argument('--slippage', type=float, default=0.001, help='Slippage (default: 0.1%)')
-    parser.add_argument('--commission', type=float, default=0.001, help='Transaction fee (default: 0.1%)')
+    parser.add_argument('--slippage', type=float, default=0.001, help='Slippage (default: 0.1%%)')
+    parser.add_argument('--commission', type=float, default=0.001, help='Transaction fee (default: 0.1%%)')
     parser.add_argument('--use_saved_data', action='store_true', help='Whether to use saved data')
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
     parser.add_argument('--threshold', type=float, default=0.5, help='Threshold for bottom detection (default: 0.5)')
     parser.add_argument('--ma_type', type=str, default='ema', help='Moving average type (default: ema)')
     parser.add_argument('--symbol', type=str, default='SSO', help='Stock symbol (default: SSO)')
-    parser.add_argument('--stop_loss_pct', type=float, default=0.1, help='Stop loss percentage (default: 8%)')
+    parser.add_argument('--stop_loss_pct', type=float, default=0.1, help='Stop loss percentage (default: 8%%)')
     parser.add_argument('--disable_short_ma_entry', action='store_true', help='Disable short-term moving average entry')
     parser.add_argument('--use_trailing_stop', action='store_true', help='Use trailing stop instead of fixed stop loss')
-    parser.add_argument('--trailing_stop_pct', type=float, default=0.2, help='Trailing stop percentage (default: 20%)')
+    parser.add_argument('--trailing_stop_pct', type=float, default=0.2, help='Trailing stop percentage (default: 20%%)')
     parser.add_argument(
         '--background_exit_threshold', type=float, default=0.5, help='Background exit threshold (default: 0.5)'
     )
@@ -1702,6 +1987,19 @@ def main():
 
     # TradingView alignment options
     parser.add_argument('--tv_mode', action='store_true', help='Enable TradingView-aligned signal detection')
+    parser.add_argument('--tv_pine_compat', action='store_true', help='Enable Pine-compatible TV backtest mode')
+    parser.add_argument(
+        '--tv_breadth_csv',
+        type=str,
+        default=None,
+        help='Path to breadth CSV (e.g., S5TH export with date/close columns)',
+    )
+    parser.add_argument(
+        '--tv_price_csv',
+        type=str,
+        default=None,
+        help='Path to TV-exported price CSV (date,open,high,low,close)',
+    )
     parser.add_argument(
         '--pivot_len_long', type=int, default=20, help='Pivot confirmation bars for long MA (default: 20)'
     )
@@ -1788,6 +2086,9 @@ def main():
         partial_exit=args.partial_exit,
         no_show_plot=args.no_show_plot,
         tv_mode=args.tv_mode,
+        tv_pine_compat=args.tv_pine_compat,
+        tv_breadth_csv=args.tv_breadth_csv,
+        tv_price_csv=args.tv_price_csv,
         pivot_len_long=args.pivot_len_long,
         pivot_len_short=args.pivot_len_short,
         prom_thresh_long=args.prom_thresh_long,
