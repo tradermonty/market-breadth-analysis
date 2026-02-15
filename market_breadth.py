@@ -105,7 +105,7 @@ def load_breadth_series_from_csv(csv_path, value_col='close'):
         date_col = column_lookup['date']
     else:
         date_col = df.columns[0]
-    df[date_col] = pd.to_datetime(df[date_col], utc=True).dt.tz_localize(None)
+    df[date_col] = pd.to_datetime(df[date_col], utc=True).dt.tz_localize(None).dt.normalize()
     df.set_index(date_col, inplace=True)
 
     # Resolve value column with sensible fallbacks.
@@ -245,7 +245,7 @@ def get_stock_price_ohlc(symbol, start_date, end_date, use_saved_data=False):
                         saved.index <= pd.to_datetime(end_date)
                     )
                     return saved.loc[mask]
-        except Exception:
+        except Exception:  # nosec B110 — fall through to re-fetch from API
             pass
 
     ohlc = fetch_price_ohlc_fmp(symbol, actual_start_date, end_date)

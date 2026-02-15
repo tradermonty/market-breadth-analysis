@@ -150,15 +150,18 @@ class TestNextBarExecution(unittest.TestCase):
             first_entry['price'], bar_open, places=2, msg='Entry should fill at open price in pine_compat mode'
         )
 
-        # Verify next-bar execution: entry must be AFTER the signal confirmation bar.
-        # With pivot_len_short=2, the trough confirmation happens 2 bars after the trough.
+        # Verify next-bar execution: entry must be exactly 1 bar after signal confirmation.
+        # _tv_short_trough_signals maps confirm_date -> (pivot_date, val).
         # Entry should fill on the bar AFTER confirmation.
-        signal_confirmation_idx = ohlc.index.get_loc(entry_date) - 1
-        signal_confirmation_date = ohlc.index[signal_confirmation_idx]
-        self.assertGreater(
-            entry_date,
-            signal_confirmation_date,
-            f'Entry {entry_date} should be after signal confirmation {signal_confirmation_date}',
+        self.assertGreater(len(bt._tv_short_trough_signals), 0, 'Expected at least one short trough signal')
+        signal_confirmation_date = min(bt._tv_short_trough_signals.keys())
+        entry_idx = ohlc.index.get_loc(entry_date)
+        confirm_idx = ohlc.index.get_loc(signal_confirmation_date)
+        self.assertEqual(
+            entry_idx,
+            confirm_idx + 1,
+            f'Entry at bar {entry_idx} ({entry_date.date()}) should be exactly 1 bar '
+            f'after signal confirmation at bar {confirm_idx} ({signal_confirmation_date.date()})',
         )
 
 

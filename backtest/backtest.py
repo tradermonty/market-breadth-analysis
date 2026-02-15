@@ -235,7 +235,7 @@ class Backtest:
         if date_col is None:
             date_col = df.columns[0]
 
-        df[date_col] = pd.to_datetime(df[date_col], utc=True).dt.tz_localize(None)
+        df[date_col] = pd.to_datetime(df[date_col], utc=True).dt.tz_localize(None).dt.normalize()
         df.set_index(date_col, inplace=True)
 
         # Map standard columns
@@ -350,8 +350,10 @@ class Backtest:
         # Strip timezone info to prevent tz-aware vs tz-naive mismatch in intersection
         if self.price_data.index.tz is not None:
             self.price_data.index = self.price_data.index.tz_localize(None)
+        self.price_data.index = self.price_data.index.normalize()
         if self.breadth_index.index.tz is not None:
             self.breadth_index.index = self.breadth_index.index.tz_localize(None)
+        self.breadth_index.index = self.breadth_index.index.normalize()
 
         # Ensure data period consistency
         common_dates = self.price_data.index.intersection(self.breadth_index.index)
