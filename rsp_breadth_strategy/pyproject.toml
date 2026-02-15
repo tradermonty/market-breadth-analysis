@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rsp-breadth-strategy"
+version = "0.1.0"
+description = "RSP-core market breadth strategy toolkit"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "pandas>=1.5.0",
+  "numpy>=1.24.0",
+  "scipy>=1.10.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.4.0",
+]
+
+[project.scripts]
+rsp-breadth-backtest = "rsp_breadth_strategy.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
