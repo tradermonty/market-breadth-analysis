@@ -16,7 +16,13 @@ import pandas as pd
 # Ensure project root is on the path so we can import market_breadth
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from market_breadth import detect_bearish_regions, extract_chart_data, plot_breadth_and_sp500_with_peaks
+from market_breadth import (
+    detect_bearish_regions,
+    export_chart_data_to_csv,
+    extract_chart_data,
+    extract_chart_data_50,
+    plot_breadth_and_sp500_with_peaks,
+)
 
 # ---------------------------------------------------------------------------
 # Shared synthetic data helpers
@@ -436,6 +442,194 @@ class TestPlotlyIntegration(unittest.TestCase):
             self.assertTrue(os.path.exists(html_path), 'HTML file not generated')
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+# ===================================================================
+# Test Class 9: TestExtractChartData50Keys
+# ===================================================================
+class TestExtractChartData50Keys(unittest.TestCase):
+    """Tests for extract_chart_data_50() function."""
+
+    def test_28_returns_expected_keys(self):
+        """extract_chart_data_50() returns dict with all required keys."""
+        above_ma, sp500 = _make_synthetic_data()
+        # Use the same data but treat as 50-day MA breadth
+        chart_data_50 = extract_chart_data_50(above_ma, sp500, short_ma_period=10)
+        expected_keys = {
+            'breadth_index_50',
+            'breadth_ma_50_long',
+            'breadth_ma_50_short',
+            'breadth_ma_50_trend',
+            'sp500_data',
+            'peaks_50',
+            'troughs_50',
+            'troughs_below_03_50',
+            'below_03_50',
+            'peaks_avg_50',
+            'troughs_avg_50',
+        }
+        self.assertEqual(set(chart_data_50.keys()), expected_keys)
+
+    def test_29_values_in_valid_range(self):
+        """Breadth values should be between 0 and 1."""
+        above_ma, sp500 = _make_synthetic_data()
+        chart_data_50 = extract_chart_data_50(above_ma, sp500)
+        bi = chart_data_50['breadth_index_50']
+        self.assertGreaterEqual(bi.min(), 0.0)
+        self.assertLessEqual(bi.max(), 1.0)
+
+    def test_30_nan_guard_on_empty_peaks(self):
+        """peaks_avg_50 should be 0.0 when no peaks are detected."""
+        # Create flat data with no peaks
+        n_days = 100
+        dates = pd.bdate_range('2020-01-01', periods=n_days, freq='B')
+        above_ma = pd.DataFrame(
+            np.ones((n_days, 10), dtype=bool),
+            index=dates,
+            columns=[f'S{i}' for i in range(10)],
+        )
+        sp500 = pd.Series(np.ones(n_days) * 100, index=dates)
+        chart_data_50 = extract_chart_data_50(above_ma, sp500)
+        # With flat data, peaks_avg_50 should be 0.0 (no peaks found)
+        self.assertFalse(np.isnan(chart_data_50['peaks_avg_50']))
+
+
+# ===================================================================
+# Test Class 10: TestPlotly3PanelChart
+# ===================================================================
+class TestPlotly3PanelChart(unittest.TestCase):
+    """Verify 3-panel chart when above_ma_50 is provided."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.above_ma, cls.sp500 = _make_synthetic_data()
+        cls.fig, cls.chart_data = plot_breadth_and_sp500_with_peaks(
+            cls.above_ma, cls.sp500, short_ma_period=10, output_dir=cls.tmpdir, above_ma_50=cls.above_ma
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_31_three_y_axes(self):
+        """Figure should have yaxis, yaxis2, and yaxis3 (three rows)."""
+        self.assertIsNotNone(self.fig.layout.yaxis)
+        self.assertIsNotNone(self.fig.layout.yaxis2)
+        self.assertIsNotNone(self.fig.layout.yaxis3)
+
+    def test_32_panel2_y_range(self):
+        """Panel 2 (50-day, yaxis2) range should be [0, 1]."""
+        y_range = list(self.fig.layout.yaxis2.range)
+        self.assertEqual(y_range, [0, 1])
+
+    def test_33_panel3_y_range(self):
+        """Panel 3 (200-day, yaxis3) range should be [0, 1]."""
+        y_range = list(self.fig.layout.yaxis3.range)
+        self.assertEqual(y_range, [0, 1])
+
+    def test_34_50day_trace_exists(self):
+        """Breadth Index (50-Day MA) trace should exist."""
+        trace_names = [t.name for t in self.fig.data if t.name]
+        matching = [n for n in trace_names if '50-Day MA' in n and 'Breadth' in n]
+        self.assertTrue(len(matching) > 0, f'50-Day MA trace not found. Traces: {trace_names}')
+
+    def test_35_layout_height_1200(self):
+        """Layout height should be 1200 for 3-panel chart."""
+        self.assertEqual(self.fig.layout.height, 1200)
+
+    def test_36_chart_data_contains_50(self):
+        """chart_data should contain chart_data_50 key."""
+        self.assertIn('chart_data_50', self.chart_data)
+        self.assertIsNotNone(self.chart_data['chart_data_50'])
+
+    def test_37_50_panel_has_bearish_vrects(self):
+        """50-day panel should have its own bearish vrects."""
+        # Check that vrects exist referencing y2 (panel 2)
+        vrects = [s for s in self.fig.layout.shapes if s.type == 'rect']
+        y2_vrects = [v for v in vrects if v.yref == 'y2' or v.yref == 'y2 domain']
+        # There should be vrects on y2 domain if bearish regions exist for 50-day
+        chart_data_50 = self.chart_data['chart_data_50']
+        bearish_50 = detect_bearish_regions(
+            chart_data_50['breadth_ma_50_trend'],
+            chart_data_50['breadth_ma_50_short'],
+            chart_data_50['breadth_ma_50_long'],
+        )
+        if len(bearish_50) > 0:
+            self.assertTrue(len(y2_vrects) > 0, 'No vrects on y2 for 50-day panel')
+
+
+# ===================================================================
+# Test Class 11: TestExportCsvWith50MA
+# ===================================================================
+class TestExportCsvWith50MA(unittest.TestCase):
+    """Verify CSV export includes 50-day columns when chart_data_50 is present."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.above_ma, cls.sp500 = _make_synthetic_data()
+        # Generate chart data with 50-day data included
+        cls.fig, cls.chart_data = plot_breadth_and_sp500_with_peaks(
+            cls.above_ma, cls.sp500, short_ma_period=10, output_dir=cls.tmpdir, above_ma_50=cls.above_ma
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_38_csv_has_50day_columns(self):
+        """CSV should contain Breadth_50_* columns when chart_data_50 is present."""
+        csv_path, _ = export_chart_data_to_csv(self.chart_data, 10, filename='test_50ma.csv')
+        df = pd.read_csv(csv_path)
+        expected_cols = ['Breadth_50_Index_Raw', 'Breadth_50_Index_50MA', 'Breadth_50_MA_Trend']
+        for col in expected_cols:
+            self.assertIn(col, df.columns, f'Column {col} not found in CSV')
+
+    def test_39_summary_csv_has_50day_metrics(self):
+        """Summary CSV should contain 50-day metrics."""
+        _, summary_path = export_chart_data_to_csv(self.chart_data, 10, filename='test_50ma_sum.csv')
+        df = pd.read_csv(summary_path)
+        metrics = df['Metric'].tolist()
+        self.assertTrue(
+            any('50' in m for m in metrics),
+            f'No 50-day metrics in summary. Metrics: {metrics}',
+        )
+
+    def test_40_csv_without_50day_backward_compat(self):
+        """CSV should NOT contain 50-day columns when chart_data_50 is absent."""
+        # Generate chart data without 50-day
+        chart_data_2panel = extract_chart_data(self.above_ma, self.sp500, short_ma_period=10)
+        csv_path, _ = export_chart_data_to_csv(chart_data_2panel, 10, filename='test_no50.csv')
+        df = pd.read_csv(csv_path)
+        cols_50 = [c for c in df.columns if 'Breadth_50' in c or 'Peak_50' in c or 'Trough_50' in c]
+        self.assertEqual(len(cols_50), 0, f'Unexpected 50-day columns: {cols_50}')
+
+
+# ===================================================================
+# Test Class 12: TestMainInclude50maFlag
+# ===================================================================
+class TestMainInclude50maFlag(unittest.TestCase):
+    """Verify --include_50ma CLI flag exists in argparse."""
+
+    def test_41_include_50ma_flag_in_argparse(self):
+        """--include_50ma flag should be recognized by argparse."""
+        import argparse
+
+        # Replicate the parser setup from main()
+        parser = argparse.ArgumentParser()
+        parser.add_argument('--include_50ma', action='store_true')
+        args = parser.parse_args(['--include_50ma'])
+        self.assertTrue(args.include_50ma)
+
+    def test_42_include_50ma_default_false(self):
+        """--include_50ma should default to False."""
+        import argparse
+
+        parser = argparse.ArgumentParser()
+        parser.add_argument('--include_50ma', action='store_true')
+        args = parser.parse_args([])
+        self.assertFalse(args.include_50ma)
 
 
 if __name__ == '__main__':

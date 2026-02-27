@@ -3,6 +3,7 @@ import os
 import pathlib
 from datetime import datetime, timedelta
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import requests
@@ -459,6 +460,60 @@ def extract_chart_data(above_ma_200, sp500_data, short_ma_period=10, start_date=
     }
 
 
+def extract_chart_data_50(above_ma_50, sp500_data, short_ma_period=10, start_date=None, end_date=None):
+    """Extract chart data for 50-day MA breadth analysis.
+
+    Same structure as extract_chart_data() but with parameters tuned for 50-day MA.
+    """
+    common_dates = above_ma_50.index.intersection(sp500_data.index)
+    if len(common_dates) == 0:
+        raise ValueError('No common dates found between 50-day breadth data and S&P500 data')
+
+    above_ma_50 = above_ma_50.loc[common_dates]
+    sp500_data = sp500_data.loc[common_dates]
+
+    if start_date and end_date:
+        start_date = pd.to_datetime(start_date)
+        end_date = pd.to_datetime(end_date)
+        mask = (above_ma_50.index >= start_date) & (above_ma_50.index <= end_date)
+        above_ma_50 = above_ma_50.loc[mask]
+        sp500_data = sp500_data.loc[mask]
+
+    breadth_index_50 = above_ma_50.mean(axis=1)
+    breadth_ma_50_long = breadth_index_50.ewm(span=50, adjust=False).mean()
+    breadth_ma_50_short = breadth_index_50.ewm(span=short_ma_period, adjust=False).mean()
+    breadth_ma_50_trend = calculate_trend_with_hysteresis(breadth_ma_50_long, threshold=0.001)
+    breadth_ma_50_trend = pd.Series(breadth_ma_50_trend, index=breadth_ma_50_long.index)
+
+    # Peak/trough detection (shorter distance for 50-day MA's faster oscillation)
+    peaks_50, _ = find_peaks(breadth_ma_50_long, distance=30, prominence=0.02)
+    troughs_50, _ = find_peaks(-breadth_ma_50_long, distance=30, prominence=0.02)
+
+    below_03_50 = breadth_ma_50_short[breadth_ma_50_short < 0.3]
+    if len(below_03_50) >= 2:
+        troughs_below_03_50, _ = find_peaks(-below_03_50, prominence=0.02)
+    else:
+        troughs_below_03_50 = np.array([], dtype=int)
+
+    # NaN guards for averages
+    peaks_avg_50 = breadth_ma_50_long.iloc[peaks_50].mean() if len(peaks_50) > 0 else 0.0
+    troughs_avg_50 = below_03_50.iloc[troughs_below_03_50].mean() if len(troughs_below_03_50) > 0 else 0.0
+
+    return {
+        'breadth_index_50': breadth_index_50,
+        'breadth_ma_50_long': breadth_ma_50_long,
+        'breadth_ma_50_short': breadth_ma_50_short,
+        'breadth_ma_50_trend': breadth_ma_50_trend,
+        'sp500_data': sp500_data,
+        'peaks_50': peaks_50,
+        'troughs_50': troughs_50,
+        'troughs_below_03_50': troughs_below_03_50,
+        'below_03_50': below_03_50,
+        'peaks_avg_50': peaks_avg_50,
+        'troughs_avg_50': troughs_avg_50,
+    }
+
+
 def detect_bearish_regions(breadth_ma_200_trend, breadth_ma_short, breadth_ma_200):
     """Convert day-level bearish mask into a list of (start, end) continuous intervals.
 
@@ -498,10 +553,14 @@ def plot_breadth_and_sp500_with_peaks(
     output_dir='reports',
     tv_peak_signals=None,
     tv_trough_signals=None,
+    above_ma_50=None,
 ):
     """Visualize Breadth Index and S&P 500 price using Plotly.
 
-    Returns the Plotly Figure object for programmatic inspection / testing.
+    When above_ma_50 is provided, a third panel for 50-day MA breadth is added
+    between the S&P 500 price panel and the 200-day breadth panel.
+
+    Returns (fig, chart_data) where chart_data includes 'chart_data_50' when applicable.
     """
     # Extract chart data
     chart_data = extract_chart_data(above_ma_200, sp500_data, short_ma_period, start_date, end_date)
@@ -517,14 +576,40 @@ def plot_breadth_and_sp500_with_peaks(
     peaks_avg = chart_data['peaks_avg']
     troughs_avg_below_04 = chart_data['troughs_avg_below_04']
 
+    # Extract 50-day chart data if provided
+    has_50 = above_ma_50 is not None
+    chart_data_50 = None
+    if has_50:
+        chart_data_50 = extract_chart_data_50(above_ma_50, sp500_data, short_ma_period, start_date, end_date)
+        chart_data['chart_data_50'] = chart_data_50
+
+    # Dynamic row assignment
+    breadth_200_row = 3 if has_50 else 2
+    n_rows = 3 if has_50 else 2
+    chart_height = 1200 if has_50 else 900
+
     # Create subplots
+    if has_50:
+        subplot_titles = [
+            'S&P 500 Price',
+            f'S&P 500 Breadth Index with 50-Day MA and {short_ma_period}-Day MA',
+            f'S&P 500 Breadth Index with 200-Day MA and {short_ma_period}-Day MA',
+        ]
+        row_heights = [0.33, 0.33, 0.34]
+    else:
+        subplot_titles = [
+            'S&P 500 Price',
+            f'S&P 500 Breadth Index with 200-Day MA and {short_ma_period}-Day MA',
+        ]
+        row_heights = [0.5, 0.5]
+
     fig = make_subplots(
-        rows=2,
+        rows=n_rows,
         cols=1,
         shared_xaxes=True,
         vertical_spacing=0.08,
-        row_heights=[0.5, 0.5],
-        subplot_titles=['S&P 500 Price', f'S&P 500 Breadth Index with 200-Day MA and {short_ma_period}-Day MA'],
+        row_heights=row_heights,
+        subplot_titles=subplot_titles,
     )
 
     # --- Panel 1: S&P 500 Price ---
@@ -558,7 +643,86 @@ def plot_breadth_and_sp500_with_peaks(
     # Y axis: log scale
     fig.update_yaxes(type='log', row=1, col=1, title_text='Price')
 
-    # --- Panel 2: Breadth Index ---
+    # --- Panel 2 (50-day) or skip if not has_50 ---
+    if has_50:
+        cd50 = chart_data_50
+        fig.add_trace(
+            go.Scatter(
+                x=cd50['breadth_ma_50_long'].index,
+                y=cd50['breadth_ma_50_long'].values,
+                name='Breadth Index (50-Day MA)',
+                line=dict(color='#1E90FF', width=2),
+            ),
+            row=2,
+            col=1,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=cd50['breadth_ma_50_short'].index,
+                y=cd50['breadth_ma_50_short'].values,
+                name=f'Breadth 50-Day ({short_ma_period}-Day MA)',
+                line=dict(color='#FFA500', width=2),
+            ),
+            row=2,
+            col=1,
+        )
+        if len(cd50['peaks_50']) > 0:
+            fig.add_trace(
+                go.Scatter(
+                    x=cd50['breadth_ma_50_long'].index[cd50['peaks_50']],
+                    y=cd50['breadth_ma_50_long'].iloc[cd50['peaks_50']].values,
+                    name='Peaks 50 (Tops)',
+                    mode='markers',
+                    marker=dict(color='#FF0000', size=10, symbol='triangle-up'),
+                ),
+                row=2,
+                col=1,
+            )
+        if len(cd50['troughs_50']) > 0:
+            fig.add_trace(
+                go.Scatter(
+                    x=cd50['breadth_ma_50_long'].index[cd50['troughs_50']],
+                    y=cd50['breadth_ma_50_long'].iloc[cd50['troughs_50']].values,
+                    name='Troughs 50 (Bottoms)',
+                    mode='markers',
+                    marker=dict(color='#0000FF', size=10, symbol='triangle-down'),
+                ),
+                row=2,
+                col=1,
+            )
+        if len(cd50['troughs_below_03_50']) > 0:
+            fig.add_trace(
+                go.Scatter(
+                    x=cd50['below_03_50'].index[cd50['troughs_below_03_50']],
+                    y=cd50['below_03_50'].iloc[cd50['troughs_below_03_50']].values,
+                    name=f'Troughs 50 ({short_ma_period}MA < 0.3)',
+                    mode='markers',
+                    marker=dict(color='#800080', size=12, symbol='triangle-down'),
+                ),
+                row=2,
+                col=1,
+            )
+        if cd50['peaks_avg_50'] > 0:
+            fig.add_hline(
+                y=cd50['peaks_avg_50'],
+                row=2,
+                col=1,
+                line=dict(color='#FF0000', dash='dash', width=2),
+                annotation_text=f'Avg Peaks 50 = {cd50["peaks_avg_50"]:.2f}',
+                annotation_position='bottom right',
+            )
+        if cd50['troughs_avg_50'] > 0:
+            fig.add_hline(
+                y=cd50['troughs_avg_50'],
+                row=2,
+                col=1,
+                line=dict(color='#0000FF', dash='dash', width=2),
+                annotation_text=f'Avg Troughs 50 = {cd50["troughs_avg_50"]:.2f}',
+                annotation_position='top right',
+            )
+        fig.update_yaxes(range=[0, 1], row=2, col=1, title_text='Breadth Index Percentage')
+
+    # --- 200-day Breadth Panel (row=breadth_200_row) ---
     fig.add_trace(
         go.Scatter(
             x=breadth_ma_200.index,
@@ -566,7 +730,7 @@ def plot_breadth_and_sp500_with_peaks(
             name='Breadth Index (200-Day MA)',
             line=dict(color='#008000', width=2),
         ),
-        row=2,
+        row=breadth_200_row,
         col=1,
     )
 
@@ -577,7 +741,7 @@ def plot_breadth_and_sp500_with_peaks(
             name=f'Breadth Index ({short_ma_period}-Day MA)',
             line=dict(color='#FFA500', width=2),
         ),
-        row=2,
+        row=breadth_200_row,
         col=1,
     )
 
@@ -591,7 +755,7 @@ def plot_breadth_and_sp500_with_peaks(
                 mode='markers',
                 marker=dict(color='#FF0000', size=10, symbol='triangle-up'),
             ),
-            row=2,
+            row=breadth_200_row,
             col=1,
         )
 
@@ -605,7 +769,7 @@ def plot_breadth_and_sp500_with_peaks(
                 mode='markers',
                 marker=dict(color='#0000FF', size=10, symbol='triangle-down'),
             ),
-            row=2,
+            row=breadth_200_row,
             col=1,
         )
 
@@ -619,7 +783,7 @@ def plot_breadth_and_sp500_with_peaks(
                 mode='markers',
                 marker=dict(color='#800080', size=12, symbol='triangle-down'),
             ),
-            row=2,
+            row=breadth_200_row,
             col=1,
         )
 
@@ -640,7 +804,7 @@ def plot_breadth_and_sp500_with_peaks(
                     mode='markers',
                     marker=dict(color='#FF0000', size=14, symbol='diamond'),
                 ),
-                row=2,
+                row=breadth_200_row,
                 col=1,
             )
             sp_valid = [d for d in valid_pivot if d in sp500_data.index]
@@ -668,7 +832,7 @@ def plot_breadth_and_sp500_with_peaks(
                     textposition='top right',
                     textfont=dict(size=9, color='#FF0000'),
                 ),
-                row=2,
+                row=breadth_200_row,
                 col=1,
             )
             sp_confirm = [d for d in valid_confirm if d in sp500_data.index]
@@ -700,7 +864,7 @@ def plot_breadth_and_sp500_with_peaks(
                     mode='markers',
                     marker=dict(color='#00CC00', size=14, symbol='diamond'),
                 ),
-                row=2,
+                row=breadth_200_row,
                 col=1,
             )
             sp_valid = [d for d in valid_pivot if d in sp500_data.index]
@@ -728,7 +892,7 @@ def plot_breadth_and_sp500_with_peaks(
                     textposition='top right',
                     textfont=dict(size=9, color='#00CC00'),
                 ),
-                row=2,
+                row=breadth_200_row,
                 col=1,
             )
             sp_confirm = [d for d in valid_confirm if d in sp500_data.index]
@@ -748,7 +912,7 @@ def plot_breadth_and_sp500_with_peaks(
     # Average Peaks horizontal line
     fig.add_hline(
         y=peaks_avg,
-        row=2,
+        row=breadth_200_row,
         col=1,
         line=dict(color='#FF0000', dash='dash', width=2),
         annotation_text=f'Avg Peaks = {peaks_avg:.2f}',
@@ -758,31 +922,69 @@ def plot_breadth_and_sp500_with_peaks(
     # Average Troughs horizontal line
     fig.add_hline(
         y=troughs_avg_below_04,
-        row=2,
+        row=breadth_200_row,
         col=1,
         line=dict(color='#0000FF', dash='dash', width=2),
         annotation_text=f'Avg Troughs = {troughs_avg_below_04:.2f}',
         annotation_position='top right',
     )
 
-    # Y axis range for breadth panel
-    fig.update_yaxes(range=[0, 1], row=2, col=1, title_text='Breadth Index Percentage')
+    # Y axis range for 200-day breadth panel
+    fig.update_yaxes(range=[0, 1], row=breadth_200_row, col=1, title_text='Breadth Index Percentage')
 
-    # --- Bearish background (both panels) ---
-    bearish_regions = detect_bearish_regions(breadth_ma_200_trend, breadth_ma_short, breadth_ma_200)
-    for start, end in bearish_regions:
-        fig.add_vrect(
-            x0=start,
-            x1=end,
-            fillcolor='rgba(255, 210, 240, 0.35)',
-            line_width=0,
-            row='all',
-            col=1,
+    # --- Bearish backgrounds ---
+    bearish_regions_200 = detect_bearish_regions(breadth_ma_200_trend, breadth_ma_short, breadth_ma_200)
+
+    if has_50:
+        # 3-panel mode: apply 200-day bearish to panel 1 and panel 3 individually
+        for region_start, region_end in bearish_regions_200:
+            fig.add_vrect(
+                x0=region_start,
+                x1=region_end,
+                fillcolor='rgba(255, 210, 240, 0.35)',
+                line_width=0,
+                row=1,
+                col=1,
+            )
+            fig.add_vrect(
+                x0=region_start,
+                x1=region_end,
+                fillcolor='rgba(255, 210, 240, 0.35)',
+                line_width=0,
+                row=breadth_200_row,
+                col=1,
+            )
+
+        # 50-day bearish background on panel 2 only
+        bearish_regions_50 = detect_bearish_regions(
+            chart_data_50['breadth_ma_50_trend'],
+            chart_data_50['breadth_ma_50_short'],
+            chart_data_50['breadth_ma_50_long'],
         )
+        for region_start, region_end in bearish_regions_50:
+            fig.add_vrect(
+                x0=region_start,
+                x1=region_end,
+                fillcolor='rgba(255, 210, 240, 0.35)',
+                line_width=0,
+                row=2,
+                col=1,
+            )
+    else:
+        # 2-panel mode: apply to all panels as before
+        for region_start, region_end in bearish_regions_200:
+            fig.add_vrect(
+                x0=region_start,
+                x1=region_end,
+                fillcolor='rgba(255, 210, 240, 0.35)',
+                line_width=0,
+                row='all',
+                col=1,
+            )
 
     # --- Layout ---
     fig.update_layout(
-        height=900,
+        height=chart_height,
         width=1200,
         plot_bgcolor='white',
         paper_bgcolor='white',
@@ -839,7 +1041,7 @@ def plot_breadth_and_sp500_with_peaks(
     # PNG output (backward compatibility)
     png_file = output_path / 'market_breadth.png'
     try:
-        fig.write_image(str(png_file), width=1200, height=900, scale=2)
+        fig.write_image(str(png_file), width=1200, height=chart_height, scale=2)
         print(f'PNG chart saved to {png_file}')
     except Exception as e:
         print(f'PNG export skipped (kaleido not installed): {e}')
@@ -928,6 +1130,34 @@ def export_chart_data_to_csv(chart_data, short_ma_period, filename=None):
         'Is_Trough',
         f'Is_Trough_{short_ma_period}MA_Below_04',
     ]
+
+    # Add 50-day columns if chart_data_50 is present
+    chart_data_50 = chart_data.get('chart_data_50')
+    if chart_data_50 is not None:
+        df['Breadth_50_Index_Raw'] = chart_data_50['breadth_index_50']
+        df['Breadth_50_Index_50MA'] = chart_data_50['breadth_ma_50_long']
+        df[f'Breadth_50_Index_{short_ma_period}MA'] = chart_data_50['breadth_ma_50_short']
+        df['Breadth_50_MA_Trend'] = chart_data_50['breadth_ma_50_trend']
+        df['Bearish_Signal_50'] = (chart_data_50['breadth_ma_50_trend'] == -1) & (
+            chart_data_50['breadth_ma_50_short'] < chart_data_50['breadth_ma_50_long']
+        )
+        df['Is_Peak_50'] = False
+        df['Is_Trough_50'] = False
+        if len(chart_data_50['peaks_50']) > 0:
+            df.iloc[chart_data_50['peaks_50'], df.columns.get_loc('Is_Peak_50')] = True
+        if len(chart_data_50['troughs_50']) > 0:
+            df.iloc[chart_data_50['troughs_50'], df.columns.get_loc('Is_Trough_50')] = True
+
+        column_order += [
+            'Breadth_50_Index_Raw',
+            'Breadth_50_Index_50MA',
+            f'Breadth_50_Index_{short_ma_period}MA',
+            'Breadth_50_MA_Trend',
+            'Bearish_Signal_50',
+            'Is_Peak_50',
+            'Is_Trough_50',
+        ]
+
     df = df[column_order]
 
     # Save to CSV (date-stamped)
@@ -940,29 +1170,44 @@ def export_chart_data_to_csv(chart_data, short_ma_period, filename=None):
     print(f'Stable CSV exported to {stable_csv_path}')
 
     # Create summary data
-    summary_data = {
-        'Metric': [
-            'Average Peaks (200MA)',
-            f'Average Troughs ({short_ma_period}MA < 0.4)',
-            'Total Peaks Count',
-            'Total Troughs Count',
-            f'Total Troughs ({short_ma_period}MA < 0.4) Count',
-            'Analysis Period Start',
-            'Analysis Period End',
-            'Total Trading Days',
-        ],
-        'Value': [
-            f'{chart_data["peaks_avg"]:.3f}',
-            f'{chart_data["troughs_avg_below_04"]:.3f}',
-            len(chart_data['peaks']),
-            len(chart_data['troughs']),
-            len(chart_data['troughs_below_04']),
-            chart_data['breadth_index_200'].index.min().strftime('%Y-%m-%d'),
-            chart_data['breadth_index_200'].index.max().strftime('%Y-%m-%d'),
-            len(chart_data['breadth_index_200']),
-        ],
-    }
+    summary_metrics = [
+        'Average Peaks (200MA)',
+        f'Average Troughs ({short_ma_period}MA < 0.4)',
+        'Total Peaks Count',
+        'Total Troughs Count',
+        f'Total Troughs ({short_ma_period}MA < 0.4) Count',
+        'Analysis Period Start',
+        'Analysis Period End',
+        'Total Trading Days',
+    ]
+    summary_values = [
+        f'{chart_data["peaks_avg"]:.3f}',
+        f'{chart_data["troughs_avg_below_04"]:.3f}',
+        len(chart_data['peaks']),
+        len(chart_data['troughs']),
+        len(chart_data['troughs_below_04']),
+        chart_data['breadth_index_200'].index.min().strftime('%Y-%m-%d'),
+        chart_data['breadth_index_200'].index.max().strftime('%Y-%m-%d'),
+        len(chart_data['breadth_index_200']),
+    ]
 
+    if chart_data_50 is not None:
+        peaks_avg_50_val = f'{chart_data_50["peaks_avg_50"]:.3f}' if chart_data_50['peaks_avg_50'] > 0 else 'N/A'
+        troughs_avg_50_val = f'{chart_data_50["troughs_avg_50"]:.3f}' if chart_data_50['troughs_avg_50'] > 0 else 'N/A'
+        summary_metrics += [
+            'Average Peaks (50MA)',
+            'Average Troughs 50 (< 0.3)',
+            'Total Peaks 50 Count',
+            'Total Troughs 50 Count',
+        ]
+        summary_values += [
+            peaks_avg_50_val,
+            troughs_avg_50_val,
+            len(chart_data_50['peaks_50']),
+            len(chart_data_50['troughs_50']),
+        ]
+
+    summary_data = {'Metric': summary_metrics, 'Value': summary_values}
     summary_df = pd.DataFrame(summary_data)
     summary_filename = f'market_breadth_summary_{datetime.now().strftime("%Y%m%d")}_ma{short_ma_period}.csv'
     summary_path = reports_dir / summary_filename
@@ -993,6 +1238,11 @@ def main():
     )
     parser.add_argument('--use_saved_data', action='store_true', help='Use saved data instead of fetching from FMP')
     parser.add_argument('--no_export_csv', action='store_true', help='Skip CSV data export')
+    parser.add_argument(
+        '--include_50ma',
+        action='store_true',
+        help='Include 50-day MA breadth analysis (adds a third panel)',
+    )
 
     # Set up command line arguments
     args = parser.parse_args()
@@ -1074,9 +1324,20 @@ def main():
             print(f'sp500_data shape: {sp500_data.shape}')
             print(f'Number of common dates: {len(common_dates)}')
 
+            # Calculate 50-day MA breadth if requested
+            above_ma_50 = None
+            if args.include_50ma:
+                above_ma_50 = calculate_above_ma(stock_data, window=50)
+                above_ma_50 = above_ma_50.loc[common_dates]
+
             # Visualize Breadth Index and S&P 500 price with specified date range
             _fig, chart_data = plot_breadth_and_sp500_with_peaks(
-                above_ma_200, sp500_data, args.short_ma, start_date, end_date
+                above_ma_200,
+                sp500_data,
+                args.short_ma,
+                start_date,
+                end_date,
+                above_ma_50=above_ma_50,
             )
 
             # Export CSV data for LLM/programmatic consumption (default: enabled)

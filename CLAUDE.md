@@ -118,6 +118,7 @@ python backtest/backtest.py --debug --symbol SSO --use_saved_data
 - `--two_stage_exit`: Enable two-stage exit (50% profit-take + trend break)
 - `--use_volatility_stop`: Use ATR-based volatility stop instead of fixed stop
 - `--bullish_regime_suppression`: Suppress peak exits when breadth is above threshold
+- `--include_50ma`: Add 50-day MA breadth panel (third panel in chart, additional columns in CSV)
 
 ## Data Management
 
