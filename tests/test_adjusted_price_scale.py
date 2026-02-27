@@ -228,6 +228,151 @@ class TestPineCompatFillUsesAdjustedOpen(unittest.TestCase):
         )
 
 
+def _build_dividend_adjusted_data():
+    """Build 20-bar synthetic data simulating dividend adjustment (adj_ratio=0.8).
+
+    Simulates a scenario like SSO where distributions cause adjusted prices
+    to be lower than raw prices. The key test scenario:
+    - Entry at bar 10 (adjusted_close ~40.0)
+    - SL 8% = 36.80
+    - Bar 14 raw_low = 37.5 (> 36.80 → old buggy code would NOT trigger SL)
+    - Bar 14 adjusted_low = 37.5 * 0.8 = 30.0 (< 36.80 → correct code triggers SL)
+
+    Returns (ohlc_df, breadth_series).
+    """
+    dates = pd.bdate_range('2024-01-02', periods=20)
+    adj_ratio = 0.8
+
+    # Raw prices: moderate decline → recovery → drop at bar 14
+    raw_closes = [55, 55, 54, 53, 52, 50, 48, 47, 48, 50, 50, 50, 51, 51, 48, 49, 50, 51, 52, 53]
+    raw_opens = [55, 55, 55, 54, 53, 52, 50, 48, 47, 48, 50, 50, 50, 51, 51, 48, 49, 50, 51, 52]
+    raw_highs = [56, 56, 55, 54, 53, 52, 51, 49, 49, 51, 51, 51, 52, 52, 51, 50, 51, 52, 53, 54]
+    raw_lows = [54, 54, 53, 52, 51, 49, 47, 46, 47, 49, 49, 49, 50, 50, 37.5, 47, 49, 50, 51, 52]
+    #                                                                          ^^^^
+    # Bar 14: raw_low=37.5, adjusted_low=30.0
+    # Entry bar 10: adjusted_close = 50*0.8 = 40.0, SL = 40.0*(1-0.08) = 36.80
+    # raw 37.5 > 36.80 (old bug: no SL), adjusted 30.0 < 36.80 (correct: SL fires)
+
+    ohlc = pd.DataFrame(
+        {
+            'open': raw_opens,
+            'high': raw_highs,
+            'low': raw_lows,
+            'close': raw_closes,
+            'adjusted_close': [c * adj_ratio for c in raw_closes],
+        },
+        index=dates,
+    )
+
+    # Breadth: decline → deep trough at bar 7 → recovery (triggers entry)
+    breadth_vals = [
+        0.60,
+        0.55,
+        0.50,
+        0.45,
+        0.40,
+        0.20,
+        0.10,
+        0.05,
+        0.10,
+        0.20,
+        0.30,
+        0.35,
+        0.40,
+        0.45,
+        0.40,
+        0.35,
+        0.40,
+        0.45,
+        0.50,
+        0.55,
+    ]
+    breadth = pd.Series(breadth_vals, index=dates)
+
+    return ohlc, breadth
+
+
+class TestSlTriggersWithDividendAdjustment(unittest.TestCase):
+    """Test 5: Regression test — SL fires correctly when adj_ratio < 1 (Pine-compat)."""
+
+    def test_sl_triggers_correctly_with_dividend_adjustment(self):
+        """With adj_ratio=0.8, raw_low > adjusted SL but adjusted_low < SL.
+
+        This reproduces the SSO 2008-03-10 bug where scale mismatch between
+        raw bar_low and adjusted SL threshold caused SL to not fire.
+        """
+        bt = _make_backtest(tv_pine_compat=True, stop_loss_pct=0.08)
+        ohlc, breadth = _build_dividend_adjusted_data()
+        _inject_data_with_adjusted(bt, ohlc, breadth)
+
+        # Exactly one trade should complete
+        self.assertEqual(len(bt.trade_log), 1, 'Expected exactly one completed trade')
+
+        trade = bt.trade_log[0]
+        self.assertEqual(trade['exit_reason'], 'stop loss')
+
+        # SL must fire on bar 14 (2024-01-22) — the bar with the dividend-adjusted gap
+        exit_date = trade['exit_date']
+        expected_exit = pd.Timestamp('2024-01-22')
+        self.assertEqual(exit_date, expected_exit, f'SL should fire on {expected_exit}, got {exit_date}')
+
+        # Verify the exact bug condition: raw_low > SL threshold > adjusted_low
+        sl_threshold = trade['entry_price'] * (1 - 0.08)
+        raw_low = ohlc.loc[exit_date, 'low']
+        adjusted_low = bt.price_data.loc[exit_date, 'adjusted_low']
+        self.assertGreater(
+            raw_low,
+            sl_threshold,
+            f'raw_low ({raw_low}) should be ABOVE SL ({sl_threshold:.4f}) — old buggy code would have missed this SL',
+        )
+        self.assertLess(
+            adjusted_low,
+            sl_threshold,
+            f'adjusted_low ({adjusted_low:.4f}) should be BELOW SL ({sl_threshold:.4f}) — '
+            'correct code triggers SL via adjusted scale',
+        )
+
+
+class TestSameBarSlTriggersWithDividendAdjustment(unittest.TestCase):
+    """Test 6: Regression test — SL fires correctly when adj_ratio < 1 (TV same-bar)."""
+
+    def test_same_bar_sl_triggers_with_dividend_adjustment(self):
+        """Same dividend-adjusted data but via _execute_tv_same_bar path.
+
+        Uses tv_pine_compat=False, tv_mode=True to exercise L959-963.
+        """
+        bt = _make_backtest(tv_pine_compat=False, tv_mode=True, stop_loss_pct=0.08)
+        ohlc, breadth = _build_dividend_adjusted_data()
+        _inject_data_with_adjusted(bt, ohlc, breadth)
+
+        # Exactly one trade should complete
+        self.assertEqual(len(bt.trade_log), 1, 'Expected exactly one completed trade')
+
+        trade = bt.trade_log[0]
+        self.assertEqual(trade['exit_reason'], 'stop loss')
+
+        # SL must fire on bar 14 (2024-01-22) — the bar with the dividend-adjusted gap
+        exit_date = trade['exit_date']
+        expected_exit = pd.Timestamp('2024-01-22')
+        self.assertEqual(exit_date, expected_exit, f'SL should fire on {expected_exit}, got {exit_date}')
+
+        # Verify the exact bug condition: raw_low > SL threshold > adjusted_low
+        sl_threshold = trade['entry_price'] * (1 - 0.08)
+        raw_low = ohlc.loc[exit_date, 'low']
+        adjusted_low = bt.price_data.loc[exit_date, 'adjusted_low']
+        self.assertGreater(
+            raw_low,
+            sl_threshold,
+            f'raw_low ({raw_low}) should be ABOVE SL ({sl_threshold:.4f}) — old buggy code would have missed this SL',
+        )
+        self.assertLess(
+            adjusted_low,
+            sl_threshold,
+            f'adjusted_low ({adjusted_low:.4f}) should be BELOW SL ({sl_threshold:.4f}) — '
+            'correct code triggers SL via adjusted scale',
+        )
+
+
 class TestNoOhlcFallbackUnchanged(unittest.TestCase):
     """Test 4: Close-only data (no OHLC) works without adjusted columns."""
 

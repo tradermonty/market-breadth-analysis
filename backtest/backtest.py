@@ -831,9 +831,12 @@ class Backtest:
 
         # Phase 0: Fill pending orders from previous bar at this bar's open
         if self._pending_exit is not None or self._pending_entry is not None:
-            fill_price = (
-                self.price_data.loc[date, 'adjusted_open'] if 'adjusted_open' in self.price_data.columns else price
-            )
+            if 'adjusted_open' in self.price_data.columns:
+                fill_price = self.price_data.loc[date, 'adjusted_open']
+            elif 'open' in self.price_data.columns:
+                fill_price = self.price_data.loc[date, 'open']
+            else:
+                fill_price = price
 
             if self._pending_exit is not None and self.current_position > 0:
                 pend_reason = self._pending_exit[0]
