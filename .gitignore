@@ -19,3 +19,5 @@ venv/
 venv311/
 *.csv
 !backtest_results_summary.csv
+# Sub-project (managed independently)
+rsp_breadth_strategy/
