@@ -182,11 +182,8 @@ def run_multi_etf_backtest(
                 bullish_breadth_threshold=bullish_breadth_threshold,
             )
 
-            # Run backtest
+            # Run backtest (run() calls visualize_results() internally)
             backtest.run()
-
-            # Visualize results (pass no_show_plot parameter)
-            backtest.visualize_results(show_plot=not no_show_plot)
 
             # Save trade log (Phase 1)
             if backtest.trade_log:
@@ -215,8 +212,9 @@ def run_multi_etf_backtest(
 
             results.append(result)
 
-            # Wait briefly to limit API requests
-            time.sleep(2)
+            # Wait briefly to limit API requests (only when fetching from API)
+            if not use_saved_data:
+                time.sleep(2)
 
         except Exception as e:
             print(f'Error running backtest for {symbol}: {e}')

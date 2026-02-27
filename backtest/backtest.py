@@ -44,6 +44,58 @@ reports_dir = pathlib.Path('reports')
 reports_dir.mkdir(exist_ok=True)
 
 
+# Module-level functions for pivot detection (shared with trade/)
+def detect_pivot_high(series, pivot_len, prom_thresh, level_thresh):
+    """Detect pivot highs equivalent to TradingView ta.pivothigh(source, left, right).
+
+    A bar j is a pivot high if it is the maximum in [j-pivot_len, j+pivot_len].
+    Confirmation date = j + pivot_len (the bar where the pivot can first be observed).
+
+    Returns list of (confirm_date, pivot_date, pivot_value).
+    """
+    values = series.values
+    dates = series.index
+    n = len(values)
+    results = []
+
+    for j in range(pivot_len, n - pivot_len):
+        window = values[j - pivot_len : j + pivot_len + 1]
+        if values[j] == np.max(window):
+            # Prominence check: peak - window min
+            prominence = values[j] - np.min(window)
+            if prominence >= prom_thresh and values[j] >= level_thresh:
+                confirm_idx = j + pivot_len
+                results.append((dates[confirm_idx], dates[j], values[j]))
+
+    return results
+
+
+def detect_pivot_low(series, pivot_len, prom_thresh):
+    """Detect pivot lows equivalent to TradingView ta.pivotlow(source, left, right).
+
+    A bar j is a pivot low if it is the minimum in [j-pivot_len, j+pivot_len].
+    Confirmation date = j + pivot_len.
+    Level check is done by the caller (differs for 200-EMA vs short EMA).
+
+    Returns list of (confirm_date, pivot_date, pivot_value).
+    """
+    values = series.values
+    dates = series.index
+    n = len(values)
+    results = []
+
+    for j in range(pivot_len, n - pivot_len):
+        window = values[j - pivot_len : j + pivot_len + 1]
+        if values[j] == np.min(window):
+            # Prominence check: window max - trough
+            prominence = np.max(window) - values[j]
+            if prominence >= prom_thresh:
+                confirm_idx = j + pivot_len
+                results.append((dates[confirm_idx], dates[j], values[j]))
+
+    return results
+
+
 class Backtest:
     def __init__(
         self,
@@ -157,13 +209,13 @@ class Backtest:
         self.current_capital = initial_capital
         self.current_position = 0
         self.entry_prices = []  # List to record entry prices
-        self.stop_loss_prices = []  # List to record stop loss prices
         self.highest_price = None  # Highest price during position holding
 
         # Trade logging variables (Phase 1)
         self.trade_log = []  # Detailed trade log for each complete trade
         self.open_positions = []  # Currently open positions
         self.next_trade_id = 1  # Counter for trade IDs
+        self._cached_trade_pairs = None  # Cache for _get_trade_pairs()
 
         # Two-stage exit state
         self._half_exited = False
@@ -497,7 +549,6 @@ class Backtest:
 
             # Legacy mode: Detect signals using data up to the current date
             if not self.tv_mode:
-                self.price_data.iloc[: i + 1]
                 current_breadth_index = self.breadth_index.iloc[: i + 1]
                 current_short_ma_line = self.short_ma_line.iloc[: i + 1]
                 current_long_ma_line = self.long_ma_line.iloc[: i + 1]
@@ -975,6 +1026,12 @@ class Backtest:
             # Update equity curve
             self.equity_curve.append({'date': date, 'equity': self.current_capital + (self.current_position * price)})
 
+        # Close any open positions at backtest end
+        if self.current_position > 0:
+            final_date = self.price_data.index[-1]
+            final_price = self.price_data['adjusted_close'].iloc[-1]
+            self._execute_exit(final_date, final_price, reason='backtest_end')
+
         print('\nTrade execution results:')
         print('-------------------')
         print(f'{self.short_ma}{self.ma_type.upper()} bottoms detected: {len(self.short_ma_bottoms)}')
@@ -1051,7 +1108,7 @@ class Backtest:
         # Calculate P&L
         entry_cost_per_share = entry_info['entry_cost'] / entry_info['entry_shares']
         entry_cost_for_sold_shares = entry_cost_per_share * exit_shares
-        exit_proceeds_for_sold_shares = (exit_proceeds / exit_shares) * exit_shares if exit_shares > 0 else 0
+        exit_proceeds_for_sold_shares = exit_proceeds if exit_shares > 0 else 0
 
         pnl_dollar = exit_proceeds_for_sold_shares - entry_cost_for_sold_shares
         pnl_percent = (pnl_dollar / entry_cost_for_sold_shares) * 100 if entry_cost_for_sold_shares > 0 else 0
@@ -1167,7 +1224,6 @@ class Backtest:
 
             self.current_position = 0
             self.entry_prices = []  # Clear entry price list
-            self.stop_loss_prices = []  # Clear stop loss price list
             self.highest_price = None  # Reset highest price
             self._reset_exit_state()  # Reset two-stage exit state
 
@@ -1188,6 +1244,10 @@ class Backtest:
             self.expected_value = 0
             self.avg_pnl_per_trade = 0
             self.pareto_ratio = 0
+            self.bh_total_return = 0
+            self.bh_cagr = 0
+            self.bh_sharpe = 0
+            self.bh_max_drawdown = 0
             return
         self.equity_df = pd.DataFrame(self.equity_curve)
         self.equity_df.set_index('date', inplace=True)
@@ -1200,19 +1260,23 @@ class Backtest:
 
         # Annual return and CAGR calculation
         days = (self.equity_df.index[-1] - self.equity_df.index[0]).days
-        years = days / 365
-
-        # CAGR calculation (handles negative returns)
-        if self.total_return <= -1:
-            self.cagr = -1
+        if days <= 0:
+            self.cagr = 0.0
+            self.annual_return = 0.0
         else:
-            self.cagr = np.sign(self.total_return) * (abs(1 + self.total_return) ** (1 / years) - 1)
+            years = days / 365
 
-        # Annual Return calculation (handles negative returns)
-        if self.total_return <= -1:
-            self.annual_return = -1
-        else:
-            self.annual_return = np.sign(self.total_return) * (abs(1 + self.total_return) ** (365 / days) - 1)
+            # CAGR calculation (handles negative returns)
+            if self.total_return <= -1:
+                self.cagr = -1.0
+            else:
+                self.cagr = (1 + self.total_return) ** (1 / years) - 1
+
+            # Annual Return calculation (handles negative returns)
+            if self.total_return <= -1:
+                self.annual_return = -1.0
+            else:
+                self.annual_return = (1 + self.total_return) ** (365 / days) - 1
 
         # Add debug information
         if self.debug:
@@ -1228,10 +1292,14 @@ class Backtest:
 
         # Sharpe ratio
         daily_returns = self.equity_df['equity'].pct_change()
-        self.sharpe_ratio = np.sqrt(252) * daily_returns.mean() / daily_returns.std()
+        std = daily_returns.std()
+        self.sharpe_ratio = np.sqrt(252) * daily_returns.mean() / std if std > 0 else 0.0
 
         # Maximum drawdown
         self.max_drawdown = self._calculate_max_drawdown()
+
+        # Cache trade pairs for reuse across metric calculations
+        self._cached_trade_pairs = self._get_trade_pairs()
 
         # Win rate
         self.win_rate = self._calculate_win_rate()
@@ -1250,25 +1318,33 @@ class Backtest:
         initial_price = self.price_data['adjusted_close'].iloc[0]
         final_price = self.price_data['adjusted_close'].iloc[-1]
         buy_hold_shares = int(self.initial_capital / (initial_price * (1 + self.slippage)))
-        buy_hold_cost = buy_hold_shares * initial_price * (1 + self.slippage) * (1 + self.commission)
-        buy_hold_value = buy_hold_shares * final_price * (1 - self.slippage) * (1 - self.commission)
-        buy_hold_return = (buy_hold_value / buy_hold_cost) - 1
-        buy_hold_cagr = (buy_hold_value / buy_hold_cost) ** (1 / years) - 1
 
-        # Buy & Hold daily returns
-        buy_hold_daily_returns = self.price_data['adjusted_close'].pct_change()
-        buy_hold_sharpe = np.sqrt(252) * buy_hold_daily_returns.mean() / buy_hold_daily_returns.std()
+        if buy_hold_shares == 0 or days <= 0:
+            self.bh_total_return = 0.0
+            self.bh_cagr = 0.0
+            self.bh_sharpe = 0.0
+            self.bh_max_drawdown = 0.0
+        else:
+            buy_hold_cost = buy_hold_shares * initial_price * (1 + self.slippage) * (1 + self.commission)
+            buy_hold_value = buy_hold_shares * final_price * (1 - self.slippage) * (1 - self.commission)
+            buy_hold_return = (buy_hold_value / buy_hold_cost) - 1
+            buy_hold_cagr = (buy_hold_value / buy_hold_cost) ** (1 / years) - 1
 
-        # Buy & Hold maximum drawdown
-        buy_hold_cummax = self.price_data['adjusted_close'].expanding().max()
-        buy_hold_drawdown = self.price_data['adjusted_close'] / buy_hold_cummax - 1
-        buy_hold_max_drawdown = buy_hold_drawdown.min()
+            # Buy & Hold daily returns
+            buy_hold_daily_returns = self.price_data['adjusted_close'].pct_change()
+            bh_std = buy_hold_daily_returns.std()
+            buy_hold_sharpe = np.sqrt(252) * buy_hold_daily_returns.mean() / bh_std if bh_std > 0 else 0.0
 
-        # Store Buy & Hold metrics as instance attributes
-        self.bh_total_return = buy_hold_return
-        self.bh_cagr = buy_hold_cagr
-        self.bh_sharpe = buy_hold_sharpe
-        self.bh_max_drawdown = buy_hold_max_drawdown
+            # Buy & Hold maximum drawdown
+            buy_hold_cummax = self.price_data['adjusted_close'].expanding().max()
+            buy_hold_drawdown = self.price_data['adjusted_close'] / buy_hold_cummax - 1
+            buy_hold_max_drawdown = buy_hold_drawdown.min()
+
+            # Store Buy & Hold metrics as instance attributes
+            self.bh_total_return = buy_hold_return
+            self.bh_cagr = buy_hold_cagr
+            self.bh_sharpe = buy_hold_sharpe
+            self.bh_max_drawdown = buy_hold_max_drawdown
 
         # Display performance metrics
         print('\nBacktest results:')
@@ -1287,16 +1363,16 @@ class Backtest:
         print(f'Pareto Ratio: {self.pareto_ratio:.2f}')
 
         print('\nBuy & Hold performance:')
-        print(f'Total return: {buy_hold_return:.2%}')
-        print(f'Annual return (CAGR): {buy_hold_cagr:.2%}')
-        print(f'Sharpe ratio: {buy_hold_sharpe:.2f}')
-        print(f'Maximum drawdown: {buy_hold_max_drawdown:.2%}')
+        print(f'Total return: {self.bh_total_return:.2%}')
+        print(f'Annual return (CAGR): {self.bh_cagr:.2%}')
+        print(f'Sharpe ratio: {self.bh_sharpe:.2f}')
+        print(f'Maximum drawdown: {self.bh_max_drawdown:.2%}')
 
-        print(f'\nInvestment period: {days:.1f} days ({years:.1f} years)')
+        print(f'\nInvestment period: {days:.1f} days ({days / 365:.1f} years)')
 
         # Calculate relative performance
-        relative_return = self.total_return - buy_hold_return
-        relative_cagr = self.cagr - buy_hold_cagr
+        relative_return = self.total_return - self.bh_total_return
+        relative_cagr = self.cagr - self.bh_cagr
         print('\nRelative performance (Strategy vs Buy & Hold):')
         print(f'Return difference: {relative_return:.2%}')
         print(f'CAGR difference: {relative_cagr:.2%}')
@@ -1314,7 +1390,7 @@ class Backtest:
             return 0
 
         # Get trade pairs
-        trade_pairs = self._get_trade_pairs()
+        trade_pairs = self._cached_trade_pairs if self._cached_trade_pairs is not None else self._get_trade_pairs()
 
         # Calculate profit/loss for each trade pair
         profitable_trades = 0
@@ -1355,7 +1431,7 @@ class Backtest:
             return 0
 
         # Get trade pairs
-        trade_pairs = self._get_trade_pairs()
+        trade_pairs = self._cached_trade_pairs if self._cached_trade_pairs is not None else self._get_trade_pairs()
 
         # Calculate profit/loss for each trade pair
         profits = []
@@ -1401,7 +1477,7 @@ class Backtest:
             return 0
 
         # Get trade pairs
-        trade_pairs = self._get_trade_pairs()
+        trade_pairs = self._cached_trade_pairs if self._cached_trade_pairs is not None else self._get_trade_pairs()
 
         # Calculate profit/loss for each trade pair
         total_profit = 0
@@ -1424,13 +1500,15 @@ class Backtest:
 
         # Calculate annual return
         days = (self.equity_df.index[-1] - self.equity_df.index[0]).days
+        if days <= 0:
+            return 0
         years = days / 365
 
         # Annual Return calculation (handles negative returns)
         if self.total_return <= -1:
-            annual_return = -1
+            annual_return = -1.0
         else:
-            annual_return = np.sign(self.total_return) * (abs(1 + self.total_return) ** (1 / years) - 1)
+            annual_return = (1 + self.total_return) ** (1 / years) - 1
 
         # Get maximum drawdown
         max_drawdown = abs(self.max_drawdown)
@@ -1447,7 +1525,7 @@ class Backtest:
             return 0
 
         # Get trade pairs
-        trade_pairs = self._get_trade_pairs()
+        trade_pairs = self._cached_trade_pairs if self._cached_trade_pairs is not None else self._get_trade_pairs()
 
         # Calculate profit/loss for each trade pair
         total_profit = 0
@@ -1466,7 +1544,7 @@ class Backtest:
             return 0
 
         # Get trade pairs
-        trade_pairs = self._get_trade_pairs()
+        trade_pairs = self._cached_trade_pairs if self._cached_trade_pairs is not None else self._get_trade_pairs()
 
         # Calculate profit/loss for each trade pair
         total_pnl = 0
@@ -1485,7 +1563,7 @@ class Backtest:
             return 0
 
         # Get trade pairs
-        trade_pairs = self._get_trade_pairs()
+        trade_pairs = self._cached_trade_pairs if self._cached_trade_pairs is not None else self._get_trade_pairs()
 
         # Calculate profit/loss for each trade pair
         trade_pnls = []
@@ -1775,6 +1853,7 @@ class Backtest:
         plt.savefig(f'reports/backtest_results_{self.symbol}.png')
         if show_plot:
             plt.show()  # Display chart
+        plt.close(_fig)
 
         # Generate Plotly breadth chart with TV signal markers (if TV mode)
         if self.tv_mode and hasattr(self, '_tv_peak_signals'):
@@ -1836,53 +1915,12 @@ class Backtest:
     # --- TradingView alignment methods ---
 
     def _detect_pivot_high(self, series, pivot_len, prom_thresh, level_thresh):
-        """Detect pivot highs equivalent to TradingView ta.pivothigh(source, left, right).
-
-        A bar j is a pivot high if it is the maximum in [j-pivot_len, j+pivot_len].
-        Confirmation date = j + pivot_len (the bar where the pivot can first be observed).
-
-        Returns list of (confirm_date, pivot_date, pivot_value).
-        """
-        values = series.values
-        dates = series.index
-        n = len(values)
-        results = []
-
-        for j in range(pivot_len, n - pivot_len):
-            window = values[j - pivot_len : j + pivot_len + 1]
-            if values[j] == np.max(window) and values[j] == window[pivot_len]:
-                # Prominence check: peak - window min
-                prominence = values[j] - np.min(window)
-                if prominence >= prom_thresh and values[j] >= level_thresh:
-                    confirm_idx = j + pivot_len
-                    results.append((dates[confirm_idx], dates[j], values[j]))
-
-        return results
+        """Delegate to module-level detect_pivot_high()."""
+        return detect_pivot_high(series, pivot_len, prom_thresh, level_thresh)
 
     def _detect_pivot_low(self, series, pivot_len, prom_thresh):
-        """Detect pivot lows equivalent to TradingView ta.pivotlow(source, left, right).
-
-        A bar j is a pivot low if it is the minimum in [j-pivot_len, j+pivot_len].
-        Confirmation date = j + pivot_len.
-        Level check is done by the caller (differs for 200-EMA vs short EMA).
-
-        Returns list of (confirm_date, pivot_date, pivot_value).
-        """
-        values = series.values
-        dates = series.index
-        n = len(values)
-        results = []
-
-        for j in range(pivot_len, n - pivot_len):
-            window = values[j - pivot_len : j + pivot_len + 1]
-            if values[j] == np.min(window) and values[j] == window[pivot_len]:
-                # Prominence check: window max - trough
-                prominence = np.max(window) - values[j]
-                if prominence >= prom_thresh:
-                    confirm_idx = j + pivot_len
-                    results.append((dates[confirm_idx], dates[j], values[j]))
-
-        return results
+        """Delegate to module-level detect_pivot_low()."""
+        return detect_pivot_low(series, pivot_len, prom_thresh)
 
     def _precompute_tv_signals(self):
         """Pre-compute TradingView-style pivot signals before trade execution."""

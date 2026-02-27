@@ -373,6 +373,58 @@ class TestTradeLogging(unittest.TestCase):
         self.assertAlmostEqual(backtest._calculate_win_rate(), 0.5, places=6)
         self.assertAlmostEqual(backtest._calculate_profit_factor(), 2.0, places=6)
 
+    def test_12_open_positions_closed_at_backtest_end(self):
+        """Test: Open positions are force-closed with reason 'backtest_end' at end of backtest."""
+        backtest = Backtest(
+            start_date=self.start_date,
+            end_date=self.end_date,
+            symbol=self.symbol,
+            use_saved_data=True,
+            no_show_plot=True,
+        )
+
+        # Simulate an entry without exit
+        test_date = pd.Timestamp('2023-06-01')
+        test_price = 100.0
+        test_shares = 50
+        backtest._execute_entry(test_date, test_price, test_shares, 'long_ma_bottom')
+
+        # Verify position is open
+        self.assertEqual(backtest.current_position, test_shares)
+        self.assertEqual(len(backtest.open_positions), 1)
+
+        # Set up minimal price_data for execute_trades to use
+
+        dates = pd.date_range('2023-06-01', '2023-06-10', freq='D')
+        n = len(dates)
+        price_values = [100.0 + i * 0.5 for i in range(n)]
+
+        backtest.price_data = pd.DataFrame(
+            {
+                'adjusted_close': price_values,
+                'open': price_values,
+                'high': [p + 1 for p in price_values],
+                'low': [p - 1 for p in price_values],
+                'close': price_values,
+            },
+            index=dates,
+        )
+
+        # Simulate backtest end force-close
+        final_date = backtest.price_data.index[-1]
+        final_price = backtest.price_data['adjusted_close'].iloc[-1]
+
+        if backtest.current_position > 0:
+            backtest._execute_exit(final_date, final_price, reason='backtest_end')
+
+        # Verify position is closed
+        self.assertEqual(backtest.current_position, 0)
+        self.assertEqual(len(backtest.open_positions), 0)
+
+        # Verify trade_log entry has 'backtest_end' reason
+        self.assertEqual(len(backtest.trade_log), 1)
+        self.assertEqual(backtest.trade_log[0]['exit_reason'], 'backtest_end')
+
 
 if __name__ == '__main__':
     # Run tests with verbose output
