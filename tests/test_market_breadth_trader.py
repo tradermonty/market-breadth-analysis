@@ -283,7 +283,15 @@ class TestMarketBreadthTrader(unittest.TestCase):
 
         # Set up mock for sell order
         mock_order = Mock()
+        mock_order.id = 'order-stop'
         self.mock_api.submit_order.return_value = mock_order
+
+        # Mock get_order for _wait_for_fill
+        filled_order = Mock()
+        filled_order.status = 'filled'
+        filled_order.filled_qty = 100
+        filled_order.filled_avg_price = '45.0'
+        self.mock_api.get_order.return_value = filled_order
 
         self.trader.check_signals_and_trade()
 
@@ -311,7 +319,15 @@ class TestMarketBreadthTrader(unittest.TestCase):
 
         # Set up mock for sell order
         mock_order = Mock()
+        mock_order.id = 'order-stop-recovery'
         self.mock_api.submit_order.return_value = mock_order
+
+        # Mock get_order for _wait_for_fill
+        filled_order = Mock()
+        filled_order.status = 'filled'
+        filled_order.filled_qty = 100
+        filled_order.filled_avg_price = '45.0'
+        self.mock_api.get_order.return_value = filled_order
 
         self.trader.check_signals_and_trade()
 
@@ -373,12 +389,20 @@ class TestMarketBreadthTrader(unittest.TestCase):
 
         # Mock account for buying power
         mock_account = Mock()
-        mock_account.buying_power = '10000.0'
+        mock_account.cash = '10000.0'
         self.mock_api.get_account.return_value = mock_account
 
         # Set up mock for buy order
         mock_order = Mock()
+        mock_order.id = 'order-buy'
         self.mock_api.submit_order.return_value = mock_order
+
+        # Mock get_order for _wait_for_fill
+        filled_order = Mock()
+        filled_order.status = 'filled'
+        filled_order.filled_qty = 181
+        filled_order.filled_avg_price = '55.0'
+        self.mock_api.get_order.return_value = filled_order
 
         self.trader.check_signals_and_trade()
 
@@ -409,6 +433,101 @@ class TestMarketBreadthTrader(unittest.TestCase):
             self.trader._sync_position_from_broker()
 
         self.assertIn('connection timeout', str(ctx.exception))
+
+    def test_missing_api_key_raises(self):
+        """C-7: Missing API key raises EnvironmentError at startup"""
+        with (
+            patch('trade.run_market_breadth_trade.ALPACA_API_KEY', None),
+            patch('trade.run_market_breadth_trade.ALPACA_SECRET_KEY', 'some_secret'),
+            patch('trade.run_market_breadth_trade.ALPACA_BASE_URL', 'https://paper-api.alpaca.markets'),
+            patch.dict('sys.modules', {'alpaca_trade_api': MagicMock()}),
+        ):
+            with self.assertRaises(OSError) as ctx:
+                MarketBreadthTrader()
+            self.assertIn('ALPACA_API_KEY', str(ctx.exception))
+
+    def test_live_url_requires_confirmation(self):
+        """C-6: Live trading URL requires ALPACA_LIVE_CONFIRMED=true"""
+        with (
+            patch('trade.run_market_breadth_trade.ALPACA_API_KEY', 'test_key'),
+            patch('trade.run_market_breadth_trade.ALPACA_SECRET_KEY', 'test_secret'),
+            patch('trade.run_market_breadth_trade.ALPACA_BASE_URL', 'https://api.alpaca.markets'),
+            patch.dict('sys.modules', {'alpaca_trade_api': MagicMock()}),
+            patch.dict(os.environ, {'ALPACA_LIVE_CONFIRMED': ''}, clear=False),
+        ):
+            with self.assertRaises(OSError) as ctx:
+                MarketBreadthTrader()
+            self.assertIn('Live trading URL detected', str(ctx.exception))
+
+    def test_wait_for_fill_success(self):
+        """C-1: _wait_for_fill returns filled order on success"""
+        mock_order = Mock()
+        mock_order.id = 'order-123'
+
+        filled = Mock()
+        filled.status = 'filled'
+        filled.filled_qty = 100
+        filled.filled_avg_price = '55.0'
+        self.mock_api.get_order.return_value = filled
+
+        result = self.trader._wait_for_fill(mock_order)
+        self.assertEqual(result, filled)
+        self.mock_api.get_order.assert_called_with('order-123')
+
+    def test_wait_for_fill_canceled(self):
+        """C-1: _wait_for_fill returns None on canceled order"""
+        mock_order = Mock()
+        mock_order.id = 'order-456'
+
+        canceled = Mock()
+        canceled.status = 'canceled'
+        self.mock_api.get_order.return_value = canceled
+
+        result = self.trader._wait_for_fill(mock_order)
+        self.assertIsNone(result)
+
+    @patch('trade.run_market_breadth_trade.MarketBreadthTrader._initialize_alpaca')
+    def test_wait_for_fill_testmode(self, mock_init):
+        """C-1: _wait_for_fill returns True in testmode without polling"""
+        mock_init.return_value = Mock()
+        trader = MarketBreadthTrader(testmode=True, test_date='2024-01-01')
+        result = trader._wait_for_fill(Mock())
+        self.assertTrue(result)
+
+    def test_signal_lookback_catches_missed_day(self):
+        """M-1: _find_recent_signal catches signal from 1-3 days ago"""
+        signal_dates = [pd.Timestamp('2024-01-10'), pd.Timestamp('2024-01-15')]
+
+        # Exact match
+        result = self.trader._find_recent_signal(signal_dates, pd.Timestamp('2024-01-10'))
+        self.assertEqual(result, pd.Timestamp('2024-01-10'))
+
+        # 2 days later (within lookback)
+        result = self.trader._find_recent_signal(signal_dates, pd.Timestamp('2024-01-12'))
+        self.assertEqual(result, pd.Timestamp('2024-01-10'))
+
+        # 4 days later (outside default 3-day lookback)
+        result = self.trader._find_recent_signal(signal_dates, pd.Timestamp('2024-01-14'))
+        self.assertIsNone(result)
+
+        # Returns most recent signal when multiple in range
+        result = self.trader._find_recent_signal(signal_dates, pd.Timestamp('2024-01-16'))
+        self.assertEqual(result, pd.Timestamp('2024-01-15'))
+
+    def test_exception_with_position_logs_critical(self):
+        """C-5: Exception with open position logs CRITICAL alert"""
+        self.trader.testmode = True
+        self.trader.test_date = '2024-01-02'
+        self.trader.current_position = 100
+
+        # Make is_closing_time_range return True, then analyze_market raise
+        self.trader.is_closing_time_range = Mock(return_value=True)
+        self.trader.analyze_market = Mock(side_effect=RuntimeError('API down'))
+
+        with self.assertLogs('market_breadth_trade', level='CRITICAL') as cm:
+            self.trader.run()
+
+        self.assertTrue(any('ALERT' in msg and 'open position' in msg for msg in cm.output))
 
 
 if __name__ == '__main__':

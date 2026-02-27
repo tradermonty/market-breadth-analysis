@@ -1,5 +1,6 @@
 import argparse
 import logging
+import logging.handlers
 import os
 import pathlib
 import sys
@@ -18,15 +19,18 @@ from market_breadth import (
     calculate_trend_with_hysteresis,
     get_multiple_stock_data,
     get_sp500_tickers_from_fmp,
-    load_stock_data,
-    save_stock_data,
 )
 
 # Log settings
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.FileHandler('trade/market_breadth_trade.log'), logging.StreamHandler()],
+    handlers=[
+        logging.handlers.RotatingFileHandler(
+            'trade/market_breadth_trade.log', maxBytes=10 * 1024 * 1024, backupCount=5
+        ),
+        logging.StreamHandler(),
+    ],
 )
 logger = logging.getLogger('market_breadth_trade')
 
@@ -127,6 +131,16 @@ class MarketBreadthTrader:
             raise ImportError(
                 'alpaca-trade-api is required for live trading. Install it with: pip install alpaca-trade-api'
             ) from exc
+
+        if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
+            raise OSError('ALPACA_API_KEY and ALPACA_SECRET_KEY must be set in .env or environment')
+
+        if 'paper' not in ALPACA_BASE_URL:
+            if os.getenv('ALPACA_LIVE_CONFIRMED', '').lower() != 'true':
+                raise OSError(
+                    f'Live trading URL detected: {ALPACA_BASE_URL}. Set ALPACA_LIVE_CONFIRMED=true to confirm.'
+                )
+            logger.warning('LIVE TRADING MODE — connecting to real money account')
 
         return tradeapi.REST(ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL, api_version='v2')
 
@@ -236,7 +250,7 @@ class MarketBreadthTrader:
             logger.info(f'Buy order executed: {shares} shares of {self.symbol}, reason: {reason}')
             return order
         except Exception as e:
-            logger.error(f'Error executing buy order: {e}')
+            logger.error(f'Error executing buy order: {e}', exc_info=True)
             return None
 
     def execute_sell(self, shares, reason=''):
@@ -252,8 +266,25 @@ class MarketBreadthTrader:
             logger.info(f'Sell order executed: {shares} shares of {self.symbol}, reason: {reason}')
             return order
         except Exception as e:
-            logger.error(f'Error executing sell order: {e}')
+            logger.error(f'Error executing sell order: {e}', exc_info=True)
             return None
+
+    def _wait_for_fill(self, order, timeout_seconds=60):
+        """Poll order until filled, canceled, or timeout."""
+        if self.testmode:
+            return True
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            updated = self.api.get_order(order.id)
+            if updated.status == 'filled':
+                logger.info(f'Order {order.id} filled: {updated.filled_qty} @ ${float(updated.filled_avg_price):.2f}')
+                return updated
+            if updated.status in ('canceled', 'expired', 'rejected', 'suspended'):
+                logger.warning(f'Order {order.id} ended: {updated.status}')
+                return None
+            time.sleep(2)
+        logger.error(f'Order {order.id} not filled within {timeout_seconds}s')
+        return None
 
     def run(self):
         """Execute trading"""
@@ -296,7 +327,12 @@ class MarketBreadthTrader:
                         logger.info('Trading completed for today.')
                     break
                 except Exception as e:
-                    logger.error(f'Error during trading: {e!s}')
+                    logger.error(f'Error during trading: {e!s}', exc_info=True)
+                    if self.current_position > 0:
+                        logger.critical(
+                            f'ALERT: Exception with open position ({self.current_position} shares). '
+                            'Manual intervention may be required.'
+                        )
                     break
 
             if self.testmode:
@@ -325,7 +361,6 @@ class MarketBreadthTrader:
                 today = datetime.now()
 
             yesterday = (today - timedelta(days=1)).strftime('%Y-%m-%d')
-            today.strftime('%Y-%m-%d')
             start_date = (today - timedelta(days=365)).strftime('%Y-%m-%d')
 
             logger.info(f'Data retrieval period: {start_date} to {yesterday}')
@@ -406,7 +441,7 @@ class MarketBreadthTrader:
             logger.info('Market data analysis completed')
 
         except Exception as e:
-            logger.error(f'Error during market data analysis: {e!s}')
+            logger.error(f'Error during market data analysis: {e!s}', exc_info=True)
             raise
 
     def _get_latest_prices_from_alpaca(self, tickers):
@@ -461,7 +496,7 @@ class MarketBreadthTrader:
             return latest_prices
 
         except Exception as e:
-            logger.error(f'Error getting latest prices from Alpaca: {e!s}')
+            logger.error(f'Error getting latest prices from Alpaca: {e!s}', exc_info=True)
             raise
 
     def _get_latest_price_from_alpaca(self, ticker):
@@ -480,66 +515,8 @@ class MarketBreadthTrader:
                 return pd.Series()
 
         except Exception as e:
-            logger.error(f'Error: Error occurred while getting latest price for {ticker}: {e!s}')
+            logger.error(f'Error: Error occurred while getting latest price for {ticker}: {e!s}', exc_info=True)
             return pd.Series()
-
-    def _get_sp500_data(self):
-        """Get data for all S&P500 stocks"""
-        filename = 'sp500_all_stocks.csv'
-
-        # Set calculation start date (2 years before current date)
-        today = datetime.now()
-        yesterday = (today - timedelta(days=1)).strftime('%Y-%m-%d')
-        calculation_start_date = (pd.to_datetime(today.strftime('%Y-%m-%d')) - pd.DateOffset(years=2)).strftime(
-            '%Y-%m-%d'
-        )
-
-        # Load saved data
-        if self.use_saved_data:
-            saved_data = load_stock_data(filename)
-            if saved_data is not None and not saved_data.empty:
-                # Check date range and data quality
-                if (
-                    pd.to_datetime(calculation_start_date) >= saved_data.index.min()
-                    and pd.to_datetime(yesterday) <= saved_data.index.max()
-                ):
-                    # Check for missing or invalid data
-                    if saved_data.isnull().sum().sum() == 0:
-                        # Extract data for calculation period
-                        mask = (saved_data.index >= pd.to_datetime(calculation_start_date)) & (
-                            saved_data.index <= pd.to_datetime(yesterday)
-                        )
-                        return saved_data.loc[mask]
-                    else:
-                        logger.warning('Saved data contains missing values, fetching fresh data')
-
-        # Get S&P500 ticker list
-        tickers = get_sp500_tickers_from_fmp()
-        logger.info(f'Number of tickers retrieved: {len(tickers)}')
-
-        # Get data for all stocks (from calculation start date to yesterday)
-        all_data = get_multiple_stock_data(
-            tickers, calculation_start_date, yesterday, use_saved_data=self.use_saved_data
-        )
-
-        if not all_data.empty:
-            # Check data quality
-            if all_data.isnull().sum().sum() > 0:
-                logger.warning('Fetched data contains missing values, attempting to fill')
-                # Forward fill missing values
-                all_data = all_data.fillna(method='ffill')
-                # Backward fill any remaining missing values
-                all_data = all_data.fillna(method='bfill')
-
-            # Save data
-            save_stock_data(all_data, filename)
-            # Extract data for calculation period
-            mask = (all_data.index >= pd.to_datetime(calculation_start_date)) & (
-                all_data.index <= pd.to_datetime(yesterday)
-            )
-            return all_data.loc[mask]
-
-        return pd.DataFrame()
 
     def _detect_signals(self):
         """Detect signals using TV mode pivot detection (aligned with backtest)."""
@@ -591,6 +568,14 @@ class MarketBreadthTrader:
         logger.info(f'  Long MA trough signals (entry): {len(self._tv_long_trough_signals)}')
         logger.info(f'  Short MA trough signals (entry): {len(self._tv_short_trough_signals)}')
 
+    def _find_recent_signal(self, signal_dates, current_date, lookback_days=3):
+        """Find the most recent signal within lookback_days of current_date."""
+        for d in sorted(signal_dates, reverse=True):
+            delta = (current_date - d).days
+            if 0 <= delta <= lookback_days:
+                return d
+        return None
+
     def check_signals_and_trade(self):
         """Check signals and execute trades"""
         logger.info('Checking signals and executing trades')
@@ -618,9 +603,13 @@ class MarketBreadthTrader:
                 logger.info(f'Stop loss triggered: price ${current_price:.2f} <= stop ${stop_loss_price:.2f}')
                 order = self.execute_sell(self.current_position, reason='stop loss')
                 if order:
-                    logger.info(f'Stop loss exit: {self.current_position} shares at ${current_price:.2f}')
-                    self.current_position = 0
-                    self.entry_prices = []
+                    filled = self._wait_for_fill(order)
+                    if filled:
+                        logger.info(f'Stop loss exit: {self.current_position} shares at ${current_price:.2f}')
+                        self.current_position = 0
+                        self.entry_prices = []
+                    else:
+                        logger.error('Stop loss order not filled — position remains open')
                 else:
                     logger.error('Failed to execute stop loss exit')
                 return  # Stop loss takes priority, skip other signals
@@ -632,10 +621,13 @@ class MarketBreadthTrader:
         else:
             current_date = pd.to_datetime(datetime.now().strftime('%Y-%m-%d'))
 
-        # Check for signals
-        has_short_ma_bottom = current_date in self.short_ma_bottoms and not self.disable_short_ma_entry
-        has_long_ma_bottom = current_date in self.long_ma_bottoms
-        has_peak = current_date in self.peaks
+        # Check for signals (with lookback for missed days)
+        has_peak = self._find_recent_signal(self.peaks, current_date) is not None
+        has_long_ma_bottom = self._find_recent_signal(self.long_ma_bottoms, current_date) is not None
+        has_short_ma_bottom = (
+            self._find_recent_signal(self.short_ma_bottoms, current_date) is not None
+            and not self.disable_short_ma_entry
+        )
 
         # Log signal detection status
         logger.info('Signal detection status:')
@@ -651,9 +643,15 @@ class MarketBreadthTrader:
 
             order = self.execute_sell(self.current_position, reason='peak exit')
             if order:
-                logger.info(f'Exit executed at long MA peak: {self.current_position} shares at ${current_price:.2f}')
-                self.current_position = 0
-                self.entry_prices = []
+                filled = self._wait_for_fill(order)
+                if filled:
+                    logger.info(
+                        f'Exit executed at long MA peak: {self.current_position} shares at ${current_price:.2f}'
+                    )
+                    self.current_position = 0
+                    self.entry_prices = []
+                else:
+                    logger.error('Peak exit order not filled — position remains open')
             else:
                 logger.error('Failed to execute exit at long MA peak')
 
@@ -667,15 +665,22 @@ class MarketBreadthTrader:
             else:
                 # Use all available capital (100%)
                 account = self.api.get_account()
-                available_capital = float(account.buying_power)
+                available_capital = float(account.cash)
 
                 shares = self._calculate_shares(available_capital, current_price)
 
                 if shares > 0:
                     order = self.execute_buy(shares, reason='long_ma_bottom')
                     if order:
-                        logger.info(f'Entry executed at long MA bottom: {shares} shares at ${current_price:.2f}')
-                        self.entry_prices.append(current_price)
+                        filled = self._wait_for_fill(order)
+                        if filled:
+                            fill_price = (
+                                float(filled.filled_avg_price) if hasattr(filled, 'filled_avg_price') else current_price
+                            )
+                            logger.info(f'Entry executed at long MA bottom: {shares} shares at ${fill_price:.2f}')
+                            self.entry_prices.append(fill_price)
+                        else:
+                            logger.error('Long MA bottom buy order not filled')
                     else:
                         logger.error('Failed to execute entry at long MA bottom')
                 else:
@@ -691,15 +696,22 @@ class MarketBreadthTrader:
             else:
                 # Use all available capital (100%, aligned with backtest)
                 account = self.api.get_account()
-                available_capital = float(account.buying_power)
+                available_capital = float(account.cash)
 
                 shares = self._calculate_shares(available_capital, current_price)
 
                 if shares > 0:
                     order = self.execute_buy(shares, reason='short_ma_bottom')
                     if order:
-                        logger.info(f'Entry executed at short MA bottom: {shares} shares at ${current_price:.2f}')
-                        self.entry_prices.append(current_price)
+                        filled = self._wait_for_fill(order)
+                        if filled:
+                            fill_price = (
+                                float(filled.filled_avg_price) if hasattr(filled, 'filled_avg_price') else current_price
+                            )
+                            logger.info(f'Entry executed at short MA bottom: {shares} shares at ${fill_price:.2f}')
+                            self.entry_prices.append(fill_price)
+                        else:
+                            logger.error('Short MA bottom buy order not filled')
                     else:
                         logger.error('Failed to execute entry at short MA bottom')
                 else:
