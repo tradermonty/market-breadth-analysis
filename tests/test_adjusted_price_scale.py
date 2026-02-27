@@ -373,6 +373,218 @@ class TestSameBarSlTriggersWithDividendAdjustment(unittest.TestCase):
         )
 
 
+class TestSameBarSlNotTriggeredWithReverseSplit(unittest.TestCase):
+    """Test 7: Same-bar SL does NOT fire when raw_low < SL but adjusted_low > SL."""
+
+    def test_same_bar_sl_not_triggered_reverse_split(self):
+        """Reverse-split data (adj_ratio=2.0) via _execute_tv_same_bar.
+
+        raw_low values (25-35) are all below SL (~51.55), but adjusted_low
+        values (50-70) are all above SL. SL must NOT fire.
+        """
+        bt = _make_backtest(tv_pine_compat=False, tv_mode=True, stop_loss_pct=0.08)
+        ohlc, breadth = _build_reverse_split_data()
+        _inject_data_with_adjusted(bt, ohlc, breadth)
+
+        self.assertEqual(len(bt.trade_log), 1, 'Expected exactly one completed trade')
+
+        trade = bt.trade_log[0]
+        self.assertEqual(trade['exit_reason'], 'backtest_end', 'SL should NOT fire; adjusted_low is above SL')
+
+        # Verify the boundary condition holds on the entry bar itself
+        entry_date = trade['entry_date']
+        sl_threshold = trade['entry_price'] * (1 - 0.08)
+        raw_low = ohlc.loc[entry_date, 'low']
+        adjusted_low = bt.price_data.loc[entry_date, 'adjusted_low']
+        self.assertLess(
+            raw_low,
+            sl_threshold,
+            f'raw_low ({raw_low}) should be BELOW SL ({sl_threshold:.2f}) — old code would false-trigger',
+        )
+        self.assertGreater(
+            adjusted_low,
+            sl_threshold,
+            f'adjusted_low ({adjusted_low:.2f}) should be ABOVE SL ({sl_threshold:.2f}) — no SL should fire',
+        )
+
+
+class TestSameBarSlFillFormula(unittest.TestCase):
+    """Test 8: Same-bar SL fill price = min(adjusted_open, stop_price) * (1 - slippage)."""
+
+    def test_same_bar_sl_fill_equals_min_adj_open_stop(self):
+        """Dividend-adjusted data (adj_ratio=0.8) via _execute_tv_same_bar.
+
+        On bar 14: adjusted_low=30.0 < SL=36.82, adjusted_open=40.8 > SL.
+        fill_at = min(40.8, 36.82) = 36.82 (capped at stop price).
+        exit_price = fill_at * (1 - slippage).
+        """
+        bt = _make_backtest(tv_pine_compat=False, tv_mode=True, stop_loss_pct=0.08)
+        ohlc, breadth = _build_dividend_adjusted_data()
+        _inject_data_with_adjusted(bt, ohlc, breadth)
+
+        self.assertEqual(len(bt.trade_log), 1)
+        trade = bt.trade_log[0]
+        self.assertEqual(trade['exit_reason'], 'stop loss')
+
+        exit_date = trade['exit_date']
+        sl_threshold = trade['entry_price'] * (1 - 0.08)
+        adj_open = bt.price_data.loc[exit_date, 'adjusted_open']
+        adj_low = bt.price_data.loc[exit_date, 'adjusted_low']
+
+        # Preconditions: adjusted_open > SL > adjusted_low (fill capped at SL)
+        self.assertGreater(adj_open, sl_threshold)
+        self.assertLess(adj_low, sl_threshold)
+
+        # fill_at = min(adjusted_open, stop_price), then slippage applied
+        expected_fill_at = min(adj_open, sl_threshold)
+        expected_exit_price = expected_fill_at * (1 - bt.slippage)
+        self.assertAlmostEqual(
+            trade['exit_price'],
+            expected_exit_price,
+            places=2,
+            msg=f'exit_price should be min(adj_open={adj_open:.4f}, SL={sl_threshold:.4f}) '
+            f'* (1-slippage) = {expected_exit_price:.4f}, got {trade["exit_price"]:.4f}',
+        )
+
+
+def _build_sp500_breadth_from_series(breadth_series):
+    """Build a fake sp500_data DataFrame that yields the given breadth when passed to calculate_above_ma.
+
+    calculate_above_ma() returns a binary DataFrame (1 if stock > 200-day MA, else 0)
+    and breadth_index = above_ma.mean(axis=1). To produce a specific breadth ratio,
+    we create 100 synthetic stock columns: floor(breadth*100) columns above MA, rest below.
+    """
+    n_stocks = 100
+    rows = []
+    for _date, val in breadth_series.items():
+        n_above = round(val * n_stocks)
+        # Stocks "above MA" have price 200, "below MA" have price 50.
+        # With 200-day MA on flat data, 200-day MA = same value, so threshold is trivial.
+        row = [200.0] * n_above + [50.0] * (n_stocks - n_above)
+        rows.append(row)
+    cols = [f'STOCK_{i:03d}' for i in range(n_stocks)]
+    return pd.DataFrame(rows, index=breadth_series.index, columns=cols)
+
+
+class TestRunGeneratesAdjustedOhlc(unittest.TestCase):
+    """Test 9: Integration — run() auto-generates adjusted OHLC columns."""
+
+    def test_run_generates_adjusted_ohlc_columns(self):
+        """Call run() with mocked data and verify adjusted_open/high/low are created.
+
+        Patches get_stock_price_ohlc to return synthetic OHLC with adj_ratio=0.6,
+        and _get_sp500_data to return matching breadth data. run() should compute
+        adjusted OHLC at L431-436.
+        """
+        from unittest.mock import patch
+
+        dates = pd.bdate_range('2024-01-02', periods=20)
+        adj_ratio_val = 0.6
+
+        ohlc = pd.DataFrame(
+            {
+                'open': [100.0 + i for i in range(20)],
+                'high': [110.0 + i for i in range(20)],
+                'low': [90.0 + i for i in range(20)],
+                'close': [105.0 + i for i in range(20)],
+                'adjusted_close': [(105.0 + i) * adj_ratio_val for i in range(20)],
+            },
+            index=dates,
+        )
+        breadth_vals = [0.5] * 20
+        sp500_fake = _build_sp500_breadth_from_series(pd.Series(breadth_vals, index=dates))
+
+        bt = Backtest(
+            start_date='2024-01-02',
+            end_date='2024-01-29',
+            tv_mode=True,
+            use_saved_data=True,
+            no_show_plot=True,
+            initial_capital=50000,
+            symbol='FAKE',
+        )
+
+        with (
+            patch('backtest.backtest.get_stock_price_ohlc', return_value=ohlc),
+            patch.object(bt, '_get_sp500_data', return_value=sp500_fake),
+            patch.object(bt, 'visualize_results'),
+        ):
+            bt.run()
+
+        # Verify adjusted columns were generated by run()
+        for col in ('adjusted_open', 'adjusted_high', 'adjusted_low'):
+            self.assertIn(col, bt.price_data.columns, f'{col} should be auto-generated by run()')
+
+        # Verify values: adj_ratio = 0.6 across all bars
+        for i in range(len(bt.price_data)):
+            row = bt.price_data.iloc[i]
+            ratio = row['adjusted_close'] / row['close']
+            self.assertAlmostEqual(ratio, adj_ratio_val, places=4)
+            self.assertAlmostEqual(row['adjusted_open'], row['open'] * ratio, places=4)
+            self.assertAlmostEqual(row['adjusted_low'], row['low'] * ratio, places=4)
+
+
+class TestRunIntegrationSameBarSlUsesAdjusted(unittest.TestCase):
+    """Test 10: Integration — run() same-bar SL uses adjusted columns."""
+
+    def test_run_path_same_bar_sl_uses_adjusted(self):
+        """Call run() with dividend-adjusted data (adj_ratio=0.8).
+
+        Verifies that the same-bar SL on bar 14 fires because adjusted_low < SL,
+        even though raw_low > SL. This exercises the full run() → adjusted OHLC
+        generation → execute_trades() → _execute_tv_same_bar() pipeline.
+        """
+        from unittest.mock import patch
+
+        ohlc, breadth = _build_dividend_adjusted_data()
+        sp500_fake = _build_sp500_breadth_from_series(breadth)
+
+        # Mock calculate_above_ma because 20-bar synthetic data cannot compute
+        # a real 200-day MA; we inject known breadth values directly.
+        breadth_df = pd.DataFrame({'breadth': breadth}, index=breadth.index)
+
+        bt = Backtest(
+            start_date='2024-01-02',
+            end_date='2024-01-29',
+            tv_mode=True,
+            tv_pine_compat=False,
+            use_saved_data=True,
+            no_show_plot=True,
+            initial_capital=50000,
+            stop_loss_pct=0.08,
+            symbol='FAKE',
+            debug=True,
+        )
+        bt.pivot_len_long = 3
+        bt.pivot_len_short = 2
+
+        with (
+            patch('backtest.backtest.get_stock_price_ohlc', return_value=ohlc),
+            patch.object(bt, '_get_sp500_data', return_value=sp500_fake),
+            patch('backtest.backtest.calculate_above_ma', return_value=breadth_df),
+            patch.object(bt, 'visualize_results'),
+        ):
+            bt.run()
+
+        # Verify adjusted columns were created by run()
+        self.assertIn('adjusted_low', bt.price_data.columns)
+        self.assertIn('adjusted_open', bt.price_data.columns)
+
+        # Verify SL fired correctly
+        self.assertGreater(len(bt.trade_log), 0, 'Expected at least one trade')
+        sl_trades = [t for t in bt.trade_log if t.get('exit_reason') == 'stop loss']
+        self.assertGreater(len(sl_trades), 0, 'SL should fire via adjusted_low')
+
+        # Verify boundary condition on the SL trade
+        trade = sl_trades[0]
+        exit_date = trade['exit_date']
+        sl = trade['entry_price'] * (1 - 0.08)
+        raw_low = ohlc.loc[exit_date, 'low']
+        adj_low = bt.price_data.loc[exit_date, 'adjusted_low']
+        self.assertGreater(raw_low, sl, 'raw_low must be above SL (old code would miss)')
+        self.assertLess(adj_low, sl, 'adjusted_low must be below SL (triggers correctly)')
+
+
 class TestNoOhlcFallbackUnchanged(unittest.TestCase):
     """Test 4: Close-only data (no OHLC) works without adjusted columns."""
 
