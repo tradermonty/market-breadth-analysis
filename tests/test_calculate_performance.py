@@ -156,6 +156,65 @@ class TestCalculatePerformance(unittest.TestCase):
         self.assertEqual(bt.bh_total_return, 0)
         self.assertEqual(bt.bh_cagr, 0)
 
+    def test_08_bh_calculation_correctness(self):
+        """B&H return matches manual formula calculation."""
+        bt = _make_backtest(slippage=0.001, commission=0.001)
+        dates = pd.date_range('2024-01-01', periods=252, freq='B')
+        initial_price = 100.0
+        final_price = 110.0
+        prices = np.linspace(initial_price, final_price, len(dates))
+
+        bt.equity_curve = [{'date': d, 'equity': 50000 * (p / initial_price)} for d, p in zip(dates, prices)]
+        bt.price_data = pd.DataFrame({'adjusted_close': prices}, index=dates)
+        bt.trades = []
+
+        bt.calculate_performance()
+
+        # Manual B&H calculation
+        buy_hold_shares = int(bt.initial_capital / (initial_price * (1 + bt.slippage)))
+        buy_hold_cost = buy_hold_shares * initial_price * (1 + bt.slippage) * (1 + bt.commission)
+        buy_hold_value = buy_hold_shares * final_price * (1 - bt.slippage) * (1 - bt.commission)
+        expected_bh_return = (buy_hold_value / buy_hold_cost) - 1
+
+        self.assertAlmostEqual(bt.bh_total_return, expected_bh_return, places=6)
+        self.assertGreater(bt.bh_total_return, 0)
+
+    def test_09_run_end_to_end_with_saved_data(self):
+        """run() completes without error and sets all expected attributes."""
+        import pathlib
+
+        data_file = pathlib.Path('data/sp500_all_stocks.csv')
+        if not data_file.exists():
+            self.skipTest('Saved data not available')
+
+        bt = _make_backtest(
+            start_date='2023-01-01',
+            end_date='2023-06-30',
+            use_saved_data=True,
+            no_show_plot=True,
+            symbol='SPY',
+        )
+        bt.run()
+
+        # Verify all expected attributes exist and are not NaN
+        for attr in (
+            'total_return',
+            'cagr',
+            'sharpe_ratio',
+            'max_drawdown',
+            'bh_total_return',
+            'bh_cagr',
+            'bh_sharpe',
+            'bh_max_drawdown',
+        ):
+            self.assertTrue(hasattr(bt, attr), f'Missing attribute: {attr}')
+            val = getattr(bt, attr)
+            self.assertFalse(np.isnan(val), f'{attr} is NaN')
+            self.assertFalse(np.isinf(val), f'{attr} is inf')
+
+        # Equity curve should not be empty
+        self.assertGreater(len(bt.equity_curve), 0)
+
 
 if __name__ == '__main__':
     unittest.main()

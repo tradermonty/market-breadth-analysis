@@ -425,6 +425,154 @@ class TestTradeLogging(unittest.TestCase):
         self.assertEqual(len(backtest.trade_log), 1)
         self.assertEqual(backtest.trade_log[0]['exit_reason'], 'backtest_end')
 
+    def test_13_backtest_end_equity_reflects_close_costs(self):
+        """Integration test: execute_trades() force-close updates equity curve with slippage/commission."""
+        import numpy as np
+
+        from market_breadth import calculate_trend_with_hysteresis
+
+        bt = Backtest(
+            start_date='2024-01-01',
+            end_date='2024-03-31',
+            tv_mode=True,
+            no_pyramiding=True,
+            use_saved_data=True,
+            no_show_plot=True,
+            initial_capital=50000,
+            slippage=0.001,
+            commission=0.001,
+            debug=False,
+        )
+        bt.pivot_len_long = 3
+        bt.pivot_len_short = 2
+
+        # Build 60 bars of price/breadth data with a trough near the start
+        n = 60
+        dates = pd.date_range('2024-01-02', periods=n, freq='B')
+
+        # Breadth: dip then recover — triggers a long MA trough entry
+        breadth_vals = np.concatenate(
+            [
+                np.linspace(0.55, 0.30, 10),  # decline
+                np.linspace(0.30, 0.35, 5),  # trough area
+                np.linspace(0.35, 0.55, 45),  # recovery (no peak exit)
+            ]
+        )
+        breadth = pd.Series(breadth_vals, index=dates)
+
+        prices = np.linspace(100, 120, n)
+        ohlc = pd.DataFrame(
+            {
+                'adjusted_close': prices,
+                'open': prices,
+                'high': prices + 1,
+                'low': prices - 1,
+                'close': prices,
+            },
+            index=dates,
+        )
+
+        # Inject data and run execute_trades()
+        bt.price_data = ohlc.copy()
+        bt.breadth_index = breadth.copy()
+        bt.sp500_data = pd.DataFrame()
+        bt.short_ma_line = breadth.ewm(span=bt.short_ma, adjust=False).mean()
+        bt.long_ma_line = breadth.ewm(span=bt.long_ma, adjust=False).mean()
+        bt.long_ma_trend = pd.Series(calculate_trend_with_hysteresis(bt.long_ma_line), index=bt.long_ma_line.index)
+        bt.short_ma_bottoms = []
+        bt.long_ma_bottoms = []
+        bt.peaks = []
+        bt._precompute_tv_signals()
+
+        bt.execute_trades()
+
+        # If a position was opened and force-closed at backtest_end
+        backtest_end_trades = [t for t in bt.trade_log if t['exit_reason'] == 'backtest_end']
+        if backtest_end_trades:
+            # Final equity in curve should match current_capital (no open position)
+            final_equity = bt.equity_curve[-1]['equity']
+            self.assertEqual(bt.current_position, 0)
+            self.assertAlmostEqual(final_equity, bt.current_capital, places=2)
+        else:
+            # No position opened — equity should still be initial_capital
+            final_equity = bt.equity_curve[-1]['equity']
+            self.assertAlmostEqual(final_equity, bt.current_capital, delta=1.0)
+
+    def test_14_equity_curve_matches_capital_plus_position(self):
+        """Every equity_curve entry equals current_capital + position * price."""
+        import numpy as np
+
+        from market_breadth import calculate_trend_with_hysteresis
+
+        bt = Backtest(
+            start_date='2024-01-01',
+            end_date='2024-03-31',
+            tv_mode=True,
+            no_pyramiding=True,
+            use_saved_data=True,
+            no_show_plot=True,
+            initial_capital=50000,
+            slippage=0.001,
+            commission=0.001,
+            debug=True,  # Enable equity invariant check
+        )
+        bt.pivot_len_long = 3
+        bt.pivot_len_short = 2
+
+        # Build 60 bars with a trough then peak to trigger entry and exit
+        n = 60
+        dates = pd.date_range('2024-01-02', periods=n, freq='B')
+
+        breadth_vals = np.concatenate(
+            [
+                np.linspace(0.55, 0.30, 10),
+                np.linspace(0.30, 0.35, 5),
+                np.linspace(0.35, 0.75, 25),
+                np.linspace(0.75, 0.65, 10),
+                np.linspace(0.65, 0.60, 10),
+            ]
+        )
+        breadth = pd.Series(breadth_vals, index=dates)
+
+        prices = np.linspace(100, 120, n)
+        ohlc = pd.DataFrame(
+            {
+                'adjusted_close': prices,
+                'open': prices,
+                'high': prices + 1,
+                'low': prices - 1,
+                'close': prices,
+            },
+            index=dates,
+        )
+
+        bt.price_data = ohlc.copy()
+        bt.breadth_index = breadth.copy()
+        bt.sp500_data = pd.DataFrame()
+        bt.short_ma_line = breadth.ewm(span=bt.short_ma, adjust=False).mean()
+        bt.long_ma_line = breadth.ewm(span=bt.long_ma, adjust=False).mean()
+        bt.long_ma_trend = pd.Series(calculate_trend_with_hysteresis(bt.long_ma_line), index=bt.long_ma_line.index)
+        bt.short_ma_bottoms = []
+        bt.long_ma_bottoms = []
+        bt.peaks = []
+        bt._precompute_tv_signals()
+
+        # execute_trades() with debug=True will call _assert_equity_invariant
+        # on every bar — if there's a mismatch, AssertionError is raised
+        bt.execute_trades()
+
+        # Additionally verify all equity_curve entries manually
+        for entry in bt.equity_curve:
+            eq_val = entry['equity']
+            self.assertFalse(np.isnan(eq_val), f'NaN equity at {entry["date"]}')
+            self.assertGreater(eq_val, 0, f'Non-positive equity at {entry["date"]}')
+
+        # Final entry should match cash + position
+        final_equity = bt.equity_curve[-1]['equity']
+        final_price = bt.price_data['adjusted_close'].iloc[-1]
+        expected_final = bt.current_capital + (bt.current_position * final_price)
+        self.assertAlmostEqual(final_equity, expected_final, places=2)
+
 
 if __name__ == '__main__':
     # Run tests with verbose output
