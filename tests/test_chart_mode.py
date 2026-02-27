@@ -64,6 +64,7 @@ class TestChartModeInit(unittest.TestCase):
             use_saved_data=True,
             no_show_plot=True,
             chart_mode=True,
+            tv_mode=False,
         )
         self.assertTrue(bt.chart_mode)
 
@@ -144,6 +145,7 @@ class TestChartModeSignalDetection(unittest.TestCase):
             use_saved_data=True,
             no_show_plot=True,
             chart_mode=True,
+            tv_mode=False,
             threshold=0.5,
         )
         # The threshold attribute is still 0.5 but chart_mode overrides to 0.4
@@ -183,6 +185,7 @@ class TestChartModeSignalDetection(unittest.TestCase):
             use_saved_data=True,
             no_show_plot=True,
             chart_mode=True,
+            tv_mode=False,
         )
         # chart_mode should be True, meaning the 20-day min check is bypassed
         self.assertTrue(bt.chart_mode)
@@ -196,6 +199,7 @@ class TestChartModeSignalDetection(unittest.TestCase):
             use_saved_data=True,
             no_show_plot=True,
             chart_mode=True,
+            tv_mode=False,
         )
         self.assertTrue(bt.chart_mode)
 
@@ -208,6 +212,7 @@ class TestChartModeSignalDetection(unittest.TestCase):
             use_saved_data=True,
             no_show_plot=True,
             chart_mode=True,
+            tv_mode=False,
         )
         # chart_mode bypasses the len > long_ma check
         self.assertTrue(bt.chart_mode)

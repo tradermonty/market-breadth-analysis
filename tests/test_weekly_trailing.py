@@ -14,7 +14,6 @@ Tests cover:
 import os
 import sys
 import unittest
-import warnings
 
 import numpy as np
 import pandas as pd
@@ -293,17 +292,13 @@ class TestModeConflictTvPineCompat(unittest.TestCase):
         self.assertIn('tv_pine_compat', str(ctx.exception))
 
 
-class TestWeeklyTrailingAutoDisablesTvMode(unittest.TestCase):
-    """Test 5: weekly trailing auto-disables tv_mode with warning."""
+class TestWeeklyTrailingWithTvMode(unittest.TestCase):
+    """Test 5: weekly trailing works with tv_mode enabled."""
 
-    def test_auto_disables_tv_mode(self):
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter('always')
-            bt = _make_backtest(enable_weekly_trailing=True, tv_mode=True)
-            self.assertFalse(bt.tv_mode, 'tv_mode should be auto-disabled')
-            # Check warning was issued
-            tv_warnings = [x for x in w if 'tv_mode' in str(x.message)]
-            self.assertGreater(len(tv_warnings), 0, 'Should issue a warning about tv_mode')
+    def test_tv_mode_preserved_with_weekly_trailing(self):
+        bt = _make_backtest(enable_weekly_trailing=True, tv_mode=True)
+        self.assertTrue(bt.tv_mode, 'tv_mode should remain enabled')
+        self.assertTrue(bt.enable_weekly_trailing)
 
 
 class TestAggregateToWeekly(unittest.TestCase):
@@ -678,22 +673,23 @@ class TestPendingWeeklyExitAtBacktestEnd(unittest.TestCase):
 
 
 class TestChartModeWithWeeklyTrailing(unittest.TestCase):
-    """Test 8: chart_mode + weekly_trailing combo works (tv_mode auto-disabled first)."""
+    """Test 8: chart_mode + weekly_trailing combo works."""
 
     def test_chart_mode_weekly_trailing_combo(self):
-        """chart_mode=True, enable_weekly_trailing=True, tv_mode=True should work.
-        weekly_trailing auto-disables tv_mode first, then chart_mode check passes.
-        """
-        with warnings.catch_warnings(record=True):
-            warnings.simplefilter('always')
-            bt = _make_backtest(
-                chart_mode=True,
-                enable_weekly_trailing=True,
-                tv_mode=True,
-            )
-            self.assertTrue(bt.chart_mode)
-            self.assertTrue(bt.enable_weekly_trailing)
-            self.assertFalse(bt.tv_mode, 'tv_mode should be auto-disabled by weekly trailing')
+        """chart_mode=True, enable_weekly_trailing=True, tv_mode=False should work."""
+        bt = _make_backtest(
+            chart_mode=True,
+            enable_weekly_trailing=True,
+            tv_mode=False,
+        )
+        self.assertTrue(bt.chart_mode)
+        self.assertTrue(bt.enable_weekly_trailing)
+        self.assertFalse(bt.tv_mode)
+
+    def test_chart_mode_with_tv_mode_still_raises(self):
+        """chart_mode + tv_mode should still raise regardless of weekly_trailing."""
+        with self.assertRaises(ValueError):
+            _make_backtest(chart_mode=True, tv_mode=True)
 
 
 if __name__ == '__main__':

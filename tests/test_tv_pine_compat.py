@@ -45,6 +45,14 @@ def _inject_data(bt, ohlc_df, breadth_series):
     pre-computes TV signals. Then calls execute_trades() directly.
     """
     bt.price_data = ohlc_df.copy()
+
+    # Compute adjusted OHLC columns (same logic as backtest.run())
+    if 'close' in bt.price_data.columns and 'adjusted_close' in bt.price_data.columns:
+        adj_ratio = bt.price_data['adjusted_close'] / bt.price_data['close']
+        for raw_col, adj_col in [('open', 'adjusted_open'), ('high', 'adjusted_high'), ('low', 'adjusted_low')]:
+            if raw_col in bt.price_data.columns:
+                bt.price_data[adj_col] = bt.price_data[raw_col] * adj_ratio
+
     bt.breadth_index = breadth_series.copy()
     bt.sp500_data = pd.DataFrame()
 
@@ -145,7 +153,9 @@ class TestNextBarExecution(unittest.TestCase):
 
         # Check that entries are filled at open price, not close
         # (The entry price includes slippage=0.0 for pine_compat)
-        bar_open = ohlc.loc[entry_date, 'open']
+        bar_open = (
+            ohlc.loc[entry_date, 'adjusted_open'] if 'adjusted_open' in ohlc.columns else ohlc.loc[entry_date, 'open']
+        )
         self.assertAlmostEqual(
             first_entry['price'], bar_open, places=2, msg='Entry should fill at open price in pine_compat mode'
         )
@@ -198,6 +208,14 @@ class TestOHLCGapDownStop(unittest.TestCase):
         # Manually set up a position to test stop loss
         bt2 = _make_backtest(start_date='2024-01-02', end_date='2024-01-22')
         bt2.price_data = ohlc.copy()
+
+        # Compute adjusted OHLC columns (same logic as backtest.run())
+        if 'close' in bt2.price_data.columns and 'adjusted_close' in bt2.price_data.columns:
+            adj_ratio = bt2.price_data['adjusted_close'] / bt2.price_data['close']
+            for raw_col, adj_col in [('open', 'adjusted_open'), ('high', 'adjusted_high'), ('low', 'adjusted_low')]:
+                if raw_col in bt2.price_data.columns:
+                    bt2.price_data[adj_col] = bt2.price_data[raw_col] * adj_ratio
+
         bt2.breadth_index = breadth.copy()
 
         if bt2.ma_type == 'ema':
@@ -262,6 +280,14 @@ class TestOHLCGapDownStop(unittest.TestCase):
 
         bt = _make_backtest(start_date='2024-01-02', end_date='2024-01-22')
         bt.price_data = ohlc.copy()
+
+        # Compute adjusted OHLC columns (same logic as backtest.run())
+        if 'close' in bt.price_data.columns and 'adjusted_close' in bt.price_data.columns:
+            adj_ratio = bt.price_data['adjusted_close'] / bt.price_data['close']
+            for raw_col, adj_col in [('open', 'adjusted_open'), ('high', 'adjusted_high'), ('low', 'adjusted_low')]:
+                if raw_col in bt.price_data.columns:
+                    bt.price_data[adj_col] = bt.price_data[raw_col] * adj_ratio
+
         bt.breadth_index = breadth.copy()
 
         if bt.ma_type == 'ema':
@@ -331,6 +357,14 @@ class TestSameBarStopSkip(unittest.TestCase):
 
         bt = _make_backtest(start_date='2024-01-02', end_date='2024-01-15')
         bt.price_data = ohlc.copy()
+
+        # Compute adjusted OHLC columns (same logic as backtest.run())
+        if 'close' in bt.price_data.columns and 'adjusted_close' in bt.price_data.columns:
+            adj_ratio = bt.price_data['adjusted_close'] / bt.price_data['close']
+            for raw_col, adj_col in [('open', 'adjusted_open'), ('high', 'adjusted_high'), ('low', 'adjusted_low')]:
+                if raw_col in bt.price_data.columns:
+                    bt.price_data[adj_col] = bt.price_data[raw_col] * adj_ratio
+
         bt.breadth_index = breadth.copy()
 
         if bt.ma_type == 'ema':

@@ -1,11 +1,14 @@
 import argparse
+import json
 import logging
 import logging.handlers
 import os
 import pathlib
+import signal
 import sys
 import time
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -104,6 +107,9 @@ class MarketBreadthTrader:
 
         # Initialize Alpaca API
         self.api = self._initialize_alpaca()
+
+        # Graceful shutdown flag
+        self._shutdown_requested = False
 
         # Initialize variables
         self.current_position = 0
@@ -205,9 +211,14 @@ class MarketBreadthTrader:
             position = self.api.get_position(self.symbol)
             self.current_position = int(position.qty)
             if self.current_position > 0 and not self.entry_prices:
-                avg_price = float(position.avg_entry_price)
-                self.entry_prices = [avg_price]
-                logger.info(f'Recovered entry price from broker: ${avg_price:.2f}')
+                saved = self._load_entry_prices()
+                if saved:
+                    self.entry_prices = saved
+                    logger.info(f'Recovered {len(saved)} entry prices from disk')
+                else:
+                    avg_price = float(position.avg_entry_price)
+                    self.entry_prices = [avg_price]
+                    logger.info(f'Recovered entry price from broker: ${avg_price:.2f}')
         except Exception as e:
             # Alpaca returns 404 with "position does not exist" when no position
             err_str = str(e)
@@ -234,7 +245,7 @@ class MarketBreadthTrader:
                 logger.error(f'Failed: Could not get current price for {self.symbol} (no valid bar data)')
                 return None
         except Exception as e:
-            logger.error(f'Error: Error occurred while getting current price for {self.symbol}: {e}')
+            logger.error(f'Error: Error occurred while getting current price for {self.symbol}: {e}', exc_info=True)
             return None
 
     def execute_buy(self, shares, reason=''):
@@ -272,13 +283,18 @@ class MarketBreadthTrader:
     def _wait_for_fill(self, order, timeout_seconds=60):
         """Poll order until filled, canceled, or timeout."""
         if self.testmode:
-            return True
+            return SimpleNamespace(filled_avg_price=None, filled_qty=None, status='filled')
         deadline = time.time() + timeout_seconds
         while time.time() < deadline:
+            if self._shutdown_requested:
+                logger.warning(f'Shutdown requested — aborting fill wait for order {order.id}')
+                break
             updated = self.api.get_order(order.id)
             if updated.status == 'filled':
                 logger.info(f'Order {order.id} filled: {updated.filled_qty} @ ${float(updated.filled_avg_price):.2f}')
                 return updated
+            if updated.status == 'partially_filled':
+                logger.info(f'Order {order.id} partially filled: {updated.filled_qty} of {updated.qty}')
             if updated.status in ('canceled', 'expired', 'rejected', 'suspended'):
                 logger.warning(f'Order {order.id} ended: {updated.status}')
                 return None
@@ -293,6 +309,9 @@ class MarketBreadthTrader:
                     f'Order {order.id} filled during cancel: {final.filled_qty} @ ${float(final.filled_avg_price):.2f}'
                 )
                 return final
+            if int(final.filled_qty or 0) > 0:
+                logger.warning(f'Order {order.id} partial fill after cancel: {final.filled_qty} shares')
+                return final
         except Exception as e:
             logger.error(f'Failed to cancel order {order.id}: {e}', exc_info=True)
         return None
@@ -301,6 +320,16 @@ class MarketBreadthTrader:
         """Execute trading"""
         logger.info('Starting market breadth trading...')
 
+        if not self.testmode:
+
+            def _handle_shutdown(signum, frame):
+                sig_name = signal.Signals(signum).name
+                logger.warning(f'Received {sig_name} — initiating graceful shutdown')
+                self._shutdown_requested = True
+
+            signal.signal(signal.SIGTERM, _handle_shutdown)
+            signal.signal(signal.SIGINT, _handle_shutdown)
+
         if self.testmode:
             # Set initial time for test mode (EST 15:30)
             self.test_dt = datetime.strptime(self.test_date, '%Y-%m-%d')
@@ -308,6 +337,12 @@ class MarketBreadthTrader:
             logger.info(f'Test mode started at {self.test_dt} (EST)')
 
         while True:
+            if self._shutdown_requested:
+                logger.info('Shutdown requested — exiting trading loop')
+                if self.current_position > 0:
+                    logger.warning(f'Open position: {self.current_position} shares. Manual check recommended.')
+                break
+
             if self.testmode:
                 # Use specified time in test mode
                 current_dt = self.test_dt
@@ -354,6 +389,8 @@ class MarketBreadthTrader:
                 continue
             else:
                 # Wait 1 minute in normal mode
+                if self._shutdown_requested:
+                    continue  # Loop back to top where break will happen
                 logger.info('Waiting for closing time range...')
                 time.sleep(60)
 
@@ -616,9 +653,16 @@ class MarketBreadthTrader:
                 if order:
                     filled = self._wait_for_fill(order)
                     if filled:
-                        logger.info(f'Stop loss exit: {self.current_position} shares at ${current_price:.2f}')
-                        self.current_position = 0
-                        self.entry_prices = []
+                        filled_qty = int(filled.filled_qty) if filled.filled_qty is not None else self.current_position
+                        self.current_position -= filled_qty
+                        if self.current_position <= 0:
+                            self.current_position = 0
+                            self.entry_prices = []
+                            self._clear_entry_prices_file()
+                        else:
+                            logger.warning(f'Partial exit: {filled_qty} sold, {self.current_position} remaining')
+                            self._save_entry_prices()
+                        logger.info(f'Stop loss exit: {filled_qty} shares at ${current_price:.2f}')
                     else:
                         logger.error('Stop loss order not filled — position remains open')
                 else:
@@ -656,11 +700,16 @@ class MarketBreadthTrader:
             if order:
                 filled = self._wait_for_fill(order)
                 if filled:
-                    logger.info(
-                        f'Exit executed at long MA peak: {self.current_position} shares at ${current_price:.2f}'
-                    )
-                    self.current_position = 0
-                    self.entry_prices = []
+                    filled_qty = int(filled.filled_qty) if filled.filled_qty is not None else self.current_position
+                    logger.info(f'Exit executed at long MA peak: {filled_qty} shares at ${current_price:.2f}')
+                    self.current_position -= filled_qty
+                    if self.current_position <= 0:
+                        self.current_position = 0
+                        self.entry_prices = []
+                        self._clear_entry_prices_file()
+                    else:
+                        logger.warning(f'Partial exit: {filled_qty} sold, {self.current_position} remaining')
+                        self._save_entry_prices()
                 else:
                     logger.error('Peak exit order not filled — position remains open')
             else:
@@ -685,11 +734,16 @@ class MarketBreadthTrader:
                     if order:
                         filled = self._wait_for_fill(order)
                         if filled:
+                            filled_qty = int(filled.filled_qty) if filled.filled_qty is not None else shares
                             fill_price = (
-                                float(filled.filled_avg_price) if hasattr(filled, 'filled_avg_price') else current_price
+                                float(filled.filled_avg_price) if filled.filled_avg_price is not None else current_price
                             )
-                            logger.info(f'Entry executed at long MA bottom: {shares} shares at ${fill_price:.2f}')
+                            self.current_position += filled_qty
+                            logger.info(f'Entry executed at long MA bottom: {filled_qty} shares at ${fill_price:.2f}')
                             self.entry_prices.append(fill_price)
+                            self._save_entry_prices()
+                            if filled_qty < shares:
+                                logger.warning(f'Partial buy fill: {filled_qty} of {shares} requested')
                         else:
                             logger.error('Long MA bottom buy order not filled')
                     else:
@@ -716,11 +770,16 @@ class MarketBreadthTrader:
                     if order:
                         filled = self._wait_for_fill(order)
                         if filled:
+                            filled_qty = int(filled.filled_qty) if filled.filled_qty is not None else shares
                             fill_price = (
-                                float(filled.filled_avg_price) if hasattr(filled, 'filled_avg_price') else current_price
+                                float(filled.filled_avg_price) if filled.filled_avg_price is not None else current_price
                             )
-                            logger.info(f'Entry executed at short MA bottom: {shares} shares at ${fill_price:.2f}')
+                            self.current_position += filled_qty
+                            logger.info(f'Entry executed at short MA bottom: {filled_qty} shares at ${fill_price:.2f}')
                             self.entry_prices.append(fill_price)
+                            self._save_entry_prices()
+                            if filled_qty < shares:
+                                logger.warning(f'Partial buy fill: {filled_qty} of {shares} requested')
                         else:
                             logger.error('Short MA bottom buy order not filled')
                     else:
@@ -735,6 +794,37 @@ class MarketBreadthTrader:
     def _calculate_shares(self, amount, price):
         """Calculate number of shares to buy, accounting for slippage and commission."""
         return int(amount / (price * (1 + self.slippage + self.commission)))
+
+    def _entry_prices_path(self):
+        """Return the file path for persisted entry prices."""
+        return f'trade/entry_prices_{self.symbol}.json'
+
+    def _save_entry_prices(self):
+        """Persist entry_prices to disk as JSON."""
+        try:
+            with open(self._entry_prices_path(), 'w') as f:
+                json.dump(self.entry_prices, f)
+        except Exception as e:
+            logger.error(f'Failed to save entry prices: {e}', exc_info=True)
+
+    def _load_entry_prices(self):
+        """Load entry_prices from disk. Returns list or None."""
+        try:
+            path = self._entry_prices_path()
+            if os.path.exists(path):
+                with open(path) as f:
+                    prices = json.load(f)
+                if isinstance(prices, list) and all(isinstance(p, int | float) for p in prices):
+                    return prices
+        except Exception as e:
+            logger.error(f'Failed to load entry prices: {e}', exc_info=True)
+        return None
+
+    def _clear_entry_prices_file(self):
+        """Remove persisted entry prices file."""
+        path = self._entry_prices_path()
+        if os.path.exists(path):
+            os.remove(path)
 
 
 def main():

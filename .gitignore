@@ -19,6 +19,9 @@ venv/
 venv311/
 *.csv
 !backtest_results_summary.csv
+# Runtime state files
+trade/entry_prices_*.json
+
 # Sub-projects (managed independently)
 rsp_breadth_strategy/
 schd_schg_strategy/

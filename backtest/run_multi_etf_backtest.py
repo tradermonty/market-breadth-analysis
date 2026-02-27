@@ -30,7 +30,7 @@ def run_multi_etf_backtest(
     stop_loss_pct=0.08,
     no_show_plot=True,
     # TradingView alignment parameters
-    tv_mode=False,
+    tv_mode=True,
     pivot_len_long=20,
     pivot_len_short=10,
     prom_thresh_long=0.005,
@@ -38,7 +38,7 @@ def run_multi_etf_backtest(
     peak_level=0.70,
     trough_level_long=0.40,
     trough_level_short=0.20,
-    no_pyramiding=False,
+    no_pyramiding=True,
     # Enhanced TV mode parameters
     two_stage_exit=False,
     stage2_exit_mode='trend_break',

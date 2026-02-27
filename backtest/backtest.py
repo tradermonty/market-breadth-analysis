@@ -210,20 +210,11 @@ class Backtest:
         self.weekly_nweek_low_period = weekly_nweek_low_period
         self.weekly_transition_weeks = weekly_transition_weeks
 
-        # Weekly trailing auto-disables tv_mode (must be BEFORE chart_mode check)
-        if self.enable_weekly_trailing:
-            if self.tv_pine_compat:
-                raise ValueError('--enable_weekly_trailing cannot be used with --tv_pine_compat')
-            if self.tv_mode:
-                import warnings
+        # Weekly trailing mode check
+        if self.enable_weekly_trailing and self.tv_pine_compat:
+            raise ValueError('--enable_weekly_trailing cannot be used with --tv_pine_compat')
 
-                warnings.warn(
-                    'enable_weekly_trailing requires legacy execution path; tv_mode has been auto-disabled.',
-                    stacklevel=2,
-                )
-                self.tv_mode = False
-
-        # Chart-mode peak/trough detection (uses effective tv_mode after weekly trailing override)
+        # Chart-mode peak/trough detection
         self.chart_mode = chart_mode
         if self.chart_mode and (self.tv_mode or self.tv_pine_compat):
             raise ValueError('--chart_mode cannot be used with --tv_mode or --tv_pine_compat')
@@ -437,13 +428,16 @@ class Backtest:
             if isinstance(self.price_data, pd.Series):
                 self.price_data = pd.DataFrame(self.price_data, columns=['adjusted_close'])
 
-        # Validate and compute adjusted OHLC columns for weekly trailing
+        # Compute adjusted OHLC from raw OHLC + adjustment ratio (for price-scale consistency)
+        if 'close' in self.price_data.columns and 'adjusted_close' in self.price_data.columns:
+            adj_ratio = self.price_data['adjusted_close'] / self.price_data['close']
+            for raw_col, adj_col in [('open', 'adjusted_open'), ('high', 'adjusted_high'), ('low', 'adjusted_low')]:
+                if raw_col in self.price_data.columns:
+                    self.price_data[adj_col] = self.price_data[raw_col] * adj_ratio
+
+        # Validate columns required for weekly trailing (stricter check)
         if self.enable_weekly_trailing:
             self._validate_weekly_trailing_columns()
-            adj_ratio = self.price_data['adjusted_close'] / self.price_data['close']
-            self.price_data['adjusted_open'] = self.price_data['open'] * adj_ratio
-            self.price_data['adjusted_high'] = self.price_data['high'] * adj_ratio
-            self.price_data['adjusted_low'] = self.price_data['low'] * adj_ratio
 
         # Build breadth source (S&P500-derived breadth or external TV-compatible breadth CSV).
         if self.tv_breadth_csv:
@@ -578,7 +572,10 @@ class Backtest:
 
         # Weekly trailing stop preparation
         if self.enable_weekly_trailing:
-            from backtest.weekly_trailing import aggregate_to_weekly, check_weekly_trailing_stop, is_week_end
+            try:
+                from backtest.weekly_trailing import aggregate_to_weekly, check_weekly_trailing_stop, is_week_end
+            except (ModuleNotFoundError, ImportError):
+                from weekly_trailing import aggregate_to_weekly, check_weekly_trailing_stop, is_week_end
 
             weekly_df = aggregate_to_weekly(self.price_data)
             _pending_weekly_exit = False
@@ -591,7 +588,41 @@ class Backtest:
             price = self.price_data.loc[date, 'adjusted_close']
 
             if self.tv_mode:
-                self._execute_tv_mode_trades(i, date, price)
+                # Process pending weekly trailing exit (next-bar-open) before TV signals
+                weekly_exit_fired = False
+                if _pending_weekly_exit and self.current_position > 0:
+                    exit_price = (
+                        self.price_data['adjusted_open'].iloc[i]
+                        if 'adjusted_open' in self.price_data.columns
+                        else price
+                    )
+                    self._execute_exit(date, exit_price, reason='weekly trailing', force_full_exit=True)
+                    _pending_weekly_exit = False
+                    weekly_exit_fired = True
+
+                if not weekly_exit_fired:
+                    self._execute_tv_mode_trades(i, date, price)
+
+                # Weekly trailing check at week-end
+                if (
+                    self.enable_weekly_trailing
+                    and self.current_position > 0
+                    and not _pending_weekly_exit
+                    and self.open_positions
+                ):
+                    if is_week_end(self.price_data.index, i):
+                        earliest_entry = min(pos['entry_date'] for pos in self.open_positions)
+                        if check_weekly_trailing_stop(
+                            current_close=price,
+                            weekly_df=weekly_df,
+                            entry_date=earliest_entry,
+                            current_date=date,
+                            trailing_type=self.weekly_trailing_type,
+                            ema_period=self.weekly_ema_period,
+                            nweek_low_period=self.weekly_nweek_low_period,
+                            transition_weeks=self.weekly_transition_weeks,
+                        ):
+                            _pending_weekly_exit = True
             else:
                 self._detect_legacy_signals(i, date)
 
@@ -800,7 +831,9 @@ class Backtest:
 
         # Phase 0: Fill pending orders from previous bar at this bar's open
         if self._pending_exit is not None or self._pending_entry is not None:
-            fill_price = self.price_data.loc[date, 'open'] if 'open' in self.price_data.columns else price
+            fill_price = (
+                self.price_data.loc[date, 'adjusted_open'] if 'adjusted_open' in self.price_data.columns else price
+            )
 
             if self._pending_exit is not None and self.current_position > 0:
                 pend_reason = self._pending_exit[0]
@@ -838,9 +871,9 @@ class Backtest:
 
             triggered = False
             fill_at = price
-            if 'low' in self.price_data.columns:
-                bar_low = self.price_data.loc[date, 'low']
-                bar_open = self.price_data.loc[date, 'open']
+            if 'adjusted_low' in self.price_data.columns:
+                bar_low = self.price_data.loc[date, 'adjusted_low']
+                bar_open = self.price_data.loc[date, 'adjusted_open']
                 if pd.notna(bar_low) and pd.notna(bar_open):
                     if bar_low <= stop_loss_price:
                         fill_at = min(bar_open, stop_loss_price)
@@ -923,9 +956,9 @@ class Backtest:
 
             triggered = False
             fill_at = price
-            if 'low' in self.price_data.columns:
-                bar_low = self.price_data.loc[date, 'low']
-                bar_open = self.price_data.loc[date, 'open']
+            if 'adjusted_low' in self.price_data.columns:
+                bar_low = self.price_data.loc[date, 'adjusted_low']
+                bar_open = self.price_data.loc[date, 'adjusted_open']
                 if pd.notna(bar_low) and pd.notna(bar_open):
                     if bar_low <= stop_loss_price:
                         fill_at = min(bar_open, stop_loss_price)

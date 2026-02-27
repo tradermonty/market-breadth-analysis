@@ -1,6 +1,8 @@
+import json
 import logging
 import os
 import sys
+import tempfile
 import unittest
 from datetime import datetime
 from unittest.mock import MagicMock, Mock, patch
@@ -488,11 +490,47 @@ class TestMarketBreadthTrader(unittest.TestCase):
 
     @patch('trade.run_market_breadth_trade.MarketBreadthTrader._initialize_alpaca')
     def test_wait_for_fill_testmode(self, mock_init):
-        """C-1: _wait_for_fill returns True in testmode without polling"""
+        """C-1: _wait_for_fill returns SimpleNamespace in testmode without polling"""
         mock_init.return_value = Mock()
         trader = MarketBreadthTrader(testmode=True, test_date='2024-01-01')
         result = trader._wait_for_fill(Mock())
-        self.assertTrue(result)
+        self.assertIsNotNone(result)
+        self.assertIsNone(result.filled_avg_price)
+        self.assertIsNone(result.filled_qty)
+        self.assertEqual(result.status, 'filled')
+
+    @patch('trade.run_market_breadth_trade.MarketBreadthTrader._initialize_alpaca')
+    def test_testmode_buy_uses_current_price(self, mock_init):
+        """Testmode buy appends current_price when filled_avg_price is None"""
+        mock_api = Mock()
+        mock_init.return_value = mock_api
+
+        trader = MarketBreadthTrader(testmode=True, test_date='2024-01-01', symbol='SSO')
+        trader.current_position = 0
+        trader.entry_prices = []
+        trader.no_pyramiding = True
+
+        # Mock _sync_position_from_broker and price
+        trader._sync_position_from_broker = Mock()
+        mock_bar = Mock()
+        mock_bar.c = 55.0
+        mock_api.get_latest_bar.return_value = mock_bar
+
+        # Set up signal for today
+        today = pd.to_datetime('2024-01-01')
+        trader.long_ma_bottoms = [today]
+        trader.short_ma_bottoms = []
+        trader.peaks = []
+
+        # Mock account
+        mock_account = Mock()
+        mock_account.cash = '10000.0'
+        mock_api.get_account.return_value = mock_account
+
+        trader.check_signals_and_trade()
+
+        # In testmode, filled_avg_price is None, so current_price (55.0) should be used
+        self.assertEqual(trader.entry_prices, [55.0])
 
     def test_signal_lookback_catches_missed_day(self):
         """M-1: _find_recent_signal catches signal from 1-3 days ago"""
@@ -596,6 +634,280 @@ class TestMarketBreadthTrader(unittest.TestCase):
 
         # entry_prices should remain empty since fill failed
         self.assertEqual(self.trader.entry_prices, [], 'entry_prices should not be updated when fill fails')
+
+    @patch('trade.run_market_breadth_trade.MarketBreadthTrader._initialize_alpaca')
+    def test_shutdown_flag_breaks_loop(self, mock_init):
+        """Shutdown flag causes run() loop to exit immediately"""
+        mock_init.return_value = Mock()
+        trader = MarketBreadthTrader(testmode=True, test_date='2024-01-02')
+        trader._shutdown_requested = True
+
+        # run() should exit immediately without calling analyze_market
+        trader.analyze_market = Mock()
+        trader.run()
+        trader.analyze_market.assert_not_called()
+
+    @patch('trade.run_market_breadth_trade.MarketBreadthTrader._initialize_alpaca')
+    def test_shutdown_with_position_logs_warning(self, mock_init):
+        """Shutdown with open position logs warning about manual check"""
+        mock_init.return_value = Mock()
+        trader = MarketBreadthTrader(testmode=True, test_date='2024-01-02')
+        trader._shutdown_requested = True
+        trader.current_position = 100
+
+        with self.assertLogs('market_breadth_trade', level='WARNING') as cm:
+            trader.run()
+
+        self.assertTrue(any('Open position' in msg and '100 shares' in msg for msg in cm.output))
+
+    @patch('trade.run_market_breadth_trade.time')
+    def test_wait_for_fill_partial_then_filled(self, mock_time):
+        """Partial fill followed by full fill returns the filled order"""
+        mock_order = Mock()
+        mock_order.id = 'order-partial'
+
+        # time.time returns values within deadline
+        mock_time.time.side_effect = [0, 10, 20, 30]
+        mock_time.sleep = Mock()
+
+        partial = Mock()
+        partial.status = 'partially_filled'
+        partial.filled_qty = 50
+        partial.qty = 100
+
+        filled = Mock()
+        filled.status = 'filled'
+        filled.filled_qty = 100
+        filled.filled_avg_price = '55.0'
+
+        self.mock_api.get_order.side_effect = [partial, filled]
+
+        result = self.trader._wait_for_fill(mock_order, timeout_seconds=60)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.status, 'filled')
+
+    @patch('trade.run_market_breadth_trade.time')
+    def test_wait_for_fill_partial_on_timeout(self, mock_time):
+        """Partial fill on timeout returns the partial order after cancel"""
+        mock_order = Mock()
+        mock_order.id = 'order-partial-timeout'
+
+        # Immediate timeout
+        mock_time.time.side_effect = [0, 100]
+        mock_time.sleep = Mock()
+
+        # After cancel, final check shows partial fill
+        final = Mock()
+        final.status = 'partially_filled'
+        final.filled_qty = '30'
+        final.filled_avg_price = '55.0'
+        self.mock_api.get_order.return_value = final
+        self.mock_api.cancel_order = Mock()
+
+        result = self.trader._wait_for_fill(mock_order, timeout_seconds=60)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.filled_qty, '30')
+        self.mock_api.cancel_order.assert_called_once_with('order-partial-timeout')
+
+    @patch('trade.run_market_breadth_trade.MarketBreadthTrader._initialize_alpaca')
+    def test_entry_prices_persisted_to_disk(self, mock_init):
+        """Entry prices are saved to JSON file after buy"""
+        mock_init.return_value = Mock()
+        trader = MarketBreadthTrader(testmode=True, test_date='2024-01-01', symbol='TEST')
+
+        # Use temp directory to avoid polluting project
+        tmp_dir = tempfile.mkdtemp()
+        trader._entry_prices_path = lambda: os.path.join(tmp_dir, 'entry_prices_TEST.json')
+
+        trader.entry_prices = [55.0, 60.0]
+        trader._save_entry_prices()
+
+        # Verify file exists and contents are correct
+        path = trader._entry_prices_path()
+        self.assertTrue(os.path.exists(path))
+        with open(path) as f:
+            saved = json.load(f)
+        self.assertEqual(saved, [55.0, 60.0])
+
+        # Cleanup
+        os.remove(path)
+        os.rmdir(tmp_dir)
+
+    @patch('trade.run_market_breadth_trade.MarketBreadthTrader._initialize_alpaca')
+    def test_entry_prices_recovered_from_disk(self, mock_init):
+        """Entry prices are recovered from disk before falling back to broker"""
+        mock_api = Mock()
+        mock_init.return_value = mock_api
+
+        trader = MarketBreadthTrader(symbol='TEST')
+
+        # Write entry prices to disk
+        tmp_dir = tempfile.mkdtemp()
+        entry_path = os.path.join(tmp_dir, 'entry_prices_TEST.json')
+        trader._entry_prices_path = lambda: entry_path
+        with open(entry_path, 'w') as f:
+            json.dump([55.0, 60.0], f)
+
+        # Simulate broker position without local entry_prices
+        mock_position = Mock()
+        mock_position.qty = 100
+        mock_position.avg_entry_price = '57.5'
+        mock_api.get_position.return_value = mock_position
+
+        trader.entry_prices = []
+        trader._sync_position_from_broker()
+
+        # Should recover from disk (2 prices), not broker (1 avg)
+        self.assertEqual(trader.entry_prices, [55.0, 60.0])
+        self.assertEqual(trader.current_position, 100)
+
+        # Cleanup
+        os.remove(entry_path)
+        os.rmdir(tmp_dir)
+
+    @patch('trade.run_market_breadth_trade.MarketBreadthTrader._initialize_alpaca')
+    def test_entry_prices_cleared_on_full_exit(self, mock_init):
+        """Entry prices file is deleted on full position exit"""
+        mock_init.return_value = Mock()
+        trader = MarketBreadthTrader(testmode=True, test_date='2024-01-01', symbol='TEST')
+
+        # Create a temp entry prices file
+        tmp_dir = tempfile.mkdtemp()
+        entry_path = os.path.join(tmp_dir, 'entry_prices_TEST.json')
+        trader._entry_prices_path = lambda: entry_path
+        with open(entry_path, 'w') as f:
+            json.dump([55.0], f)
+
+        self.assertTrue(os.path.exists(entry_path))
+
+        trader._clear_entry_prices_file()
+
+        self.assertFalse(os.path.exists(entry_path))
+
+        # Cleanup
+        os.rmdir(tmp_dir)
+
+    def test_stop_loss_partial_fill(self):
+        """Partial fill on stop loss correctly updates remaining position"""
+        self.trader.current_position = 100
+        self.trader.entry_prices = [50.0]
+
+        # Price below stop loss
+        self.mock_bar.c = 45.0
+        self.mock_api.get_latest_bar.return_value = self.mock_bar
+
+        # Mock _sync_position_from_broker to preserve test state
+        self.trader._sync_position_from_broker = Mock()
+
+        # Set up mock for sell order
+        mock_order = Mock()
+        mock_order.id = 'order-partial-stop'
+        self.mock_api.submit_order.return_value = mock_order
+
+        # _wait_for_fill returns partial fill (60 of 100)
+        partial_fill = Mock()
+        partial_fill.filled_qty = 60
+        partial_fill.filled_avg_price = '45.0'
+        self.trader._wait_for_fill = Mock(return_value=partial_fill)
+
+        # Mock _save_entry_prices and _clear_entry_prices_file
+        self.trader._save_entry_prices = Mock()
+        self.trader._clear_entry_prices_file = Mock()
+
+        self.trader.check_signals_and_trade()
+
+        # Position should be reduced, not zeroed
+        self.assertEqual(self.trader.current_position, 40)
+        self.trader._save_entry_prices.assert_called_once()
+
+    def test_buy_partial_fill_updates_position(self):
+        """Partial buy fill correctly updates current_position with filled_qty"""
+        self.trader.current_position = 0
+        self.trader.entry_prices = []
+        self.trader.no_pyramiding = True
+
+        # Mock _sync_position_from_broker to preserve test state
+        self.trader._sync_position_from_broker = Mock()
+
+        # Price above stop loss
+        self.mock_bar.c = 55.0
+        self.mock_api.get_latest_bar.return_value = self.mock_bar
+
+        # Set up a long_ma_bottom signal for today
+        today = pd.to_datetime(datetime.now().strftime('%Y-%m-%d'))
+        self.trader.long_ma_bottoms = [today]
+        self.trader.short_ma_bottoms = []
+        self.trader.peaks = []
+
+        # Mock account
+        mock_account = Mock()
+        mock_account.cash = '10000.0'
+        self.mock_api.get_account.return_value = mock_account
+
+        # submit_order succeeds
+        mock_order = Mock()
+        mock_order.id = 'order-partial-buy'
+        self.mock_api.submit_order.return_value = mock_order
+
+        # _wait_for_fill returns partial fill (100 of 181 requested)
+        partial_fill = Mock()
+        partial_fill.filled_qty = 100
+        partial_fill.filled_avg_price = '55.0'
+        self.trader._wait_for_fill = Mock(return_value=partial_fill)
+
+        # Mock persistence
+        self.trader._save_entry_prices = Mock()
+
+        self.trader.check_signals_and_trade()
+
+        # current_position should reflect actual filled qty, not requested shares
+        self.assertEqual(self.trader.current_position, 100)
+        self.assertEqual(self.trader.entry_prices, [55.0])
+        self.trader._save_entry_prices.assert_called_once()
+
+    def test_buy_full_fill_updates_position(self):
+        """Full buy fill correctly updates current_position"""
+        self.trader.current_position = 0
+        self.trader.entry_prices = []
+        self.trader.no_pyramiding = True
+
+        # Mock _sync_position_from_broker to preserve test state
+        self.trader._sync_position_from_broker = Mock()
+
+        # Price above stop loss
+        self.mock_bar.c = 55.0
+        self.mock_api.get_latest_bar.return_value = self.mock_bar
+
+        # Set up a long_ma_bottom signal for today
+        today = pd.to_datetime(datetime.now().strftime('%Y-%m-%d'))
+        self.trader.long_ma_bottoms = [today]
+        self.trader.short_ma_bottoms = []
+        self.trader.peaks = []
+
+        # Mock account
+        mock_account = Mock()
+        mock_account.cash = '10000.0'
+        self.mock_api.get_account.return_value = mock_account
+
+        # submit_order succeeds
+        mock_order = Mock()
+        mock_order.id = 'order-full-buy'
+        self.mock_api.submit_order.return_value = mock_order
+
+        # _wait_for_fill returns full fill
+        full_fill = Mock()
+        full_fill.filled_qty = 181
+        full_fill.filled_avg_price = '55.0'
+        self.trader._wait_for_fill = Mock(return_value=full_fill)
+
+        # Mock persistence
+        self.trader._save_entry_prices = Mock()
+
+        self.trader.check_signals_and_trade()
+
+        # current_position should reflect filled qty
+        self.assertEqual(self.trader.current_position, 181)
+        self.assertEqual(self.trader.entry_prices, [55.0])
 
 
 if __name__ == '__main__':
