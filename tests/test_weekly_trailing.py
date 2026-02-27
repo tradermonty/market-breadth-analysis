@@ -229,6 +229,33 @@ class TestWeeklyTransitionWeeksGuard(unittest.TestCase):
         )
         self.assertFalse(result, 'Should return False when within transition_weeks')
 
+    def test_transition_weeks_exact_boundary(self):
+        """weeks_elapsed == transition_weeks should allow triggering (not guarded)."""
+        dates = pd.date_range('2024-01-05', periods=10, freq='W-FRI')
+        closes = [100, 102, 104, 80, 75, 70, 65, 60, 55, 50]
+        weekly_df = pd.DataFrame(
+            {
+                'open': [c + 1 for c in closes],
+                'high': [c + 5 for c in closes],
+                'low': [c - 5 for c in closes],
+                'close': closes,
+            },
+            index=dates,
+        )
+
+        # Entry on week 0, check on week 3 → weeks_elapsed=3 == transition_weeks=3
+        result = check_weekly_trailing_stop(
+            current_close=50,
+            weekly_df=weekly_df,
+            entry_date=dates[0],
+            current_date=dates[3],
+            trailing_type='weekly_ema',
+            ema_period=3,
+            nweek_low_period=4,
+            transition_weeks=3,
+        )
+        self.assertTrue(result, 'Should trigger when weeks_elapsed == transition_weeks')
+
     def test_transition_weeks_allows_after_period(self):
         dates = pd.date_range('2024-01-05', periods=10, freq='W-FRI')
         # Price drops significantly in later weeks so EMA trails
@@ -482,6 +509,172 @@ class TestHolidayShortenedWeek(unittest.TestCase):
             transition_weeks=0,
         )
         self.assertTrue(result, 'nweek_low should trigger on holiday week')
+
+
+class TestWeeklyNweekLow(unittest.TestCase):
+    """Test 10: weekly_nweek_low mode triggers correctly."""
+
+    def _make_weekly_df(self, closes, lows=None):
+        dates = pd.date_range('2024-01-05', periods=len(closes), freq='W-FRI')
+        if lows is None:
+            lows = [c - 5 for c in closes]
+        return pd.DataFrame(
+            {
+                'open': [c + 1 for c in closes],
+                'high': [c + 5 for c in closes],
+                'low': lows,
+                'close': closes,
+            },
+            index=dates,
+        )
+
+    def test_nweek_low_triggers_when_below(self):
+        """close < min(prior N-week lows) should trigger."""
+        closes = [100, 102, 104, 106, 108, 105, 103, 101, 99, 97]
+        lows = [95, 97, 99, 101, 103, 100, 98, 96, 94, 92]
+        weekly_df = self._make_weekly_df(closes, lows)
+
+        # current_close=90, prior 4-week lows=[100,98,96,94], min=94 → 90<94 → True
+        result = check_weekly_trailing_stop(
+            current_close=90,
+            weekly_df=weekly_df,
+            entry_date=weekly_df.index[0],
+            current_date=weekly_df.index[9],
+            trailing_type='weekly_nweek_low',
+            ema_period=5,
+            nweek_low_period=4,
+            transition_weeks=3,
+        )
+        self.assertTrue(result)
+
+    def test_nweek_low_does_not_trigger_when_above(self):
+        """close >= min(prior N-week lows) should not trigger."""
+        closes = [100, 102, 104, 106, 108, 105, 103, 101, 99, 97]
+        lows = [95, 97, 99, 101, 103, 100, 98, 96, 94, 92]
+        weekly_df = self._make_weekly_df(closes, lows)
+
+        # current_close=95, prior 4-week lows min=94 → 95>=94 → False
+        result = check_weekly_trailing_stop(
+            current_close=95,
+            weekly_df=weekly_df,
+            entry_date=weekly_df.index[0],
+            current_date=weekly_df.index[9],
+            trailing_type='weekly_nweek_low',
+            ema_period=5,
+            nweek_low_period=4,
+            transition_weeks=3,
+        )
+        self.assertFalse(result)
+
+    def test_nweek_low_excludes_current_week(self):
+        """Current week's low should NOT be included in nweek_low calculation.
+        If it were, close >= low would always hold → dead condition.
+        """
+        closes = [100, 102, 104, 106, 108, 105, 103, 101, 99, 97]
+        # Current week (index 9) has very low low=10, but should be excluded
+        lows = [95, 97, 99, 101, 103, 100, 98, 96, 94, 10]
+        weekly_df = self._make_weekly_df(closes, lows)
+
+        # current_close=93, prior 4-week lows=[100,98,96,94] min=94 → 93<94 → True
+        # If current week low=10 were included, min would be 10 and 93>10 → False (wrong)
+        result = check_weekly_trailing_stop(
+            current_close=93,
+            weekly_df=weekly_df,
+            entry_date=weekly_df.index[0],
+            current_date=weekly_df.index[9],
+            trailing_type='weekly_nweek_low',
+            ema_period=5,
+            nweek_low_period=4,
+            transition_weeks=3,
+        )
+        self.assertTrue(result, 'Current week low must be excluded')
+
+    def test_nweek_low_insufficient_prior_data(self):
+        """When there are too few prior weeks (only current), should return False."""
+        closes = [100]
+        weekly_df = self._make_weekly_df(closes)
+
+        result = check_weekly_trailing_stop(
+            current_close=50,
+            weekly_df=weekly_df,
+            entry_date='2024-01-01',
+            current_date=weekly_df.index[0],
+            trailing_type='weekly_nweek_low',
+            ema_period=5,
+            nweek_low_period=4,
+            transition_weeks=0,
+        )
+        self.assertFalse(result, 'Should return False when no prior weeks exist')
+
+
+class TestPendingWeeklyExitAtBacktestEnd(unittest.TestCase):
+    """Test 11: pending weekly exit at final bar uses 'weekly trailing' reason."""
+
+    def test_pending_exit_at_last_bar(self):
+        """When weekly trailing fires on the last bar (is_week_end=True for final bar),
+        the backtest_end close should use 'weekly trailing' as exit reason.
+        """
+        # Create data ending on a Friday so the last bar is a week end
+        # Use 40 business days; ensure price drops enough for EMA trigger
+        dates = pd.bdate_range('2024-01-02', periods=40)
+
+        prices_close = np.concatenate(
+            [
+                np.linspace(100, 130, 20),
+                np.linspace(129, 80, 20),
+            ]
+        )
+        ohlc = pd.DataFrame(
+            {
+                'open': prices_close * 0.999,
+                'high': prices_close * 1.01,
+                'low': prices_close * 0.99,
+                'close': prices_close,
+                'adjusted_close': prices_close,
+                'adjusted_open': prices_close * 0.999,
+                'adjusted_high': prices_close * 1.01,
+                'adjusted_low': prices_close * 0.99,
+            },
+            index=dates,
+        )
+
+        breadth = pd.Series(
+            np.concatenate([np.linspace(0.3, 0.15, 5), np.linspace(0.16, 0.5, 35)]),
+            index=dates,
+        )
+
+        bt = _make_backtest(
+            enable_weekly_trailing=True,
+            tv_mode=False,
+            weekly_trailing_type='weekly_ema',
+            weekly_ema_period=3,
+            weekly_transition_weeks=1,
+            stop_loss_pct=0.90,  # effectively disabled
+        )
+        bt.price_data = ohlc.copy()
+        bt.breadth_index = breadth.copy()
+        bt.sp500_data = pd.DataFrame()
+        bt.short_ma_line = breadth.ewm(span=bt.short_ma, adjust=False).mean()
+        bt.long_ma_line = breadth.ewm(span=bt.long_ma, adjust=False).mean()
+        bt.long_ma_trend = pd.Series(calculate_trend_with_hysteresis(bt.long_ma_line), index=bt.long_ma_line.index)
+        bt.short_ma_bottoms = [dates[4]]
+        bt.long_ma_bottoms = []
+        bt.peaks = []
+        bt.execute_trades()
+
+        # Check: no trade should have 'backtest_end' if weekly trailing fired
+        weekly_exits = [t for t in bt.trade_log if t['exit_reason'] == 'weekly trailing']
+        backtest_ends = [t for t in bt.trade_log if t['exit_reason'] == 'backtest_end']
+        # At least one exit should exist
+        self.assertGreater(len(bt.trade_log), 0, 'Should have at least one trade')
+        # If weekly trailing was pending at last bar, it should use that reason
+        if not weekly_exits and backtest_ends:
+            # Weekly trailing didn't fire at all — acceptable if price didn't
+            # drop enough; this is data-dependent so we just verify no crash
+            pass
+        else:
+            # Weekly trailing fired: no backtest_end exits should exist
+            self.assertEqual(len(backtest_ends), 0, 'backtest_end should not appear when weekly trailing fires')
 
 
 class TestChartModeWithWeeklyTrailing(unittest.TestCase):

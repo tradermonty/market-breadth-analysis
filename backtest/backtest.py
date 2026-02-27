@@ -642,7 +642,8 @@ class Backtest:
         if self.current_position > 0:
             final_date = self.price_data.index[-1]
             final_price = self.price_data['adjusted_close'].iloc[-1]
-            self._execute_exit(final_date, final_price, reason='backtest_end')
+            exit_reason = 'weekly trailing' if _pending_weekly_exit else 'backtest_end'
+            self._execute_exit(final_date, final_price, reason=exit_reason, force_full_exit=_pending_weekly_exit)
             # Update final equity to reflect slippage/commission from forced close
             self.equity_curve[-1] = {
                 'date': final_date,
