@@ -506,13 +506,23 @@ class TestMarketBreadthTrader(unittest.TestCase):
         result = self.trader._find_recent_signal(signal_dates, pd.Timestamp('2024-01-12'))
         self.assertEqual(result, pd.Timestamp('2024-01-10'))
 
-        # 4 days later (outside default 3-day lookback)
+        # 4 days later (within default 5-day lookback for weekend coverage)
         result = self.trader._find_recent_signal(signal_dates, pd.Timestamp('2024-01-14'))
-        self.assertIsNone(result)
+        self.assertEqual(result, pd.Timestamp('2024-01-10'))
 
-        # Returns most recent signal when multiple in range
+        # 1 day after second signal (within lookback, returns most recent)
         result = self.trader._find_recent_signal(signal_dates, pd.Timestamp('2024-01-16'))
         self.assertEqual(result, pd.Timestamp('2024-01-15'))
+
+        # 6 days after second signal (outside default 5-day lookback)
+        result = self.trader._find_recent_signal(signal_dates, pd.Timestamp('2024-01-21'))
+        self.assertIsNone(result)
+
+        # Thursday signal → Monday check (3 calendar days, within 5-day lookback)
+        thursday_signal = [pd.Timestamp('2024-01-11')]  # Thursday
+        monday = pd.Timestamp('2024-01-15')  # Monday
+        result = self.trader._find_recent_signal(thursday_signal, monday)
+        self.assertEqual(result, pd.Timestamp('2024-01-11'))
 
     def test_exception_with_position_logs_critical(self):
         """C-5: Exception with open position logs CRITICAL alert"""
@@ -528,6 +538,64 @@ class TestMarketBreadthTrader(unittest.TestCase):
             self.trader.run()
 
         self.assertTrue(any('ALERT' in msg and 'open position' in msg for msg in cm.output))
+
+    @patch('trade.run_market_breadth_trade.time')
+    def test_wait_for_fill_timeout_cancels_order(self, mock_time):
+        """_wait_for_fill cancels order on timeout and returns None"""
+        mock_order = Mock()
+        mock_order.id = 'order-timeout'
+
+        # Simulate immediate timeout: time.time() returns past-deadline values
+        mock_time.time.side_effect = [0, 100, 200]
+        mock_time.sleep = Mock()
+
+        # Mock cancel_order and final get_order (canceled after cancel)
+        canceled = Mock()
+        canceled.status = 'canceled'
+        self.mock_api.get_order.return_value = canceled
+        self.mock_api.cancel_order = Mock()
+
+        result = self.trader._wait_for_fill(mock_order, timeout_seconds=60)
+
+        self.assertIsNone(result)
+        self.mock_api.cancel_order.assert_called_once_with('order-timeout')
+
+    def test_buy_order_not_filled_skips_entry_price(self):
+        """Buy order where _wait_for_fill returns None does not append entry_price"""
+        self.trader.current_position = 0
+        self.trader.entry_prices = []
+        self.trader.no_pyramiding = True
+
+        # Mock _sync_position_from_broker to preserve test state
+        self.trader._sync_position_from_broker = Mock()
+
+        # Price above stop loss
+        self.mock_bar.c = 55.0
+        self.mock_api.get_latest_bar.return_value = self.mock_bar
+
+        # Set up a long_ma_bottom signal for today
+        today = pd.to_datetime(datetime.now().strftime('%Y-%m-%d'))
+        self.trader.long_ma_bottoms = [today]
+        self.trader.short_ma_bottoms = []
+        self.trader.peaks = []
+
+        # Mock account
+        mock_account = Mock()
+        mock_account.cash = '10000.0'
+        self.mock_api.get_account.return_value = mock_account
+
+        # submit_order succeeds
+        mock_order = Mock()
+        mock_order.id = 'order-unfilled'
+        self.mock_api.submit_order.return_value = mock_order
+
+        # _wait_for_fill returns None (order not filled)
+        self.trader._wait_for_fill = Mock(return_value=None)
+
+        self.trader.check_signals_and_trade()
+
+        # entry_prices should remain empty since fill failed
+        self.assertEqual(self.trader.entry_prices, [], 'entry_prices should not be updated when fill fails')
 
 
 if __name__ == '__main__':

@@ -283,7 +283,18 @@ class MarketBreadthTrader:
                 logger.warning(f'Order {order.id} ended: {updated.status}')
                 return None
             time.sleep(2)
-        logger.error(f'Order {order.id} not filled within {timeout_seconds}s')
+        logger.error(f'Order {order.id} not filled within {timeout_seconds}s — canceling')
+        try:
+            self.api.cancel_order(order.id)
+            # Check if it filled during cancellation
+            final = self.api.get_order(order.id)
+            if final.status == 'filled':
+                logger.info(
+                    f'Order {order.id} filled during cancel: {final.filled_qty} @ ${float(final.filled_avg_price):.2f}'
+                )
+                return final
+        except Exception as e:
+            logger.error(f'Failed to cancel order {order.id}: {e}', exc_info=True)
         return None
 
     def run(self):
@@ -568,7 +579,7 @@ class MarketBreadthTrader:
         logger.info(f'  Long MA trough signals (entry): {len(self._tv_long_trough_signals)}')
         logger.info(f'  Short MA trough signals (entry): {len(self._tv_short_trough_signals)}')
 
-    def _find_recent_signal(self, signal_dates, current_date, lookback_days=3):
+    def _find_recent_signal(self, signal_dates, current_date, lookback_days=5):
         """Find the most recent signal within lookback_days of current_date."""
         for d in sorted(signal_dates, reverse=True):
             delta = (current_date - d).days
