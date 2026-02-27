@@ -21,8 +21,8 @@ def run_multi_etf_backtest(
     short_ma=5,
     long_ma=200,
     initial_capital=50000,
-    slippage=0.001,
-    commission=0.001,
+    slippage=0.0005,
+    commission=0.0001,
     use_saved_data=True,
     debug=False,
     threshold=0.5,
@@ -288,8 +288,8 @@ def run_multi_etf_backtest(
         f.write(f'- Short MA: {short_ma}\n')
         f.write(f'- Long MA: {long_ma}\n')
         f.write(f'- Initial Capital: ${initial_capital:,.2f}\n')
-        f.write(f'- Slippage: {slippage:.3f}\n')
-        f.write(f'- Commission: {commission:.3f}\n')
+        f.write(f'- Slippage: {slippage:.4f}\n')
+        f.write(f'- Commission: {commission:.4f}\n')
         f.write(f'- MA Type: {ma_type.upper()}\n')
         f.write(f'- Stop Loss: {stop_loss_pct:.1%}\n')
         if tv_mode:
@@ -365,7 +365,7 @@ if __name__ == '__main__':
         short_ma=5,
         long_ma=200,
         initial_capital=50000,
-        slippage=0.0,
+        slippage=0.0005,
         commission=0.0001,
         use_saved_data=True,
         debug=False,

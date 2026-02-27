@@ -52,8 +52,8 @@ class Backtest:
         short_ma=5,
         long_ma=200,
         initial_capital=50000,
-        slippage=0.001,
-        commission=0.001,
+        slippage=0.0005,
+        commission=0.0001,
         use_saved_data=False,
         debug=False,
         threshold=0.5,
@@ -91,6 +91,8 @@ class Backtest:
         # Bullish regime suppression
         bullish_regime_suppression=False,
         bullish_breadth_threshold=0.55,
+        # Chart-mode peak/trough detection
+        chart_mode=False,
     ):
         self.symbol = symbol  # Changed to allow symbol specification
         self.start_date = start_date
@@ -142,6 +144,11 @@ class Backtest:
         # Bullish regime suppression (TV mode only)
         self.bullish_regime_suppression = bullish_regime_suppression
         self.bullish_breadth_threshold = bullish_breadth_threshold
+
+        # Chart-mode peak/trough detection
+        self.chart_mode = chart_mode
+        if self.chart_mode and (self.tv_mode or self.tv_pine_compat):
+            raise ValueError('--chart_mode cannot be used with --tv_mode or --tv_pine_compat')
 
         # Variables to store backtest results
         self.positions = []
@@ -500,69 +507,91 @@ class Backtest:
                 data_start_date = current_short_ma_line.index[0].strftime('%Y-%m-%d')
                 data_end_date = current_short_ma_line.index[-1].strftime('%Y-%m-%d')
 
-                # Detect 20MA bottoms (only if disable_short_ma_entry is False)
-                if not self.disable_short_ma_entry and len(current_short_ma_line) > self.short_ma:
-                    below_threshold_short = current_short_ma_line[current_short_ma_line < self.threshold]
+                # Detect short MA bottoms (only if disable_short_ma_entry is False)
+                # chart_mode: skip len gate, use 0.4 filter threshold, no 20-day breadth check
+                short_ma_len_ok = self.chart_mode or len(current_short_ma_line) > self.short_ma
+                if not self.disable_short_ma_entry and short_ma_len_ok:
+                    filter_threshold = 0.4 if self.chart_mode else self.threshold
+                    below_threshold_short = current_short_ma_line[current_short_ma_line < filter_threshold]
                     if not below_threshold_short.empty:
-                        original_indices = np.where(current_short_ma_line < self.threshold)[0]
+                        original_indices = np.where(current_short_ma_line < filter_threshold)[0]
                         bottoms_short, _ = find_peaks(-below_threshold_short.values, prominence=0.02)
                         for bottom_idx in bottoms_short:
                             original_idx = original_indices[bottom_idx]
                             bottom_date = current_short_ma_line.index[original_idx]
-                            if original_idx >= 20:
+                            if self.chart_mode:
+                                should_signal = True
+                            elif original_idx >= 20:
                                 past_20days_min = current_breadth_index.iloc[original_idx - 20 : original_idx + 1].min()
-                                if past_20days_min <= 0.3:
-                                    if bottom_date not in detected_short_ma_bottoms:
-                                        detected_short_ma_bottoms.add(bottom_date)
-                                        signal_date = date
-                                        self.short_ma_bottoms.append(signal_date)
-                                        print(
-                                            f'New {self.short_ma}{self.ma_type.upper()} bottom detected at: '
-                                            f'{bottom_date.strftime("%Y-%m-%d")}'
-                                        )
-                                        print(f'  Data period: {data_start_date} to {data_end_date}')
-                                        print(f'  Signal date (trade execution): {signal_date.strftime("%Y-%m-%d")}')
-
-                # Detect 200MA bottoms
-                if len(current_long_ma_line) > self.long_ma:
-                    bottoms_long, _ = find_peaks(-current_long_ma_line.values, prominence=0.015)
-                    for bottom_idx in bottoms_long:
-                        bottom_date = current_long_ma_line.index[bottom_idx]
-                        original_idx = bottom_idx
-                        if original_idx >= 20:
-                            past_20days_min = current_breadth_index.iloc[original_idx - 20 : original_idx + 1].min()
-                            if past_20days_min <= 0.5:
-                                if bottom_date not in detected_long_ma_bottoms:
-                                    detected_long_ma_bottoms.add(bottom_date)
-                                    signal_date = date
-                                    self.long_ma_bottoms.append(signal_date)
-                                    print(
-                                        f'New {self.long_ma}{self.ma_type.upper()} bottom detected at: '
-                                        f'{bottom_date.strftime("%Y-%m-%d")}'
-                                    )
-                                    print(f'  Data period: {data_start_date} to {data_end_date}')
-                                    print(f'  Signal date (trade execution): {signal_date.strftime("%Y-%m-%d")}')
-
-                # Detect 200MA peaks
-                if len(current_long_ma_line) > self.long_ma:
-                    peaks, _ = find_peaks(current_long_ma_line.values, prominence=0.015)
-                    for peak_idx in peaks:
-                        peak_date = current_long_ma_line.index[peak_idx]
-                        if current_long_ma_line.iloc[peak_idx] >= 0.5:
-                            if peak_date not in detected_peaks:
-                                detected_peaks.add(peak_date)
+                                should_signal = past_20days_min <= 0.3
+                            else:
+                                should_signal = False
+                            if should_signal and bottom_date not in detected_short_ma_bottoms:
+                                detected_short_ma_bottoms.add(bottom_date)
                                 signal_date = date
-                                self.peaks.append(signal_date)
+                                self.short_ma_bottoms.append(signal_date)
                                 print(
-                                    f'New {self.long_ma}{self.ma_type.upper()} peak detected at: '
-                                    f'{peak_date.strftime("%Y-%m-%d")}'
+                                    f'New {self.short_ma}{self.ma_type.upper()} bottom detected at: '
+                                    f'{bottom_date.strftime("%Y-%m-%d")}'
                                 )
                                 print(f'  Data period: {data_start_date} to {data_end_date}')
                                 print(f'  Signal date (trade execution): {signal_date.strftime("%Y-%m-%d")}')
-                                print(
-                                    f'  {self.long_ma}{self.ma_type.upper()} value: '
-                                    f'{current_long_ma_line.iloc[peak_idx]:.4f}'
-                                )
+
+                # Detect long MA bottoms
+                # chart_mode: skip len gate, add distance=50, no 20-day breadth check
+                if self.chart_mode or len(current_long_ma_line) > self.long_ma:
+                    fp_kwargs = {'prominence': 0.015}
+                    if self.chart_mode:
+                        fp_kwargs['distance'] = 50
+                    bottoms_long, _ = find_peaks(-current_long_ma_line.values, **fp_kwargs)
+                    for bottom_idx in bottoms_long:
+                        bottom_date = current_long_ma_line.index[bottom_idx]
+                        original_idx = bottom_idx
+                        if self.chart_mode:
+                            should_signal = True
+                        elif original_idx >= 20:
+                            past_20days_min = current_breadth_index.iloc[original_idx - 20 : original_idx + 1].min()
+                            should_signal = past_20days_min <= 0.5
+                        else:
+                            should_signal = False
+                        if should_signal and bottom_date not in detected_long_ma_bottoms:
+                            detected_long_ma_bottoms.add(bottom_date)
+                            signal_date = date
+                            self.long_ma_bottoms.append(signal_date)
+                            print(
+                                f'New {self.long_ma}{self.ma_type.upper()} bottom detected at: '
+                                f'{bottom_date.strftime("%Y-%m-%d")}'
+                            )
+                            print(f'  Data period: {data_start_date} to {data_end_date}')
+                            print(f'  Signal date (trade execution): {signal_date.strftime("%Y-%m-%d")}')
+
+                # Detect long MA peaks
+                # chart_mode: skip len gate, add distance=50, no level >= 0.5 check
+                if self.chart_mode or len(current_long_ma_line) > self.long_ma:
+                    fp_kwargs = {'prominence': 0.015}
+                    if self.chart_mode:
+                        fp_kwargs['distance'] = 50
+                    peaks, _ = find_peaks(current_long_ma_line.values, **fp_kwargs)
+                    for peak_idx in peaks:
+                        peak_date = current_long_ma_line.index[peak_idx]
+                        if self.chart_mode:
+                            should_signal = True
+                        else:
+                            should_signal = current_long_ma_line.iloc[peak_idx] >= 0.5
+                        if should_signal and peak_date not in detected_peaks:
+                            detected_peaks.add(peak_date)
+                            signal_date = date
+                            self.peaks.append(signal_date)
+                            print(
+                                f'New {self.long_ma}{self.ma_type.upper()} peak detected at: '
+                                f'{peak_date.strftime("%Y-%m-%d")}'
+                            )
+                            print(f'  Data period: {data_start_date} to {data_end_date}')
+                            print(f'  Signal date (trade execution): {signal_date.strftime("%Y-%m-%d")}')
+                            print(
+                                f'  {self.long_ma}{self.ma_type.upper()} value: '
+                                f'{current_long_ma_line.iloc[peak_idx]:.4f}'
+                            )
 
             # --- TV PINE COMPAT: next-bar execution model ---
             if self.tv_pine_compat:
@@ -1984,8 +2013,8 @@ def main():
     parser.add_argument(
         '--initial_capital', type=float, default=50000, help='Initial investment amount (default: 50000 dollars)'
     )
-    parser.add_argument('--slippage', type=float, default=0.001, help='Slippage (default: 0.1%%)')
-    parser.add_argument('--commission', type=float, default=0.001, help='Transaction fee (default: 0.1%%)')
+    parser.add_argument('--slippage', type=float, default=0.0005, help='Slippage (default: 0.05%%)')
+    parser.add_argument('--commission', type=float, default=0.0001, help='Transaction fee (default: 0.01%%)')
     parser.add_argument('--use_saved_data', action='store_true', help='Whether to use saved data')
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
     parser.add_argument('--threshold', type=float, default=0.5, help='Threshold for bottom detection (default: 0.5)')
@@ -2075,6 +2104,14 @@ def main():
         help='Breadth threshold for bullish regime (default: 0.55)',
     )
 
+    # Chart-mode option
+    parser.add_argument(
+        '--chart_mode',
+        action='store_true',
+        help='Use chart-style peak/trough detection (find_peaks with distance=50 for long MA, '
+        'no level filters). Walk-forward: signal dates may differ from chart peak/trough positions',
+    )
+
     args = parser.parse_args()
 
     # Set default values if dates are not specified
@@ -2130,6 +2167,7 @@ def main():
         vol_trailing_mode=args.vol_trailing_mode,
         bullish_regime_suppression=args.bullish_regime_suppression,
         bullish_breadth_threshold=args.bullish_breadth_threshold,
+        chart_mode=args.chart_mode,
     )
 
     backtest.run()
