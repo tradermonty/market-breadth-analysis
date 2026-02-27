@@ -155,7 +155,7 @@ class MarketBreadthTrader:
         if self.testmode:
             # Use time advanced in run function for test mode
             current_dt = self.test_dt
-            logger.info(f'Test mode time: {current_dt}')
+            logger.debug(f'Test mode time: {current_dt}')
         else:
             current_dt = datetime.now().astimezone(TZ_NY)
 
@@ -164,21 +164,20 @@ class MarketBreadthTrader:
         if len(cal) > 0:
             close_time = cal[0].close
             if isinstance(close_time, str):
-                _close_hour, _close_minute = map(int, close_time.split(':'))
                 close_dt = datetime.combine(
                     current_dt.date(), datetime.strptime(close_time, '%H:%M').time(), tzinfo=TZ_NY
                 )
             else:
                 close_dt = datetime.combine(current_dt.date(), close_time, tzinfo=TZ_NY)
 
-            logger.info(f'Market close time: {close_dt}')
-            logger.info(f'Time difference: {close_dt - current_dt}')
+            logger.debug(f'Market close time: {close_dt}')
+            logger.debug(f'Time difference: {close_dt - current_dt}')
 
             if close_dt - timedelta(minutes=range_minutes) <= current_dt < close_dt:
                 logger.info('In closing time range')
                 return True
             else:
-                logger.info(f"{current_dt}, it's not in closing time range")
+                logger.debug(f"{current_dt}, it's not in closing time range")
                 return False
         else:
             logger.info('Market will not open on the date.')
@@ -226,6 +225,7 @@ class MarketBreadthTrader:
                 logger.info(f'No position found for {self.symbol}')
                 self.current_position = 0
                 self.entry_prices = []
+                self._clear_entry_prices_file()
             else:
                 logger.error(f'API error syncing position for {self.symbol}: {e}')
                 raise
@@ -252,7 +252,7 @@ class MarketBreadthTrader:
         """Execute buy order"""
         if self.testmode:
             logger.info(f'[TEST MODE] Would execute buy order: {shares} shares of {self.symbol}, reason: {reason}')
-            return True
+            return SimpleNamespace(id='TEST', qty=shares, status='accepted')
 
         try:
             order = self.api.submit_order(
@@ -268,7 +268,7 @@ class MarketBreadthTrader:
         """Execute sell order"""
         if self.testmode:
             logger.info(f'[TEST MODE] Would execute sell order: {shares} shares of {self.symbol}, reason: {reason}')
-            return True
+            return SimpleNamespace(id='TEST', qty=shares, status='accepted')
 
         try:
             order = self.api.submit_order(
@@ -285,9 +285,11 @@ class MarketBreadthTrader:
         if self.testmode:
             return SimpleNamespace(filled_avg_price=None, filled_qty=None, status='filled')
         deadline = time.time() + timeout_seconds
+        shutdown_break = False
         while time.time() < deadline:
             if self._shutdown_requested:
                 logger.warning(f'Shutdown requested — aborting fill wait for order {order.id}')
+                shutdown_break = True
                 break
             updated = self.api.get_order(order.id)
             if updated.status == 'filled':
@@ -299,6 +301,8 @@ class MarketBreadthTrader:
                 logger.warning(f'Order {order.id} ended: {updated.status}')
                 return None
             time.sleep(2)
+        if shutdown_break:
+            return None
         logger.error(f'Order {order.id} not filled within {timeout_seconds}s — canceling')
         try:
             self.api.cancel_order(order.id)
@@ -346,7 +350,7 @@ class MarketBreadthTrader:
             if self.testmode:
                 # Use specified time in test mode
                 current_dt = self.test_dt
-                logger.info(f'Current test time: {current_dt}')
+                logger.debug(f'Current test time: {current_dt}')
             else:
                 # Use current time in normal mode
                 current_dt = datetime.now().astimezone(TZ_NY)
@@ -384,15 +388,18 @@ class MarketBreadthTrader:
             if self.testmode:
                 # Advance time by 1 minute in test mode
                 self.test_dt += timedelta(minutes=1)
-                logger.info(f'Test time advanced to: {self.test_dt}')
+                logger.debug(f'Test time advanced to: {self.test_dt}')
                 # No actual waiting in test mode
                 continue
             else:
                 # Wait 1 minute in normal mode
                 if self._shutdown_requested:
                     continue  # Loop back to top where break will happen
-                logger.info('Waiting for closing time range...')
-                time.sleep(60)
+                logger.debug('Waiting for closing time range...')
+                for _ in range(60):
+                    if self._shutdown_requested:
+                        break
+                    time.sleep(1)
 
         logger.info('Trading session ended.')
 

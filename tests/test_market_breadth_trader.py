@@ -909,6 +909,215 @@ class TestMarketBreadthTrader(unittest.TestCase):
         self.assertEqual(self.trader.current_position, 181)
         self.assertEqual(self.trader.entry_prices, [55.0])
 
+    # --- Step 1 test: shutdown path in _wait_for_fill ---
+
+    @patch('trade.run_market_breadth_trade.time')
+    def test_wait_for_fill_shutdown_while_polling(self, mock_time):
+        """Shutdown during polling returns None without calling cancel_order"""
+        mock_order = Mock()
+        mock_order.id = 'order-shutdown'
+
+        # time.time returns values within deadline
+        mock_time.time.side_effect = [0, 10, 20]
+        mock_time.sleep = Mock()
+
+        # First poll returns pending, then shutdown triggers
+        pending = Mock()
+        pending.status = 'new'
+
+        def set_shutdown_and_return(*args):
+            self.trader._shutdown_requested = True
+            return pending
+
+        self.mock_api.get_order.side_effect = set_shutdown_and_return
+        self.mock_api.cancel_order = Mock()
+
+        result = self.trader._wait_for_fill(mock_order, timeout_seconds=60)
+
+        self.assertIsNone(result)
+        self.mock_api.cancel_order.assert_not_called()
+
+    # --- Step 2 test: stale entry_prices file cleared on no-position ---
+
+    @patch('trade.run_market_breadth_trade.MarketBreadthTrader._initialize_alpaca')
+    def test_sync_clears_stale_file_when_no_position(self, mock_init):
+        """Disk entry_prices file is removed when broker returns 404"""
+        mock_api = Mock()
+        mock_init.return_value = mock_api
+
+        trader = MarketBreadthTrader(symbol='STALE')
+
+        # Write a stale file to disk
+        tmp_dir = tempfile.mkdtemp()
+        entry_path = os.path.join(tmp_dir, 'entry_prices_STALE.json')
+        trader._entry_prices_path = lambda: entry_path
+        with open(entry_path, 'w') as f:
+            json.dump([50.0, 55.0], f)
+
+        self.assertTrue(os.path.exists(entry_path))
+
+        # Broker returns 404
+        mock_api.get_position.side_effect = Exception('position does not exist')
+
+        trader._sync_position_from_broker()
+
+        self.assertEqual(trader.current_position, 0)
+        self.assertEqual(trader.entry_prices, [])
+        self.assertFalse(os.path.exists(entry_path), 'Stale entry prices file should be removed')
+
+        # Cleanup
+        os.rmdir(tmp_dir)
+
+    # --- Step 4 tests: execute_buy/sell testmode returns SimpleNamespace ---
+
+    @patch('trade.run_market_breadth_trade.MarketBreadthTrader._initialize_alpaca')
+    def test_execute_buy_testmode_returns_namespace(self, mock_init):
+        """Testmode execute_buy returns SimpleNamespace with id and qty attributes"""
+        mock_init.return_value = Mock()
+        trader = MarketBreadthTrader(testmode=True, test_date='2024-01-01')
+
+        result = trader.execute_buy(100, reason='test')
+
+        self.assertTrue(hasattr(result, 'id'))
+        self.assertTrue(hasattr(result, 'qty'))
+        self.assertEqual(result.id, 'TEST')
+        self.assertEqual(result.qty, 100)
+        self.assertEqual(result.status, 'accepted')
+
+    @patch('trade.run_market_breadth_trade.MarketBreadthTrader._initialize_alpaca')
+    def test_execute_sell_testmode_returns_namespace(self, mock_init):
+        """Testmode execute_sell returns SimpleNamespace with id and qty attributes"""
+        mock_init.return_value = Mock()
+        trader = MarketBreadthTrader(testmode=True, test_date='2024-01-01')
+
+        result = trader.execute_sell(50, reason='test')
+
+        self.assertTrue(hasattr(result, 'id'))
+        self.assertTrue(hasattr(result, 'qty'))
+        self.assertEqual(result.id, 'TEST')
+        self.assertEqual(result.qty, 50)
+        self.assertEqual(result.status, 'accepted')
+
+    # --- Step 6 tests: coverage expansion ---
+
+    @patch('trade.run_market_breadth_trade.MarketBreadthTrader._initialize_alpaca')
+    def test_sync_uses_broker_avg_when_no_disk_file(self, mock_init):
+        """_sync_position_from_broker falls back to broker avg_entry_price when no disk file"""
+        mock_api = Mock()
+        mock_init.return_value = mock_api
+
+        trader = MarketBreadthTrader(symbol='NODISK')
+
+        # No disk file exists
+        tmp_dir = tempfile.mkdtemp()
+        trader._entry_prices_path = lambda: os.path.join(tmp_dir, 'entry_prices_NODISK.json')
+
+        # Broker returns position with avg_entry_price
+        mock_position = Mock()
+        mock_position.qty = 50
+        mock_position.avg_entry_price = '42.50'
+        mock_api.get_position.return_value = mock_position
+
+        trader.entry_prices = []
+        trader._sync_position_from_broker()
+
+        self.assertEqual(trader.current_position, 50)
+        self.assertEqual(trader.entry_prices, [42.50])
+
+        # Cleanup
+        os.rmdir(tmp_dir)
+
+    @patch('trade.run_market_breadth_trade.MarketBreadthTrader._initialize_alpaca')
+    def test_run_full_cycle_testmode(self, mock_init):
+        """Testmode run() calls analyze_market then check_signals_and_trade when in closing time"""
+        mock_init.return_value = Mock()
+        trader = MarketBreadthTrader(testmode=True, test_date='2024-01-02')
+
+        # is_closing_time_range returns True on first check
+        trader.is_closing_time_range = Mock(return_value=True)
+        trader.analyze_market = Mock()
+        trader.check_signals_and_trade = Mock()
+
+        trader.run()
+
+        trader.analyze_market.assert_called_once()
+        trader.check_signals_and_trade.assert_called_once()
+
+    @patch('trade.run_market_breadth_trade.time')
+    def test_wait_for_fill_filled_during_cancel(self, mock_time):
+        """Order that fills during cancel attempt is returned successfully"""
+        mock_order = Mock()
+        mock_order.id = 'order-fill-during-cancel'
+
+        # Immediate timeout
+        mock_time.time.side_effect = [0, 100]
+        mock_time.sleep = Mock()
+
+        # After cancel, final get_order shows filled
+        filled = Mock()
+        filled.status = 'filled'
+        filled.filled_qty = 100
+        filled.filled_avg_price = '55.0'
+        self.mock_api.get_order.return_value = filled
+        self.mock_api.cancel_order = Mock()
+
+        result = self.trader._wait_for_fill(mock_order, timeout_seconds=60)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.status, 'filled')
+        self.mock_api.cancel_order.assert_called_once_with('order-fill-during-cancel')
+
+    def test_check_signals_skips_when_price_unavailable(self):
+        """check_signals_and_trade returns early when get_current_price is None"""
+        # Mock _sync_position_from_broker
+        self.trader._sync_position_from_broker = Mock()
+
+        # Price returns None
+        self.mock_api.get_latest_bar.return_value = None
+
+        # Set up signals that should NOT be reached
+        self.trader.peaks = []
+        self.trader.long_ma_bottoms = []
+        self.trader.short_ma_bottoms = []
+
+        # Should not raise, should return early
+        self.trader.check_signals_and_trade()
+
+        # submit_order should never be called
+        self.mock_api.submit_order.assert_not_called()
+
+    @patch('trade.run_market_breadth_trade.MarketBreadthTrader._initialize_alpaca')
+    def test_load_entry_prices_corrupt_file_returns_none(self, mock_init):
+        """Corrupt or non-list JSON in entry_prices file returns None"""
+        mock_init.return_value = Mock()
+        trader = MarketBreadthTrader(symbol='CORRUPT')
+
+        tmp_dir = tempfile.mkdtemp()
+        entry_path = os.path.join(tmp_dir, 'entry_prices_CORRUPT.json')
+        trader._entry_prices_path = lambda: entry_path
+
+        # Test with non-list JSON (dict)
+        with open(entry_path, 'w') as f:
+            json.dump({'price': 50.0}, f)
+        result = trader._load_entry_prices()
+        self.assertIsNone(result, 'Non-list JSON should return None')
+
+        # Test with invalid JSON
+        with open(entry_path, 'w') as f:
+            f.write('not valid json{{{')
+        result = trader._load_entry_prices()
+        self.assertIsNone(result, 'Invalid JSON should return None')
+
+        # Test with list of non-numeric values
+        with open(entry_path, 'w') as f:
+            json.dump(['not', 'numbers'], f)
+        result = trader._load_entry_prices()
+        self.assertIsNone(result, 'List of non-numeric values should return None')
+
+        # Cleanup
+        os.remove(entry_path)
+        os.rmdir(tmp_dir)
+
 
 if __name__ == '__main__':
     unittest.main()
