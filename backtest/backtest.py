@@ -120,7 +120,7 @@ class Backtest:
         partial_exit=False,
         no_show_plot=False,
         # TradingView alignment parameters
-        tv_mode=False,
+        tv_mode=True,
         tv_pine_compat=False,
         tv_breadth_csv=None,
         tv_price_csv=None,
@@ -131,7 +131,7 @@ class Backtest:
         peak_level=0.70,
         trough_level_long=0.40,
         trough_level_short=0.20,
-        no_pyramiding=False,
+        no_pyramiding=True,
         # Two-stage exit parameters
         two_stage_exit=False,
         stage2_exit_mode='trend_break',
@@ -145,6 +145,12 @@ class Backtest:
         bullish_breadth_threshold=0.55,
         # Chart-mode peak/trough detection
         chart_mode=False,
+        # Weekly trailing stop parameters
+        enable_weekly_trailing=False,
+        weekly_trailing_type='weekly_ema',
+        weekly_ema_period=10,
+        weekly_nweek_low_period=4,
+        weekly_transition_weeks=3,
     ):
         self.symbol = symbol  # Changed to allow symbol specification
         self.start_date = start_date
@@ -197,7 +203,27 @@ class Backtest:
         self.bullish_regime_suppression = bullish_regime_suppression
         self.bullish_breadth_threshold = bullish_breadth_threshold
 
-        # Chart-mode peak/trough detection
+        # Weekly trailing stop
+        self.enable_weekly_trailing = enable_weekly_trailing
+        self.weekly_trailing_type = weekly_trailing_type
+        self.weekly_ema_period = weekly_ema_period
+        self.weekly_nweek_low_period = weekly_nweek_low_period
+        self.weekly_transition_weeks = weekly_transition_weeks
+
+        # Weekly trailing auto-disables tv_mode (must be BEFORE chart_mode check)
+        if self.enable_weekly_trailing:
+            if self.tv_pine_compat:
+                raise ValueError('--enable_weekly_trailing cannot be used with --tv_pine_compat')
+            if self.tv_mode:
+                import warnings
+
+                warnings.warn(
+                    'enable_weekly_trailing requires legacy execution path; tv_mode has been auto-disabled.',
+                    stacklevel=2,
+                )
+                self.tv_mode = False
+
+        # Chart-mode peak/trough detection (uses effective tv_mode after weekly trailing override)
         self.chart_mode = chart_mode
         if self.chart_mode and (self.tv_mode or self.tv_pine_compat):
             raise ValueError('--chart_mode cannot be used with --tv_mode or --tv_pine_compat')
@@ -365,7 +391,7 @@ class Backtest:
         # Priority: tv_price_csv > tv_pine_compat OHLC > sp500_data column > individual fetch.
         if getattr(self, 'tv_price_csv', None):
             self.price_data = self._load_tv_price_data()
-        elif self.tv_pine_compat or self.tv_mode:
+        elif self.tv_pine_compat or self.tv_mode or self.enable_weekly_trailing:
             ohlc = get_stock_price_ohlc(
                 self.symbol,
                 self.start_date,
@@ -396,6 +422,25 @@ class Backtest:
             )
             if isinstance(self.price_data, pd.Series):
                 self.price_data = pd.DataFrame(self.price_data, columns=['adjusted_close'])
+
+        # Validate and compute adjusted OHLC columns for weekly trailing
+        if self.enable_weekly_trailing:
+            required_cols = {'adjusted_close', 'open', 'close'}
+            if self.weekly_trailing_type == 'weekly_nweek_low':
+                required_cols.add('low')
+            missing = required_cols - set(self.price_data.columns)
+            if missing:
+                raise RuntimeError(
+                    f'Weekly trailing requires columns {required_cols} but missing: {missing}. '
+                    'Ensure OHLC data is available for the symbol.'
+                )
+            # Compute adjusted OHLC from raw OHLC + adjustment ratio
+            adj_ratio = self.price_data['adjusted_close'] / self.price_data['close']
+            self.price_data['adjusted_open'] = self.price_data['open'] * adj_ratio
+            if 'high' in self.price_data.columns:
+                self.price_data['adjusted_high'] = self.price_data['high'] * adj_ratio
+            if 'low' in self.price_data.columns:
+                self.price_data['adjusted_low'] = self.price_data['low'] * adj_ratio
 
         # Build breadth source (S&P500-derived breadth or external TV-compatible breadth CSV).
         if self.tv_breadth_csv:
@@ -523,514 +568,85 @@ class Backtest:
 
     def execute_trades(self):
         """Execute trades"""
-        available_capital = self.initial_capital
+        # 検出済みのシグナルを記録する変数（_detect_legacy_signals で使用）
+        self._detected_short_ma_bottoms = set()
+        self._detected_long_ma_bottoms = set()
+        self._detected_peaks = set()
 
-        # 検出済みのシグナルを記録する変数
-        detected_short_ma_bottoms = set()
-        detected_long_ma_bottoms = set()
-        detected_peaks = set()
+        # Weekly trailing stop preparation
+        if self.enable_weekly_trailing:
+            from backtest.weekly_trailing import aggregate_to_weekly, check_weekly_trailing_stop, is_week_end
+
+            weekly_df = aggregate_to_weekly(self.price_data)
+            _pending_weekly_exit = False
+        else:
+            weekly_df = None
+            _pending_weekly_exit = False
 
         # Execute trades
         for i, date in enumerate(self.price_data.index):
             price = self.price_data.loc[date, 'adjusted_close']
 
-            # In TV mode, signals are pre-computed; skip per-bar detection
             if self.tv_mode:
-                # Populate signal lists for summary output
-                if date in getattr(self, '_tv_short_trough_signals', {}):
-                    self.short_ma_bottoms.append(date)
-                if date in getattr(self, '_tv_long_trough_signals', {}):
-                    self.long_ma_bottoms.append(date)
-                if date in getattr(self, '_tv_peak_signals', {}):
-                    self.peaks.append(date)
-
-                # Jump to trade execution (skip legacy signal detection)
-                # --- TV MODE / LEGACY MODE trade logic follows below ---
-
-            # Legacy mode: Detect signals using data up to the current date
-            if not self.tv_mode:
-                current_breadth_index = self.breadth_index.iloc[: i + 1]
-                current_short_ma_line = self.short_ma_line.iloc[: i + 1]
-                current_long_ma_line = self.long_ma_line.iloc[: i + 1]
-
-            if not self.tv_mode:
-                # Get start and end dates of the data period
-                data_start_date = current_short_ma_line.index[0].strftime('%Y-%m-%d')
-                data_end_date = current_short_ma_line.index[-1].strftime('%Y-%m-%d')
-
-                # Detect short MA bottoms (only if disable_short_ma_entry is False)
-                # chart_mode: skip len gate, use 0.4 filter threshold, no 20-day breadth check
-                short_ma_len_ok = self.chart_mode or len(current_short_ma_line) > self.short_ma
-                if not self.disable_short_ma_entry and short_ma_len_ok:
-                    filter_threshold = 0.4 if self.chart_mode else self.threshold
-                    below_threshold_short = current_short_ma_line[current_short_ma_line < filter_threshold]
-                    if not below_threshold_short.empty:
-                        original_indices = np.where(current_short_ma_line < filter_threshold)[0]
-                        bottoms_short, _ = find_peaks(-below_threshold_short.values, prominence=0.02)
-                        for bottom_idx in bottoms_short:
-                            original_idx = original_indices[bottom_idx]
-                            bottom_date = current_short_ma_line.index[original_idx]
-                            if self.chart_mode:
-                                should_signal = True
-                            elif original_idx >= 20:
-                                past_20days_min = current_breadth_index.iloc[original_idx - 20 : original_idx + 1].min()
-                                should_signal = past_20days_min <= 0.3
-                            else:
-                                should_signal = False
-                            if should_signal and bottom_date not in detected_short_ma_bottoms:
-                                detected_short_ma_bottoms.add(bottom_date)
-                                signal_date = date
-                                self.short_ma_bottoms.append(signal_date)
-                                print(
-                                    f'New {self.short_ma}{self.ma_type.upper()} bottom detected at: '
-                                    f'{bottom_date.strftime("%Y-%m-%d")}'
-                                )
-                                print(f'  Data period: {data_start_date} to {data_end_date}')
-                                print(f'  Signal date (trade execution): {signal_date.strftime("%Y-%m-%d")}')
-
-                # Detect long MA bottoms
-                # chart_mode: skip len gate, add distance=50, no 20-day breadth check
-                if self.chart_mode or len(current_long_ma_line) > self.long_ma:
-                    fp_kwargs = {'prominence': 0.015}
-                    if self.chart_mode:
-                        fp_kwargs['distance'] = 50
-                    bottoms_long, _ = find_peaks(-current_long_ma_line.values, **fp_kwargs)
-                    for bottom_idx in bottoms_long:
-                        bottom_date = current_long_ma_line.index[bottom_idx]
-                        original_idx = bottom_idx
-                        if self.chart_mode:
-                            should_signal = True
-                        elif original_idx >= 20:
-                            past_20days_min = current_breadth_index.iloc[original_idx - 20 : original_idx + 1].min()
-                            should_signal = past_20days_min <= 0.5
-                        else:
-                            should_signal = False
-                        if should_signal and bottom_date not in detected_long_ma_bottoms:
-                            detected_long_ma_bottoms.add(bottom_date)
-                            signal_date = date
-                            self.long_ma_bottoms.append(signal_date)
-                            print(
-                                f'New {self.long_ma}{self.ma_type.upper()} bottom detected at: '
-                                f'{bottom_date.strftime("%Y-%m-%d")}'
-                            )
-                            print(f'  Data period: {data_start_date} to {data_end_date}')
-                            print(f'  Signal date (trade execution): {signal_date.strftime("%Y-%m-%d")}')
-
-                # Detect long MA peaks
-                # chart_mode: skip len gate, add distance=50, no level >= 0.5 check
-                if self.chart_mode or len(current_long_ma_line) > self.long_ma:
-                    fp_kwargs = {'prominence': 0.015}
-                    if self.chart_mode:
-                        fp_kwargs['distance'] = 50
-                    peaks, _ = find_peaks(current_long_ma_line.values, **fp_kwargs)
-                    for peak_idx in peaks:
-                        peak_date = current_long_ma_line.index[peak_idx]
-                        if self.chart_mode:
-                            should_signal = True
-                        else:
-                            should_signal = current_long_ma_line.iloc[peak_idx] >= 0.5
-                        if should_signal and peak_date not in detected_peaks:
-                            detected_peaks.add(peak_date)
-                            signal_date = date
-                            self.peaks.append(signal_date)
-                            print(
-                                f'New {self.long_ma}{self.ma_type.upper()} peak detected at: '
-                                f'{peak_date.strftime("%Y-%m-%d")}'
-                            )
-                            print(f'  Data period: {data_start_date} to {data_end_date}')
-                            print(f'  Signal date (trade execution): {signal_date.strftime("%Y-%m-%d")}')
-                            print(
-                                f'  {self.long_ma}{self.ma_type.upper()} value: '
-                                f'{current_long_ma_line.iloc[peak_idx]:.4f}'
-                            )
-
-            # --- TV PINE COMPAT: next-bar execution model ---
-            if self.tv_pine_compat:
-                skip_stop = False
-
-                # Phase 0: Fill pending orders from previous bar at this bar's open
-                if self._pending_exit is not None or self._pending_entry is not None:
-                    fill_price = self.price_data.loc[date, 'open'] if 'open' in self.price_data.columns else price
-
-                    # Process pending exit first (Pine order: exit before entry)
-                    if self._pending_exit is not None and self.current_position > 0:
-                        pend_reason = self._pending_exit[0]
-                        if self.debug:
-                            print(
-                                f'\n[COMPAT] Filling pending exit at {date.strftime("%Y-%m-%d")} '
-                                f'open=${fill_price:.2f}, reason={pend_reason}'
-                            )
-                        self._execute_exit(date, fill_price, reason=pend_reason)
-                        available_capital = self.current_capital
-                        self._pending_exit = None
-
-                    # Process pending entry
-                    if self._pending_entry is not None:
-                        pend_reason, pend_frac = self._pending_entry
-                        entry_amount = available_capital * pend_frac
-                        if entry_amount > 0:
-                            shares = self._calculate_shares(entry_amount, fill_price)
-                            if shares > 0:
-                                if self.debug:
-                                    print(
-                                        f'\n[COMPAT] Filling pending entry at {date.strftime("%Y-%m-%d")} '
-                                        f'open=${fill_price:.2f}, reason={pend_reason}, shares={shares}'
-                                    )
-                                self._execute_entry(date, fill_price, shares, reason=pend_reason)
-                                available_capital -= entry_amount
-                                if available_capital < 0:
-                                    available_capital = 0
-                                self.highest_price = fill_price
-                                skip_stop = True  # No same-bar stop for freshly filled entry
-                        self._pending_entry = None
-
-                # Phase 1: Stop loss (immediate, no pending queue)
-                stop_loss_fired = False
-                if not skip_stop and self.current_position > 0 and self.entry_prices:
-                    avg_entry = self._calculate_avg_entry_price()
-                    if self.highest_price is None or price > self.highest_price:
-                        self.highest_price = price
-                    stop_loss_price = avg_entry * (1 - self.stop_loss_pct)
-
-                    triggered = False
-                    fill_at = price  # default: close-based
-                    if 'low' in self.price_data.columns:
-                        bar_low = self.price_data.loc[date, 'low']
-                        bar_open = self.price_data.loc[date, 'open']
-                        if pd.notna(bar_low) and pd.notna(bar_open):
-                            if bar_low <= stop_loss_price:
-                                fill_at = min(bar_open, stop_loss_price)
-                                triggered = True
-                        elif price <= stop_loss_price:
-                            triggered = True
-                    elif price <= stop_loss_price:
-                        triggered = True
-
-                    if triggered:
-                        if self.debug:
-                            print(
-                                f'\n[COMPAT] Stop loss at {date.strftime("%Y-%m-%d")}, '
-                                f'fill=${fill_at:.2f}, stop=${stop_loss_price:.2f}'
-                            )
-                        self._execute_exit(date, fill_at, reason='stop loss')
-                        available_capital = self.current_capital
-                        stop_loss_fired = True
-                        # Invalidate any pending orders (position is gone)
-                        self._pending_entry = None
-                        self._pending_exit = None
-
-                # Phase 2: Exit signal → queue for next bar
-                if not stop_loss_fired and self.current_position > 0:
-                    if self._pending_exit is None and date in self._tv_peak_signals:
-                        pivot_date, pivot_val = self._tv_peak_signals[date]
-                        if self.debug:
-                            print(
-                                f'\n[COMPAT] Queueing exit at peak '
-                                f'(pivot {pivot_date.strftime("%Y-%m-%d")}, val={pivot_val:.4f}), '
-                                f'bar={date.strftime("%Y-%m-%d")}'
-                            )
-                        self._pending_exit = ('peak exit',)
-
-                # Phase 3: Entry signal → queue for next bar
-                if not stop_loss_fired:
-                    can_enter = (self.current_position == 0) or (self._pending_exit is not None)
-                    if can_enter and self._pending_entry is None:
-                        entered = False
-                        if not self.disable_short_ma_entry and date in self._tv_short_trough_signals:
-                            pivot_date, pivot_val = self._tv_short_trough_signals[date]
-                            frac = 1.0 if self.no_pyramiding else 0.5
-                            if self.debug:
-                                print(
-                                    f'\n[COMPAT] Queueing entry at short trough '
-                                    f'(pivot {pivot_date.strftime("%Y-%m-%d")}, val={pivot_val:.4f}), '
-                                    f'bar={date.strftime("%Y-%m-%d")}'
-                                )
-                            self._pending_entry = ('short_ma_bottom', frac)
-                            entered = True
-                        if not entered and date in self._tv_long_trough_signals:
-                            pivot_date, pivot_val = self._tv_long_trough_signals[date]
-                            if self.debug:
-                                print(
-                                    f'\n[COMPAT] Queueing entry at long trough '
-                                    f'(pivot {pivot_date.strftime("%Y-%m-%d")}, val={pivot_val:.4f}), '
-                                    f'bar={date.strftime("%Y-%m-%d")}'
-                                )
-                            self._pending_entry = ('long_ma_bottom', 1.0)
-
-                # Update highest price tracking for positions
-                if self.current_position > 0 and not stop_loss_fired:
-                    if self.highest_price is None or price > self.highest_price:
-                        self.highest_price = price
-
-            # --- TV MODE: restructured trade logic (same-bar execution) ---
-            elif self.tv_mode:
-                stop_loss_fired = False
-                exit_fired = False
-
-                # Phase 1: Stop loss (always checked independently)
-                if self.current_position > 0 and self.entry_prices:
-                    avg_entry = self._calculate_avg_entry_price()
-                    if self.highest_price is None or price > self.highest_price:
-                        self.highest_price = price
-                    if self.use_volatility_stop:
-                        reference = self.highest_price if self.vol_trailing_mode else avg_entry
-                        stop_loss_price = self._compute_volatility_stop(i, reference)
-                    elif self.use_trailing_stop and self.highest_price is not None:
-                        stop_loss_price = self.highest_price * (1 - self.trailing_stop_pct)
-                    else:
-                        stop_loss_price = avg_entry * (1 - self.stop_loss_pct)
-
-                    # Check stop loss using intraday low if available, else close
-                    triggered = False
-                    fill_at = price  # default: close-based
-                    if 'low' in self.price_data.columns:
-                        bar_low = self.price_data.loc[date, 'low']
-                        bar_open = self.price_data.loc[date, 'open']
-                        if pd.notna(bar_low) and pd.notna(bar_open):
-                            if bar_low <= stop_loss_price:
-                                fill_at = min(bar_open, stop_loss_price)
-                                triggered = True
-                        elif price <= stop_loss_price:
-                            triggered = True
-                    elif price <= stop_loss_price:
-                        triggered = True
-
-                    if triggered:
-                        print('\n[TV] Stop loss triggered:')
-                        print(f'Date: {date.strftime("%Y-%m-%d")}')
-                        print(f'Avg entry price: ${avg_entry:.2f}')
-                        print(f'Current price: ${price:.2f}')
-                        print(f'Stop loss price: ${stop_loss_price:.2f}')
-                        print(f'Fill price: ${fill_at:.2f}')
-                        self._execute_exit(date, fill_at, reason='stop loss')
-                        available_capital = self.current_capital
-                        stop_loss_fired = True
-
-                # Phase 2: Exit signal (peak / two-stage) - only if stop loss did not fire
-                if not stop_loss_fired and self.current_position > 0:
-                    if self.two_stage_exit:
-                        # Two-stage exit logic
-                        if not self._half_exited and date in self._tv_peak_signals:
-                            if self._is_bullish_regime(i):
-                                print(f'\n[TV] Peak suppressed by bullish regime at {date.strftime("%Y-%m-%d")}')
-                            else:
-                                pivot_date, pivot_val = self._tv_peak_signals[date]
-                                print(
-                                    f'\n[TV] Stage 1 exit at peak '
-                                    f'(pivot {pivot_date.strftime("%Y-%m-%d")}, val={pivot_val:.4f}):'
-                                )
-                                print(f'Date: {date.strftime("%Y-%m-%d")}, Price: ${price:.2f}')
-                                self._execute_stage1_exit(date, price)
-                                available_capital = self.current_capital
-                                exit_fired = True
-                        elif self._half_exited and self._check_trend_break(i):
-                            print('\n[TV] Stage 2 trend break exit:')
-                            print(f'Date: {date.strftime("%Y-%m-%d")}, Price: ${price:.2f}')
-                            self._execute_exit(date, price, reason='trend break exit (stage 2)')
-                            available_capital = self.current_capital
-                            exit_fired = True
-                    else:
-                        # Single-stage exit (original behavior)
-                        if date in self._tv_peak_signals:
-                            if self._is_bullish_regime(i):
-                                print(f'\n[TV] Peak suppressed by bullish regime at {date.strftime("%Y-%m-%d")}')
-                            else:
-                                pivot_date, pivot_val = self._tv_peak_signals[date]
-                                print(
-                                    f'\n[TV] Exit at peak '
-                                    f'(pivot {pivot_date.strftime("%Y-%m-%d")}, val={pivot_val:.4f}):'
-                                )
-                                print(f'Date: {date.strftime("%Y-%m-%d")}, Price: ${price:.2f}')
-                                self._execute_exit(date, price, reason='peak exit')
-                                available_capital = self.current_capital
-                                exit_fired = True
-
-                # Phase 3: Entry signals - only if no exit fired
-                if not stop_loss_fired and not exit_fired:
-                    # In no_pyramiding mode, skip entry if already in position
-                    if self.no_pyramiding and self.current_position > 0:
-                        pass
-                    else:
-                        entered = False
-                        # Check short MA trough first
-                        if not self.disable_short_ma_entry and date in self._tv_short_trough_signals:
-                            pivot_date, pivot_val = self._tv_short_trough_signals[date]
-                            if self.no_pyramiding:
-                                entry_amount = available_capital
-                            else:
-                                entry_amount = available_capital / 2
-                            if entry_amount > 0:
-                                shares = self._calculate_shares(entry_amount, price)
-                                if shares > 0:
-                                    self._execute_entry(date, price, shares, reason='short_ma_bottom')
-                                    available_capital -= entry_amount
-                                    if available_capital < 0:
-                                        available_capital = 0
-                                    self.highest_price = price
-                                    entered = True
-                                    print(
-                                        f'\n[TV] Entry at short MA trough '
-                                        f'(pivot {pivot_date.strftime("%Y-%m-%d")}, val={pivot_val:.4f}):'
-                                    )
-                                    print(f'Date: {date.strftime("%Y-%m-%d")}, Price: ${price:.2f}, Shares: {shares}')
-
-                        # Check long MA trough (only if short did not enter in no_pyramiding mode)
-                        if not entered and date in self._tv_long_trough_signals:
-                            pivot_date, pivot_val = self._tv_long_trough_signals[date]
-                            if self.no_pyramiding:
-                                entry_amount = available_capital
-                            else:
-                                entry_amount = available_capital
-                            if entry_amount > 0:
-                                shares = self._calculate_shares(entry_amount, price)
-                                if shares > 0:
-                                    self._execute_entry(date, price, shares, reason='long_ma_bottom')
-                                    available_capital = 0
-                                    self.highest_price = price
-                                    print(
-                                        f'\n[TV] Entry at long MA trough '
-                                        f'(pivot {pivot_date.strftime("%Y-%m-%d")}, val={pivot_val:.4f}):'
-                                    )
-                                    print(f'Date: {date.strftime("%Y-%m-%d")}, Price: ${price:.2f}, Shares: {shares}')
-
-                # Update highest price tracking for positions
-                if self.current_position > 0 and not stop_loss_fired:
-                    if self.highest_price is None or price > self.highest_price:
-                        self.highest_price = price
-
-            # --- LEGACY MODE: original trade logic ---
+                self._execute_tv_mode_trades(i, date, price)
             else:
-                # Entry at 20MA bottom (only if disable_short_ma_entry is False)
-                if not self.disable_short_ma_entry and date in self.short_ma_bottoms:
-                    if available_capital > 0:
-                        entry_amount = available_capital / 2
-                        shares = self._calculate_shares(entry_amount, price)
-                        if shares > 0:
-                            self._execute_entry(date, price, shares, reason='short_ma_bottom')
-                            available_capital -= entry_amount
-                            self.highest_price = price
-                            print(f'\nEntry at {self.short_ma}{self.ma_type.upper()} bottom (buy more):')
-                            print(f'Date: {date.strftime("%Y-%m-%d")}')
-                            print(f'Price: ${price:.2f}')
-                            print(f'Shares: {shares}')
-                            print(f'Investment amount: ${entry_amount:.2f}')
-                            print(f'Remaining available capital: ${available_capital:.2f}')
-                            print(f'Total position: {self.current_position} shares')
-                    else:
-                        print(f'\n{self.short_ma}{self.ma_type.upper()} bottom detected but no available capital:')
-                        print(f'Date: {date.strftime("%Y-%m-%d")}')
-                        print(f'Current position: {self.current_position} shares')
+                self._detect_legacy_signals(i, date)
 
-                # Entry at 200MA bottom
-                elif date in self.long_ma_bottoms:
-                    if available_capital > 0:
-                        shares = self._calculate_shares(available_capital, price)
-                        if shares > 0:
-                            self._execute_entry(date, price, shares, reason='long_ma_bottom')
-                            self.highest_price = price
-                            print(f'\nEntry at {self.long_ma}{self.ma_type.upper()} bottom (buy more):')
-                            print(f'Date: {date.strftime("%Y-%m-%d")}')
-                            print(f'Price: ${price:.2f}')
-                            print(f'Shares: {shares}')
-                            print(f'Investment amount: ${available_capital:.2f}')
-                            print(f'Total position: {self.current_position} shares')
-                            available_capital = 0
-                            print(f'Remaining available capital: ${available_capital:.2f}')
-                    else:
-                        print(f'\n{self.long_ma}{self.ma_type.upper()} bottom detected but no available capital:')
-                        print(f'Date: {date.strftime("%Y-%m-%d")}')
-                        print(f'Current position: {self.current_position} shares')
+                # Legacy mode trade execution
+                weekly_exit_fired = False
 
-                # Entry when background changes to white (new condition)
-                elif self.use_background_color_signals and self.current_position == 0 and i > 0:
-                    prev_trend = self.long_ma_trend.iloc[i - 1]
-                    prev_short_ma = self.short_ma_line.iloc[i - 1]
-                    prev_long_ma = self.long_ma_line.iloc[i - 1]
-                    prev_condition = prev_trend == -1 and prev_short_ma < prev_long_ma
-                    current_trend = self.long_ma_trend.iloc[i]
-                    current_short_ma = self.short_ma_line.iloc[i]
-                    current_long_ma = self.long_ma_line.iloc[i]
-                    current_condition = not (current_trend == -1 and current_short_ma < current_long_ma)
-                    if prev_condition and current_condition and current_long_ma >= self.background_exit_threshold:
-                        if available_capital > 0:
-                            shares = self._calculate_shares(available_capital, price)
-                            if shares > 0:
-                                self._execute_entry(date, price, shares, reason='background_color_change')
-                                self.highest_price = price
-                                print('\nEntry at background color change (pink to white):')
-                                print(f'Date: {date.strftime("%Y-%m-%d")}')
-                                print(f'Price: ${price:.2f}')
-                                print(f'Shares: {shares}')
-                                print(f'Investment amount: ${available_capital:.2f}')
-                                print(f'Total position: {self.current_position} shares')
-                                available_capital = 0
+                # Process pending weekly trailing exit (next-bar-open execution)
+                if _pending_weekly_exit and self.current_position > 0:
+                    exit_price = (
+                        self.price_data['adjusted_open'].iloc[i]
+                        if 'adjusted_open' in self.price_data.columns
+                        else price
+                    )
+                    self._execute_exit(date, exit_price, reason='weekly trailing', force_full_exit=True)
+                    _pending_weekly_exit = False
+                    weekly_exit_fired = True
 
-                # Exit at peak
-                elif date in self.peaks and self.current_position > 0:
-                    print(f'\nExit at {self.long_ma}{self.ma_type.upper()} peak:')
-                    print(f'Date: {date.strftime("%Y-%m-%d")}')
-                    print(f'Price: ${price:.2f}')
-                    print(f'Shares: {self.current_position}')
-                    proceeds = self.current_position * price * (1 - self.slippage) * (1 - self.commission)
-                    print(f'Proceeds (after fees and slippage): ${proceeds:.2f}')
-                    self._execute_exit(date, price, reason='peak exit')
-                    available_capital = self.current_capital
-                    print(f'Available capital: ${available_capital:.2f}')
+                if not weekly_exit_fired:
+                    self._execute_legacy_trades(i, date, price)
 
-                # Exit at the moment background changes to pink (new condition)
-                elif self.use_background_color_signals and self.current_position > 0 and i > 0:
-                    prev_trend = self.long_ma_trend.iloc[i - 1]
-                    prev_short_ma = self.short_ma_line.iloc[i - 1]
-                    prev_long_ma = self.long_ma_line.iloc[i - 1]
-                    prev_condition = not (prev_trend == -1 and prev_short_ma < prev_long_ma)
-                    current_trend = self.long_ma_trend.iloc[i]
-                    current_short_ma = self.short_ma_line.iloc[i]
-                    current_long_ma = self.long_ma_line.iloc[i]
-                    current_condition = current_trend == -1 and current_short_ma < current_long_ma
-                    if prev_condition and current_condition and current_long_ma >= self.background_exit_threshold:
-                        print('\nExit at background color change (trend change):')
-                        print(f'Date: {date.strftime("%Y-%m-%d")}')
-                        print(f'Price: ${price:.2f}')
-                        print(f'Shares: {self.current_position}')
-                        proceeds = self.current_position * price * (1 - self.slippage) * (1 - self.commission)
-                        print(f'Proceeds (after fees and slippage): ${proceeds:.2f}')
-                        self._execute_exit(date, price, reason='background color change')
-                        available_capital = self.current_capital
-                        print(f'Available capital: ${available_capital:.2f}')
-
-                # Stop loss logic
-                elif self.current_position > 0 and self.entry_prices:
-                    latest_entry_price = self.entry_prices[-1]
-                    if self.highest_price is None or price > self.highest_price:
-                        self.highest_price = price
-                    if self.use_trailing_stop and self.highest_price is not None:
-                        stop_loss_price = self.highest_price * (1 - self.trailing_stop_pct)
-                    else:
-                        stop_loss_price = latest_entry_price * (1 - self.stop_loss_pct)
-                    if price <= stop_loss_price:
-                        print('\nStop loss triggered:')
-                        print(f'Date: {date.strftime("%Y-%m-%d")}')
-                        print(f'Entry price: ${latest_entry_price:.2f}')
-                        print(f'Current price: ${price:.2f}')
-                        print(f'Stop loss price: ${stop_loss_price:.2f}')
-                        if self.use_trailing_stop:
-                            print(f'Highest price: ${self.highest_price:.2f}')
-                            print(f'Trailing stop percentage: {self.trailing_stop_pct:.1%}')
-                        print(f'Shares: {self.current_position}')
-                        proceeds = self.current_position * price * (1 - self.slippage) * (1 - self.commission)
-                        print(f'Proceeds (after fees and slippage): ${proceeds:.2f}')
-                        self._execute_exit(date, price, reason='stop loss')
-                        available_capital = self.current_capital
-                        print(f'Available capital: ${available_capital:.2f}')
+                # Weekly trailing check at week-end (sets pending for next bar)
+                if (
+                    self.enable_weekly_trailing
+                    and self.current_position > 0
+                    and not _pending_weekly_exit
+                    and self.open_positions
+                ):
+                    if is_week_end(self.price_data.index, i):
+                        earliest_entry = min(pos['entry_date'] for pos in self.open_positions)
+                        if check_weekly_trailing_stop(
+                            current_close=price,
+                            weekly_df=weekly_df,
+                            entry_date=earliest_entry,
+                            current_date=date,
+                            trailing_type=self.weekly_trailing_type,
+                            ema_period=self.weekly_ema_period,
+                            nweek_low_period=self.weekly_nweek_low_period,
+                            transition_weeks=self.weekly_transition_weeks,
+                        ):
+                            _pending_weekly_exit = True
 
             # Update equity curve
             self.equity_curve.append({'date': date, 'equity': self.current_capital + (self.current_position * price)})
+            if self.debug:
+                self._assert_equity_invariant(date, price)
 
         # Close any open positions at backtest end
         if self.current_position > 0:
             final_date = self.price_data.index[-1]
             final_price = self.price_data['adjusted_close'].iloc[-1]
             self._execute_exit(final_date, final_price, reason='backtest_end')
+            # Update final equity to reflect slippage/commission from forced close
+            self.equity_curve[-1] = {
+                'date': final_date,
+                'equity': self.current_capital + (self.current_position * final_price),
+            }
+            if self.debug:
+                self._assert_equity_invariant(final_date, final_price)
 
         print('\nTrade execution results:')
         print('-------------------')
@@ -1062,6 +678,453 @@ class Backtest:
                     background_change_entries += 1
 
         print(f'Background color change entries: {background_change_entries}')
+
+    def _detect_legacy_signals(self, i, date):
+        """Legacy mode signal detection (non-TV mode).
+
+        Detects short MA bottoms, long MA bottoms, and long MA peaks
+        using data up to the current bar index. Appends to self.short_ma_bottoms,
+        self.long_ma_bottoms, self.peaks. Uses self._detected_* sets for dedup.
+        """
+        current_breadth_index = self.breadth_index.iloc[: i + 1]
+        current_short_ma_line = self.short_ma_line.iloc[: i + 1]
+        current_long_ma_line = self.long_ma_line.iloc[: i + 1]
+
+        data_start_date = current_short_ma_line.index[0].strftime('%Y-%m-%d')
+        data_end_date = current_short_ma_line.index[-1].strftime('%Y-%m-%d')
+
+        # Detect short MA bottoms
+        short_ma_len_ok = self.chart_mode or len(current_short_ma_line) > self.short_ma
+        if not self.disable_short_ma_entry and short_ma_len_ok:
+            filter_threshold = 0.4 if self.chart_mode else self.threshold
+            below_threshold_short = current_short_ma_line[current_short_ma_line < filter_threshold]
+            if not below_threshold_short.empty:
+                original_indices = np.where(current_short_ma_line < filter_threshold)[0]
+                bottoms_short, _ = find_peaks(-below_threshold_short.values, prominence=0.02)
+                for bottom_idx in bottoms_short:
+                    original_idx = original_indices[bottom_idx]
+                    bottom_date = current_short_ma_line.index[original_idx]
+                    if self.chart_mode:
+                        should_signal = True
+                    elif original_idx >= 20:
+                        past_20days_min = current_breadth_index.iloc[original_idx - 20 : original_idx + 1].min()
+                        should_signal = past_20days_min <= 0.3
+                    else:
+                        should_signal = False
+                    if should_signal and bottom_date not in self._detected_short_ma_bottoms:
+                        self._detected_short_ma_bottoms.add(bottom_date)
+                        signal_date = date
+                        self.short_ma_bottoms.append(signal_date)
+                        print(
+                            f'New {self.short_ma}{self.ma_type.upper()} bottom detected at: '
+                            f'{bottom_date.strftime("%Y-%m-%d")}'
+                        )
+                        print(f'  Data period: {data_start_date} to {data_end_date}')
+                        print(f'  Signal date (trade execution): {signal_date.strftime("%Y-%m-%d")}')
+
+        # Detect long MA bottoms
+        if self.chart_mode or len(current_long_ma_line) > self.long_ma:
+            fp_kwargs = {'prominence': 0.015}
+            if self.chart_mode:
+                fp_kwargs['distance'] = 50
+            bottoms_long, _ = find_peaks(-current_long_ma_line.values, **fp_kwargs)
+            for bottom_idx in bottoms_long:
+                bottom_date = current_long_ma_line.index[bottom_idx]
+                original_idx = bottom_idx
+                if self.chart_mode:
+                    should_signal = True
+                elif original_idx >= 20:
+                    past_20days_min = current_breadth_index.iloc[original_idx - 20 : original_idx + 1].min()
+                    should_signal = past_20days_min <= 0.5
+                else:
+                    should_signal = False
+                if should_signal and bottom_date not in self._detected_long_ma_bottoms:
+                    self._detected_long_ma_bottoms.add(bottom_date)
+                    signal_date = date
+                    self.long_ma_bottoms.append(signal_date)
+                    print(
+                        f'New {self.long_ma}{self.ma_type.upper()} bottom detected at: '
+                        f'{bottom_date.strftime("%Y-%m-%d")}'
+                    )
+                    print(f'  Data period: {data_start_date} to {data_end_date}')
+                    print(f'  Signal date (trade execution): {signal_date.strftime("%Y-%m-%d")}')
+
+        # Detect long MA peaks
+        if self.chart_mode or len(current_long_ma_line) > self.long_ma:
+            fp_kwargs = {'prominence': 0.015}
+            if self.chart_mode:
+                fp_kwargs['distance'] = 50
+            peaks, _ = find_peaks(current_long_ma_line.values, **fp_kwargs)
+            for peak_idx in peaks:
+                peak_date = current_long_ma_line.index[peak_idx]
+                if self.chart_mode:
+                    should_signal = True
+                else:
+                    should_signal = current_long_ma_line.iloc[peak_idx] >= 0.5
+                if should_signal and peak_date not in self._detected_peaks:
+                    self._detected_peaks.add(peak_date)
+                    signal_date = date
+                    self.peaks.append(signal_date)
+                    print(
+                        f'New {self.long_ma}{self.ma_type.upper()} peak detected at: {peak_date.strftime("%Y-%m-%d")}'
+                    )
+                    print(f'  Data period: {data_start_date} to {data_end_date}')
+                    print(f'  Signal date (trade execution): {signal_date.strftime("%Y-%m-%d")}')
+                    print(f'  {self.long_ma}{self.ma_type.upper()} value: {current_long_ma_line.iloc[peak_idx]:.4f}')
+
+    def _execute_tv_mode_trades(self, i, date, price):
+        """TV mode trade execution logic (pine compat and same-bar execution).
+
+        Also populates signal lists for summary output.
+        """
+        # Populate signal lists for summary output
+        if date in getattr(self, '_tv_short_trough_signals', {}):
+            self.short_ma_bottoms.append(date)
+        if date in getattr(self, '_tv_long_trough_signals', {}):
+            self.long_ma_bottoms.append(date)
+        if date in getattr(self, '_tv_peak_signals', {}):
+            self.peaks.append(date)
+
+        if self.tv_pine_compat:
+            self._execute_tv_pine_compat_bar(i, date, price)
+        else:
+            self._execute_tv_same_bar(i, date, price)
+
+    def _execute_tv_pine_compat_bar(self, i, date, price):
+        """TV Pine-compatible next-bar execution model."""
+        skip_stop = False
+
+        # Phase 0: Fill pending orders from previous bar at this bar's open
+        if self._pending_exit is not None or self._pending_entry is not None:
+            fill_price = self.price_data.loc[date, 'open'] if 'open' in self.price_data.columns else price
+
+            if self._pending_exit is not None and self.current_position > 0:
+                pend_reason = self._pending_exit[0]
+                if self.debug:
+                    print(
+                        f'\n[COMPAT] Filling pending exit at {date.strftime("%Y-%m-%d")} '
+                        f'open=${fill_price:.2f}, reason={pend_reason}'
+                    )
+                self._execute_exit(date, fill_price, reason=pend_reason)
+                self._pending_exit = None
+
+            if self._pending_entry is not None:
+                pend_reason, pend_frac = self._pending_entry
+                entry_amount = self.current_capital * pend_frac
+                if entry_amount > 0:
+                    shares = self._calculate_shares(entry_amount, fill_price)
+                    if shares > 0:
+                        if self.debug:
+                            print(
+                                f'\n[COMPAT] Filling pending entry at {date.strftime("%Y-%m-%d")} '
+                                f'open=${fill_price:.2f}, reason={pend_reason}, shares={shares}'
+                            )
+                        self._execute_entry(date, fill_price, shares, reason=pend_reason)
+                        self.highest_price = fill_price
+                        skip_stop = True
+                self._pending_entry = None
+
+        # Phase 1: Stop loss
+        stop_loss_fired = False
+        if not skip_stop and self.current_position > 0 and self.entry_prices:
+            avg_entry = self._calculate_avg_entry_price()
+            if self.highest_price is None or price > self.highest_price:
+                self.highest_price = price
+            stop_loss_price = avg_entry * (1 - self.stop_loss_pct)
+
+            triggered = False
+            fill_at = price
+            if 'low' in self.price_data.columns:
+                bar_low = self.price_data.loc[date, 'low']
+                bar_open = self.price_data.loc[date, 'open']
+                if pd.notna(bar_low) and pd.notna(bar_open):
+                    if bar_low <= stop_loss_price:
+                        fill_at = min(bar_open, stop_loss_price)
+                        triggered = True
+                elif price <= stop_loss_price:
+                    triggered = True
+            elif price <= stop_loss_price:
+                triggered = True
+
+            if triggered:
+                if self.debug:
+                    print(
+                        f'\n[COMPAT] Stop loss at {date.strftime("%Y-%m-%d")}, '
+                        f'fill=${fill_at:.2f}, stop=${stop_loss_price:.2f}'
+                    )
+                self._execute_exit(date, fill_at, reason='stop loss')
+                stop_loss_fired = True
+                self._pending_entry = None
+                self._pending_exit = None
+
+        # Phase 2: Exit signal -> queue for next bar
+        if not stop_loss_fired and self.current_position > 0:
+            if self._pending_exit is None and date in self._tv_peak_signals:
+                pivot_date, pivot_val = self._tv_peak_signals[date]
+                if self.debug:
+                    print(
+                        f'\n[COMPAT] Queueing exit at peak '
+                        f'(pivot {pivot_date.strftime("%Y-%m-%d")}, val={pivot_val:.4f}), '
+                        f'bar={date.strftime("%Y-%m-%d")}'
+                    )
+                self._pending_exit = ('peak exit',)
+
+        # Phase 3: Entry signal -> queue for next bar
+        if not stop_loss_fired:
+            can_enter = (self.current_position == 0) or (self._pending_exit is not None)
+            if can_enter and self._pending_entry is None:
+                entered = False
+                if not self.disable_short_ma_entry and date in self._tv_short_trough_signals:
+                    pivot_date, pivot_val = self._tv_short_trough_signals[date]
+                    frac = 1.0 if self.no_pyramiding else 0.5
+                    if self.debug:
+                        print(
+                            f'\n[COMPAT] Queueing entry at short trough '
+                            f'(pivot {pivot_date.strftime("%Y-%m-%d")}, val={pivot_val:.4f}), '
+                            f'bar={date.strftime("%Y-%m-%d")}'
+                        )
+                    self._pending_entry = ('short_ma_bottom', frac)
+                    entered = True
+                if not entered and date in self._tv_long_trough_signals:
+                    pivot_date, pivot_val = self._tv_long_trough_signals[date]
+                    if self.debug:
+                        print(
+                            f'\n[COMPAT] Queueing entry at long trough '
+                            f'(pivot {pivot_date.strftime("%Y-%m-%d")}, val={pivot_val:.4f}), '
+                            f'bar={date.strftime("%Y-%m-%d")}'
+                        )
+                    self._pending_entry = ('long_ma_bottom', 1.0)
+
+        if self.current_position > 0 and not stop_loss_fired:
+            if self.highest_price is None or price > self.highest_price:
+                self.highest_price = price
+
+    def _execute_tv_same_bar(self, i, date, price):
+        """TV mode same-bar execution (non-pine-compat)."""
+        stop_loss_fired = False
+        exit_fired = False
+
+        # Phase 1: Stop loss
+        if self.current_position > 0 and self.entry_prices:
+            avg_entry = self._calculate_avg_entry_price()
+            if self.highest_price is None or price > self.highest_price:
+                self.highest_price = price
+            if self.use_volatility_stop:
+                reference = self.highest_price if self.vol_trailing_mode else avg_entry
+                stop_loss_price = self._compute_volatility_stop(i, reference)
+            elif self.use_trailing_stop and self.highest_price is not None:
+                stop_loss_price = self.highest_price * (1 - self.trailing_stop_pct)
+            else:
+                stop_loss_price = avg_entry * (1 - self.stop_loss_pct)
+
+            triggered = False
+            fill_at = price
+            if 'low' in self.price_data.columns:
+                bar_low = self.price_data.loc[date, 'low']
+                bar_open = self.price_data.loc[date, 'open']
+                if pd.notna(bar_low) and pd.notna(bar_open):
+                    if bar_low <= stop_loss_price:
+                        fill_at = min(bar_open, stop_loss_price)
+                        triggered = True
+                elif price <= stop_loss_price:
+                    triggered = True
+            elif price <= stop_loss_price:
+                triggered = True
+
+            if triggered:
+                print('\n[TV] Stop loss triggered:')
+                print(f'Date: {date.strftime("%Y-%m-%d")}')
+                print(f'Avg entry price: ${avg_entry:.2f}')
+                print(f'Current price: ${price:.2f}')
+                print(f'Stop loss price: ${stop_loss_price:.2f}')
+                print(f'Fill price: ${fill_at:.2f}')
+                self._execute_exit(date, fill_at, reason='stop loss')
+                stop_loss_fired = True
+
+        # Phase 2: Exit signal (peak / two-stage)
+        if not stop_loss_fired and self.current_position > 0:
+            if self.two_stage_exit:
+                if not self._half_exited and date in self._tv_peak_signals:
+                    if self._is_bullish_regime(i):
+                        print(f'\n[TV] Peak suppressed by bullish regime at {date.strftime("%Y-%m-%d")}')
+                    else:
+                        pivot_date, pivot_val = self._tv_peak_signals[date]
+                        print(
+                            f'\n[TV] Stage 1 exit at peak '
+                            f'(pivot {pivot_date.strftime("%Y-%m-%d")}, val={pivot_val:.4f}):'
+                        )
+                        print(f'Date: {date.strftime("%Y-%m-%d")}, Price: ${price:.2f}')
+                        self._execute_stage1_exit(date, price)
+                        exit_fired = True
+                elif self._half_exited and self._check_trend_break(i):
+                    print('\n[TV] Stage 2 trend break exit:')
+                    print(f'Date: {date.strftime("%Y-%m-%d")}, Price: ${price:.2f}')
+                    self._execute_exit(date, price, reason='trend break exit (stage 2)')
+                    exit_fired = True
+            else:
+                if date in self._tv_peak_signals:
+                    if self._is_bullish_regime(i):
+                        print(f'\n[TV] Peak suppressed by bullish regime at {date.strftime("%Y-%m-%d")}')
+                    else:
+                        pivot_date, pivot_val = self._tv_peak_signals[date]
+                        print(f'\n[TV] Exit at peak (pivot {pivot_date.strftime("%Y-%m-%d")}, val={pivot_val:.4f}):')
+                        print(f'Date: {date.strftime("%Y-%m-%d")}, Price: ${price:.2f}')
+                        self._execute_exit(date, price, reason='peak exit')
+                        exit_fired = True
+
+        # Phase 3: Entry signals
+        if not stop_loss_fired and not exit_fired:
+            if self.no_pyramiding and self.current_position > 0:
+                pass
+            else:
+                entered = False
+                if not self.disable_short_ma_entry and date in self._tv_short_trough_signals:
+                    pivot_date, pivot_val = self._tv_short_trough_signals[date]
+                    entry_amount = self.current_capital if self.no_pyramiding else self.current_capital / 2
+                    if entry_amount > 0:
+                        shares = self._calculate_shares(entry_amount, price)
+                        if shares > 0:
+                            self._execute_entry(date, price, shares, reason='short_ma_bottom')
+                            self.highest_price = price
+                            entered = True
+                            print(
+                                f'\n[TV] Entry at short MA trough '
+                                f'(pivot {pivot_date.strftime("%Y-%m-%d")}, val={pivot_val:.4f}):'
+                            )
+                            print(f'Date: {date.strftime("%Y-%m-%d")}, Price: ${price:.2f}, Shares: {shares}')
+
+                if not entered and date in self._tv_long_trough_signals:
+                    pivot_date, pivot_val = self._tv_long_trough_signals[date]
+                    entry_amount = self.current_capital
+                    if entry_amount > 0:
+                        shares = self._calculate_shares(entry_amount, price)
+                        if shares > 0:
+                            self._execute_entry(date, price, shares, reason='long_ma_bottom')
+                            self.highest_price = price
+                            print(
+                                f'\n[TV] Entry at long MA trough '
+                                f'(pivot {pivot_date.strftime("%Y-%m-%d")}, val={pivot_val:.4f}):'
+                            )
+                            print(f'Date: {date.strftime("%Y-%m-%d")}, Price: ${price:.2f}, Shares: {shares}')
+
+        if self.current_position > 0 and not stop_loss_fired:
+            if self.highest_price is None or price > self.highest_price:
+                self.highest_price = price
+
+    def _execute_legacy_trades(self, i, date, price):
+        """Legacy mode trade execution logic."""
+        if not self.disable_short_ma_entry and date in self.short_ma_bottoms:
+            if self.current_capital > 0:
+                entry_amount = self.current_capital / 2
+                shares = self._calculate_shares(entry_amount, price)
+                if shares > 0:
+                    self._execute_entry(date, price, shares, reason='short_ma_bottom')
+                    self.highest_price = price
+                    print(f'\nEntry at {self.short_ma}{self.ma_type.upper()} bottom (buy more):')
+                    print(f'Date: {date.strftime("%Y-%m-%d")}')
+                    print(f'Price: ${price:.2f}')
+                    print(f'Shares: {shares}')
+                    print(f'Investment amount: ${entry_amount:.2f}')
+                    print(f'Remaining available capital: ${self.current_capital:.2f}')
+                    print(f'Total position: {self.current_position} shares')
+            else:
+                print(f'\n{self.short_ma}{self.ma_type.upper()} bottom detected but no available capital:')
+                print(f'Date: {date.strftime("%Y-%m-%d")}')
+                print(f'Current position: {self.current_position} shares')
+
+        elif date in self.long_ma_bottoms:
+            if self.current_capital > 0:
+                entry_amount = self.current_capital
+                shares = self._calculate_shares(entry_amount, price)
+                if shares > 0:
+                    self._execute_entry(date, price, shares, reason='long_ma_bottom')
+                    self.highest_price = price
+                    print(f'\nEntry at {self.long_ma}{self.ma_type.upper()} bottom (buy more):')
+                    print(f'Date: {date.strftime("%Y-%m-%d")}')
+                    print(f'Price: ${price:.2f}')
+                    print(f'Shares: {shares}')
+                    print(f'Investment amount: ${entry_amount:.2f}')
+                    print(f'Total position: {self.current_position} shares')
+                    print(f'Remaining available capital: ${self.current_capital:.2f}')
+            else:
+                print(f'\n{self.long_ma}{self.ma_type.upper()} bottom detected but no available capital:')
+                print(f'Date: {date.strftime("%Y-%m-%d")}')
+                print(f'Current position: {self.current_position} shares')
+
+        elif self.use_background_color_signals and self.current_position == 0 and i > 0:
+            prev_trend = self.long_ma_trend.iloc[i - 1]
+            prev_short_ma = self.short_ma_line.iloc[i - 1]
+            prev_long_ma = self.long_ma_line.iloc[i - 1]
+            prev_condition = prev_trend == -1 and prev_short_ma < prev_long_ma
+            current_trend = self.long_ma_trend.iloc[i]
+            current_short_ma = self.short_ma_line.iloc[i]
+            current_long_ma = self.long_ma_line.iloc[i]
+            current_condition = not (current_trend == -1 and current_short_ma < current_long_ma)
+            if prev_condition and current_condition and current_long_ma >= self.background_exit_threshold:
+                if self.current_capital > 0:
+                    entry_amount = self.current_capital
+                    shares = self._calculate_shares(entry_amount, price)
+                    if shares > 0:
+                        self._execute_entry(date, price, shares, reason='background_color_change')
+                        self.highest_price = price
+                        print('\nEntry at background color change (pink to white):')
+                        print(f'Date: {date.strftime("%Y-%m-%d")}')
+                        print(f'Price: ${price:.2f}')
+                        print(f'Shares: {shares}')
+                        print(f'Investment amount: ${entry_amount:.2f}')
+                        print(f'Total position: {self.current_position} shares')
+
+        elif date in self.peaks and self.current_position > 0:
+            print(f'\nExit at {self.long_ma}{self.ma_type.upper()} peak:')
+            print(f'Date: {date.strftime("%Y-%m-%d")}')
+            print(f'Price: ${price:.2f}')
+            print(f'Shares: {self.current_position}')
+            proceeds = self.current_position * price * (1 - self.slippage) * (1 - self.commission)
+            print(f'Proceeds (after fees and slippage): ${proceeds:.2f}')
+            self._execute_exit(date, price, reason='peak exit')
+            print(f'Available capital: ${self.current_capital:.2f}')
+
+        elif self.use_background_color_signals and self.current_position > 0 and i > 0:
+            prev_trend = self.long_ma_trend.iloc[i - 1]
+            prev_short_ma = self.short_ma_line.iloc[i - 1]
+            prev_long_ma = self.long_ma_line.iloc[i - 1]
+            prev_condition = not (prev_trend == -1 and prev_short_ma < prev_long_ma)
+            current_trend = self.long_ma_trend.iloc[i]
+            current_short_ma = self.short_ma_line.iloc[i]
+            current_long_ma = self.long_ma_line.iloc[i]
+            current_condition = current_trend == -1 and current_short_ma < current_long_ma
+            if prev_condition and current_condition and current_long_ma >= self.background_exit_threshold:
+                print('\nExit at background color change (trend change):')
+                print(f'Date: {date.strftime("%Y-%m-%d")}')
+                print(f'Price: ${price:.2f}')
+                print(f'Shares: {self.current_position}')
+                proceeds = self.current_position * price * (1 - self.slippage) * (1 - self.commission)
+                print(f'Proceeds (after fees and slippage): ${proceeds:.2f}')
+                self._execute_exit(date, price, reason='background color change')
+                print(f'Available capital: ${self.current_capital:.2f}')
+
+        elif self.current_position > 0 and self.entry_prices:
+            latest_entry_price = self.entry_prices[-1]
+            if self.highest_price is None or price > self.highest_price:
+                self.highest_price = price
+            if self.use_trailing_stop and self.highest_price is not None:
+                stop_loss_price = self.highest_price * (1 - self.trailing_stop_pct)
+            else:
+                stop_loss_price = latest_entry_price * (1 - self.stop_loss_pct)
+            if price <= stop_loss_price:
+                print('\nStop loss triggered:')
+                print(f'Date: {date.strftime("%Y-%m-%d")}')
+                print(f'Entry price: ${latest_entry_price:.2f}')
+                print(f'Current price: ${price:.2f}')
+                print(f'Stop loss price: ${stop_loss_price:.2f}')
+                if self.use_trailing_stop:
+                    print(f'Highest price: ${self.highest_price:.2f}')
+                    print(f'Trailing stop percentage: {self.trailing_stop_pct:.1%}')
+                print(f'Shares: {self.current_position}')
+                proceeds = self.current_position * price * (1 - self.slippage) * (1 - self.commission)
+                print(f'Proceeds (after fees and slippage): ${proceeds:.2f}')
+                self._execute_exit(date, price, reason='stop loss')
+                print(f'Available capital: ${self.current_capital:.2f}')
 
     def _calculate_shares(self, amount, price):
         """Calculate the number of shares that can be purchased"""
@@ -1173,14 +1236,14 @@ class Backtest:
             }
         )
 
-    def _execute_exit(self, date, price, reason=''):
+    def _execute_exit(self, date, price, reason='', force_full_exit=False):
         """Execute exit"""
         exit_price = price * (1 - self.slippage)
         commission = exit_price * self.current_position * self.commission
         total_proceeds = exit_price * self.current_position - commission
 
         # For partial exit, sell only half of the position
-        if self.partial_exit and self.current_position > 1:
+        if self.partial_exit and not force_full_exit and self.current_position > 1:
             shares_to_sell = self.current_position // 2
             self.current_position -= shares_to_sell
             commission = exit_price * shares_to_sell * self.commission
@@ -1226,6 +1289,13 @@ class Backtest:
             self.entry_prices = []  # Clear entry price list
             self.highest_price = None  # Reset highest price
             self._reset_exit_state()  # Reset two-stage exit state
+
+    def _assert_equity_invariant(self, date, price):
+        """Verify equity = cash + position_value (debug mode only)."""
+        expected = self.current_capital + (self.current_position * price)
+        actual = self.equity_curve[-1]['equity']
+        if abs(expected - actual) > 0.01:
+            raise AssertionError(f'Equity mismatch at {date}: expected={expected:.2f}, actual={actual:.2f}')
 
     def calculate_performance(self):
         """Calculate performance"""
@@ -2078,7 +2148,12 @@ def main():
     )
 
     # TradingView alignment options
-    parser.add_argument('--tv_mode', action='store_true', help='Enable TradingView-aligned signal detection')
+    parser.add_argument(
+        '--tv_mode',
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help='TradingView-aligned signal detection (default: on)',
+    )
     parser.add_argument('--tv_pine_compat', action='store_true', help='Enable Pine-compatible TV backtest mode')
     parser.add_argument(
         '--tv_breadth_csv',
@@ -2109,7 +2184,12 @@ def main():
         '--trough_level_long', type=float, default=0.40, help='Long MA trough entry level (default: 0.40)'
     )
     parser.add_argument('--trough_level_short', type=float, default=0.20, help='Short MA trough level (default: 0.20)')
-    parser.add_argument('--no_pyramiding', action='store_true', help='Single position, 100%% equity (no pyramiding)')
+    parser.add_argument(
+        '--no_pyramiding',
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help='Single position, 100%% equity (default: on)',
+    )
 
     # Enhanced TV mode options
     parser.add_argument(
@@ -2148,6 +2228,28 @@ def main():
         action='store_true',
         help='Use chart-style peak/trough detection (find_peaks with distance=50 for long MA, '
         'no level filters). Walk-forward: signal dates may differ from chart peak/trough positions',
+    )
+
+    # Weekly trailing stop options
+    parser.add_argument(
+        '--enable_weekly_trailing',
+        action='store_true',
+        help='Enable weekly trailing stop exit (auto-disables tv_mode)',
+    )
+    parser.add_argument(
+        '--weekly_trailing_type',
+        type=str,
+        default='weekly_ema',
+        choices=['weekly_ema', 'weekly_nweek_low'],
+        help='Weekly trailing type (default: weekly_ema)',
+    )
+    parser.add_argument('--weekly_ema_period', type=int, default=10, help='Weekly EMA period (default: 10)')
+    parser.add_argument('--weekly_nweek_low_period', type=int, default=4, help='N-week low period (default: 4)')
+    parser.add_argument(
+        '--weekly_transition_weeks',
+        type=int,
+        default=3,
+        help='Transition weeks before weekly trailing activates (default: 3)',
     )
 
     args = parser.parse_args()
@@ -2206,6 +2308,11 @@ def main():
         bullish_regime_suppression=args.bullish_regime_suppression,
         bullish_breadth_threshold=args.bullish_breadth_threshold,
         chart_mode=args.chart_mode,
+        enable_weekly_trailing=args.enable_weekly_trailing,
+        weekly_trailing_type=args.weekly_trailing_type,
+        weekly_ema_period=args.weekly_ema_period,
+        weekly_nweek_low_period=args.weekly_nweek_low_period,
+        weekly_transition_weeks=args.weekly_transition_weeks,
     )
 
     backtest.run()
