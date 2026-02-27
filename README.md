@@ -7,8 +7,8 @@ A tool for analyzing and visualizing the market breadth of S&P500 stocks.
 ## Features
 
 - Fetch price data for all S&P500 stocks
-- Calculate breadth indicators based on 200-day moving average
-- Visualize breadth indicators and S&P500 price movements
+- Calculate breadth indicators based on 200-day and 50-day moving averages
+- Visualize breadth indicators and S&P500 price movements (2-panel or 3-panel layout)
 - Identify trend reversal points through peak detection
 - Save and reuse historical data without requiring an API key
 - Backtest trading strategies based on market breadth signals
@@ -84,6 +84,9 @@ python market_breadth.py --use_saved_data
 With additional options:
 ```bash
 python market_breadth.py --start_date 2020-01-01 --short_ma 20 --use_saved_data
+
+# Include 50-day MA breadth as a third panel
+python market_breadth.py --use_saved_data --include_50ma
 ```
 
 ### Backtesting
@@ -165,6 +168,7 @@ print(df.groupby('entry_reason')['pnl_dollar'].agg(['count', 'mean', 'sum']))
   - Default: 10 years ago from today
 - `--short_ma`: Short-term moving average period (10 or 20)
 - `--use_saved_data`: Use previously saved data instead of fetching from FMP
+- `--include_50ma`: Add 50-day MA breadth panel (third panel in chart, additional columns in CSV)
 
 #### Backtesting
 - `--start_date`: Start date for backtesting (YYYY-MM-DD)

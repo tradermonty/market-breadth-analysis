@@ -7,8 +7,8 @@ S&P500銘柄のマーケットブレッドを分析・可視化するツール�
 ## 機能
 
 - S&P500全銘柄の価格データ取得
-- 200日移動平均線に基づくブレッド指標の計算
-- ブレッド指標とS&P500の価格変動の可視化
+- 200日・50日移動平均線に基づくブレッド指標の計算
+- ブレッド指標とS&P500の価格変動の可視化（2パネル/3パネルレイアウト）
 - ピーク検出によるトレンド転換点の特定
 - APIキー不要で履歴データの保存と再利用
 - マーケットブレッドシグナルに基づく取引戦略のバックテスト
@@ -84,6 +84,9 @@ python market_breadth.py --use_saved_data
 追加オプション付き:
 ```bash
 python market_breadth.py --start_date 2020-01-01 --short_ma 20 --use_saved_data
+
+# 50日MAブレッドを3つ目のパネルとして追加
+python market_breadth.py --use_saved_data --include_50ma
 ```
 
 ### バックテスト
@@ -145,6 +148,7 @@ elif result["status"] == "triggered":
   - デフォルト: 現在から10年前
 - `--short_ma`: 短期移動平均期間（10または20）
 - `--use_saved_data`: FMPから取得せずに保存済みデータを使用
+- `--include_50ma`: 50日MAブレッドパネルを追加（チャート3パネル化、CSVに追加列）
 
 #### バックテスト
 - `--start_date`: バックテスト開始日（YYYY-MM-DD）
