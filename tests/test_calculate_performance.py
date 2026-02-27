@@ -190,7 +190,11 @@ class TestCalculatePerformance(unittest.TestCase):
         # Also check that the CSV covers the required date range to avoid
         # falling through to the API fetch path.
         check_df = pd.read_csv(data_file, index_col=0, parse_dates=True)
-        if check_df.empty or check_df.index.max() < pd.Timestamp('2023-06-30'):
+        if (
+            check_df.empty
+            or check_df.index.min() > pd.Timestamp('2021-01-01')
+            or check_df.index.max() < pd.Timestamp('2023-06-30')
+        ):
             self.skipTest('Saved data does not cover the required date range')
 
         bt = _make_backtest(

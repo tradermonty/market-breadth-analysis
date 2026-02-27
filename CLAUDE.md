@@ -113,7 +113,7 @@ python backtest/backtest.py --debug --symbol SSO --use_saved_data
 - `--use_trailing_stop`: Enable trailing stop instead of fixed stop
 - `--ma_type`: 'ema' or 'sma' for moving average calculation
 - `--tv_mode / --no-tv_mode`: TradingView-aligned signal detection (default: on)
-- `--no_pyramiding / --no-no_pyramiding`: Single position, 100% equity (default: on)
+- `--pyramiding / --no-pyramiding`: Allow multiple entries; default off (single position, 100% equity)
 - `--tv_pine_compat`: Enable Pine-compatible TV backtest mode (strict defaults)
 - `--tv_breadth_csv`: Path to breadth CSV (e.g., S5TH export with date/close columns)
 - `--tv_price_csv`: Path to TV-exported price CSV (date,open,high,low,close)
