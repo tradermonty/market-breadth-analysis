@@ -7,10 +7,8 @@ import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
-from scipy.signal import find_peaks
 from tqdm import tqdm
 
 # Add parent directory to path to import market_breadth
@@ -50,26 +48,29 @@ reports_dir.mkdir(exist_ok=True)
 class MarketBreadthTrader:
     def __init__(
         self,
-        short_ma=8,
+        short_ma=5,
         long_ma=200,
         initial_capital=50000,
-        slippage=0.001,
-        commission=0.001,
+        slippage=0.0005,
+        commission=0.0001,
         use_saved_data=False,
         debug=False,
-        threshold=0.5,
         ma_type='ema',
         symbol='SSO',
-        stop_loss_pct=0.10,
+        stop_loss_pct=0.08,
         disable_short_ma_entry=False,
-        use_trailing_stop=False,
-        trailing_stop_pct=0.2,
-        background_exit_threshold=0.5,
-        use_background_color_signals=False,
-        partial_exit=False,
         closing_time_minutes=20,
         testmode=False,
         test_date=None,
+        # TV mode pivot detection parameters (aligned with backtest)
+        pivot_len_long=20,
+        pivot_len_short=10,
+        prom_thresh_long=0.005,
+        prom_thresh_short=0.03,
+        peak_level=0.70,
+        trough_level_long=0.40,
+        trough_level_short=0.20,
+        no_pyramiding=True,
     ):
         self.symbol = symbol
         self.short_ma = short_ma
@@ -79,19 +80,23 @@ class MarketBreadthTrader:
         self.commission = commission
         self.use_saved_data = use_saved_data
         self.debug = debug
-        self.threshold = threshold
         self.ma_type = ma_type.lower()  # 'ema' or 'sma'
         self.stop_loss_pct = stop_loss_pct
         self.disable_short_ma_entry = disable_short_ma_entry
-        self.use_trailing_stop = use_trailing_stop
-        self.trailing_stop_pct = trailing_stop_pct
-        self.background_exit_threshold = background_exit_threshold
-        self.use_background_color_signals = use_background_color_signals
-        self.partial_exit = partial_exit
         self.closing_time_minutes = closing_time_minutes
         self.testmode = testmode
         self.test_date = test_date
         self.test_dt = None  # Variable to hold current time in test mode
+
+        # TV mode pivot detection parameters
+        self.pivot_len_long = pivot_len_long
+        self.pivot_len_short = pivot_len_short
+        self.prom_thresh_long = prom_thresh_long
+        self.prom_thresh_short = prom_thresh_short
+        self.peak_level = peak_level
+        self.trough_level_long = trough_level_long
+        self.trough_level_short = trough_level_short
+        self.no_pyramiding = no_pyramiding
 
         # Initialize Alpaca API
         self.api = self._initialize_alpaca()
@@ -99,13 +104,16 @@ class MarketBreadthTrader:
         # Initialize variables
         self.current_position = 0
         self.entry_prices = []
-        self.stop_loss_prices = []
-        self.highest_price = None
 
         # Initialize signal-related variables
         self.short_ma_bottoms = []
         self.long_ma_bottoms = []
         self.peaks = []
+
+        # TV mode signal dictionaries (populated by _detect_signals)
+        self._tv_peak_signals = {}
+        self._tv_long_trough_signals = {}
+        self._tv_short_trough_signals = {}
 
         logger.info(f'MarketBreadthTrader initialized with symbol: {self.symbol}')
         if self.testmode:
@@ -170,6 +178,32 @@ class MarketBreadthTrader:
         except Exception as e:
             logger.info(f'No position found for {self.symbol}: {e}')
             return 0
+
+    def _sync_position_from_broker(self):
+        """Sync position and entry prices from broker.
+
+        Recovers entry_prices from broker's avg_entry_price when local state
+        is lost (e.g. after process restart).
+
+        Raises on transient API/network errors to prevent accidental trades.
+        """
+        try:
+            position = self.api.get_position(self.symbol)
+            self.current_position = int(position.qty)
+            if self.current_position > 0 and not self.entry_prices:
+                avg_price = float(position.avg_entry_price)
+                self.entry_prices = [avg_price]
+                logger.info(f'Recovered entry price from broker: ${avg_price:.2f}')
+        except Exception as e:
+            # Alpaca returns 404 with "position does not exist" when no position
+            err_str = str(e)
+            if 'position does not exist' in err_str.lower() or '404' in err_str:
+                logger.info(f'No position found for {self.symbol}')
+                self.current_position = 0
+                self.entry_prices = []
+            else:
+                logger.error(f'API error syncing position for {self.symbol}: {e}')
+                raise
 
     def get_current_price(self):
         """Get current price"""
@@ -508,249 +542,61 @@ class MarketBreadthTrader:
         return pd.DataFrame()
 
     def _detect_signals(self):
-        """Detect signals"""
-        try:
-            # Debug: Print start of signal detection
-            logger.info('Debug: Starting signal detection')
-            logger.info(f'  Current date: {datetime.now().strftime("%Y-%m-%d")}')
+        """Detect signals using TV mode pivot detection (aligned with backtest)."""
+        from backtest.backtest import detect_pivot_high, detect_pivot_low
 
-            # Initialize signal detection variables
-            self.short_ma_bottoms = []
-            self.long_ma_bottoms = []
-            self.peaks = []
+        logger.info('Starting TV mode signal detection')
 
-            # Variables to record detected signals
-            detected_short_ma_bottoms = set()
-            detected_long_ma_bottoms = set()
-            detected_peaks = set()
+        # Initialize signal lists
+        self.short_ma_bottoms = []
+        self.long_ma_bottoms = []
+        self.peaks = []
 
-            # Debug: Print initialization status
-            logger.info('Debug: Signal detection initialization')
-            logger.info(f'  Initial detected_short_ma_bottoms: {detected_short_ma_bottoms}')
-            logger.info(f'  Initial short_ma_bottoms: {self.short_ma_bottoms}')
-            logger.info(f'  Initial detected_short_ma_bottoms type: {type(detected_short_ma_bottoms)}')
-            logger.info(f'  Initial detected_short_ma_bottoms size: {len(detected_short_ma_bottoms)}')
+        # Peak signals on long MA (exit signals)
+        raw_peaks = detect_pivot_high(self.long_ma_line, self.pivot_len_long, self.prom_thresh_long, self.peak_level)
+        self._tv_peak_signals = {}
+        for confirm_date, pivot_date, val in raw_peaks:
+            if confirm_date not in self._tv_peak_signals:
+                self._tv_peak_signals[confirm_date] = (pivot_date, val)
 
-            # Get today's date
-            if self.testmode:
-                today = pd.Timestamp(self.test_date)
-                logger.info(f'Test mode: Using test date {today.strftime("%Y-%m-%d")} as current date')
-            else:
-                today = pd.Timestamp(datetime.now().strftime('%Y-%m-%d'))
+        # Long MA trough signals (entry signals)
+        raw_long_troughs = detect_pivot_low(self.long_ma_line, self.pivot_len_long, self.prom_thresh_long)
+        self._tv_long_trough_signals = {}
+        for confirm_date, pivot_date, val in raw_long_troughs:
+            if val < self.trough_level_long:
+                if confirm_date not in self._tv_long_trough_signals:
+                    self._tv_long_trough_signals[confirm_date] = (pivot_date, val)
 
-            # Calculate start date for signal detection (2 years before today)
-            start_date = today - pd.DateOffset(years=2)
+        # Short MA trough signals (entry signals)
+        if not self.disable_short_ma_entry:
+            raw_short_troughs = detect_pivot_low(self.short_ma_line, self.pivot_len_short, self.prom_thresh_short)
+            self._tv_short_trough_signals = {}
+            for confirm_date, pivot_date, val in raw_short_troughs:
+                confirm_loc = self.breadth_index.index.get_loc(confirm_date)
+                start_loc = max(0, confirm_loc - 19)
+                recent_min = self.breadth_index.iloc[start_loc : confirm_loc + 1].min()
+                if recent_min <= self.trough_level_short:
+                    if confirm_date not in self._tv_short_trough_signals:
+                        self._tv_short_trough_signals[confirm_date] = (pivot_date, val)
+        else:
+            self._tv_short_trough_signals = {}
 
-            # Filter data for signal detection period
-            mask = (self.short_ma_line.index >= start_date) & (self.short_ma_line.index <= today)
-            filtered_short_ma = self.short_ma_line.loc[mask]
-            filtered_long_ma = self.long_ma_line.loc[mask]
+        # Populate legacy lists for check_signals_and_trade() compatibility
+        self.short_ma_bottoms = list(self._tv_short_trough_signals.keys())
+        self.long_ma_bottoms = list(self._tv_long_trough_signals.keys())
+        self.peaks = list(self._tv_peak_signals.keys())
 
-            # Check data quality
-            if filtered_short_ma.isnull().sum() > 0 or filtered_long_ma.isnull().sum() > 0:
-                logger.error('Moving average data contains missing values')
-                raise ValueError('Moving average data contains missing values')
-
-            # Debug: Print breadth_index data details
-            logger.info('Debug: breadth_index data details')
-            logger.info(f'Total data points: {len(self.breadth_index)}')
-            logger.info(
-                f'First 5 dates: {[d.strftime("%Y-%m-%d") if not pd.isna(d) else "NaT" for d in self.breadth_index.index[:5]]}'
-            )
-            logger.info(
-                f'Last 5 dates: {[d.strftime("%Y-%m-%d") if not pd.isna(d) else "NaT" for d in self.breadth_index.index[-5:]]}'
-            )
-            logger.info(
-                f'Date range: {self.breadth_index.index[0].strftime("%Y-%m-%d") if not pd.isna(self.breadth_index.index[0]) else "NaT"} to {self.breadth_index.index[-1].strftime("%Y-%m-%d") if not pd.isna(self.breadth_index.index[-1]) else "NaT"}'
-            )
-
-            # Process data sequentially from past to present
-            for i in range(len(filtered_short_ma)):
-                try:
-                    current_date = filtered_short_ma.index[i]
-                    if pd.isna(current_date):
-                        logger.warning(f'Found NaT date at index {i}, skipping...')
-                        continue
-
-                    current_data = filtered_short_ma.iloc[: i + 1]
-
-                    # Detect 8MA bottoms (only if disable_short_ma_entry is False)
-                    if not self.disable_short_ma_entry and len(current_data) > self.short_ma:
-                        # Extract data points below threshold
-                        below_threshold_short = current_data[current_data < self.threshold]
-
-                        if not below_threshold_short.empty:
-                            # Keep original indices
-                            original_indices = np.where(current_data < self.threshold)[0]
-                            bottoms_short, _ = find_peaks(-below_threshold_short.values, prominence=0.02)
-
-                            # Process detected bottoms
-                            for bottom_idx in bottoms_short:
-                                try:
-                                    # Get index position in original data
-                                    original_idx = original_indices[bottom_idx]
-                                    bottom_date = current_data.index[original_idx]
-
-                                    if pd.isna(bottom_date):
-                                        logger.warning(f'Found NaT bottom date at index {original_idx}, skipping...')
-                                        continue
-
-                                    # Calculate minimum Market Breadth for past 20 days
-                                    # Get the index of bottom_date in breadth_index
-                                    try:
-                                        bottom_idx_in_breadth = self.breadth_index.index.get_loc(bottom_date)
-
-                                        # Calculate start and end indices for past 20 days
-                                        start_idx = max(0, bottom_idx_in_breadth - 20)
-                                        end_idx = bottom_idx_in_breadth + 1
-
-                                        # Get past 20 days data
-                                        past_20days_data = self.breadth_index.iloc[start_idx:end_idx]
-                                        past_20days_min = past_20days_data.min()
-
-                                        # Debug: Print data for past 20 days calculation
-                                        logger.info(f'Debug: Past 20 days data for {bottom_date.strftime("%Y-%m-%d")}')
-                                        logger.info(
-                                            f'  Data range: {past_20days_data.index[0].strftime("%Y-%m-%d") if not pd.isna(past_20days_data.index[0]) else "NaT"} to {past_20days_data.index[-1].strftime("%Y-%m-%d") if not pd.isna(past_20days_data.index[-1]) else "NaT"}'
-                                        )
-                                        logger.info(f'  Data points: {len(past_20days_data)}')
-                                        logger.info(f'  Minimum value: {past_20days_min:.4f}')
-                                        logger.info(f'  Data values: {past_20days_data.values}')
-
-                                        # Debug: Print bottom detection conditions
-                                        logger.info(
-                                            f'Debug: Bottom detection conditions for {bottom_date.strftime("%Y-%m-%d")}'
-                                        )
-                                        logger.info(f'  Processing date: {current_date.strftime("%Y-%m-%d")}')
-                                        logger.info(f'  Bottom value: {current_data.iloc[original_idx]:.4f}')
-                                        logger.info(f'  Threshold: {self.threshold:.4f}')
-                                        logger.info(f'  Past 20 days minimum: {past_20days_min:.4f}')
-                                        logger.info(
-                                            f'  Condition 1 (bottom value < threshold): {current_data.iloc[original_idx] < self.threshold}'
-                                        )
-                                        logger.info(
-                                            f'  Condition 2 (past 20 days min <= 0.3): {past_20days_min <= 0.3}'
-                                        )
-                                        logger.info(f'  Already detected: {bottom_date in detected_short_ma_bottoms}')
-                                        logger.info(f'  Current detected_short_ma_bottoms: {detected_short_ma_bottoms}')
-
-                                        if past_20days_min <= 0.3:  # Check actual value condition
-                                            # Add only if bottom not already detected
-                                            if bottom_date not in detected_short_ma_bottoms:
-                                                detected_short_ma_bottoms.add(bottom_date)
-                                                # Use the date when the bottom was first detected as signal date
-                                                signal_date = current_date
-                                                self.short_ma_bottoms.append(signal_date)
-                                                logger.info(
-                                                    f'New {self.short_ma}{self.ma_type.upper()} bottom detected at: {bottom_date.strftime("%Y-%m-%d")}'
-                                                )
-                                                logger.info(f'  Processing date: {current_date.strftime("%Y-%m-%d")}')
-                                                logger.info(f'  Signal date: {signal_date.strftime("%Y-%m-%d")}')
-                                                logger.info(f'  Bottom value: {current_data.iloc[original_idx]:.4f}')
-                                                logger.info(f'  Past 20 days minimum: {past_20days_min:.4f}')
-                                            else:
-                                                logger.info(
-                                                    f'Bottom at {bottom_date.strftime("%Y-%m-%d")} already detected, skipping'
-                                                )
-                                                logger.info(f'  Processing date: {current_date.strftime("%Y-%m-%d")}')
-                                        else:
-                                            logger.info(
-                                                f'Bottom at {bottom_date.strftime("%Y-%m-%d")} does not meet past 20 days minimum condition'
-                                            )
-                                            logger.info(f'  Processing date: {current_date.strftime("%Y-%m-%d")}')
-                                    except KeyError:
-                                        logger.warning(
-                                            f'Date {bottom_date.strftime("%Y-%m-%d")} not found in breadth_index'
-                                        )
-                                        continue
-                                except Exception as e:
-                                    logger.error(f'Error processing bottom at index {bottom_idx}: {e!s}')
-                                    continue
-
-                    # Detect 200MA bottoms
-                    current_long_data = filtered_long_ma.iloc[: i + 1]
-                    if len(current_long_data) > self.long_ma:
-                        bottoms_long, _ = find_peaks(-current_long_data.values, prominence=0.015)
-
-                        # Process detected bottoms
-                        for bottom_idx in bottoms_long:
-                            try:
-                                bottom_date = current_long_data.index[bottom_idx]
-
-                                if pd.isna(bottom_date):
-                                    logger.warning(f'Found NaT bottom date at index {bottom_idx}, skipping...')
-                                    continue
-
-                                # Get index position in original data
-                                original_idx = bottom_idx
-
-                                # Calculate minimum Market Breadth for past 20 days
-                                if original_idx >= 20:  # Only check if we have 20 days of past data
-                                    past_20days_min = self.breadth_index.iloc[
-                                        original_idx - 20 : original_idx + 1
-                                    ].min()
-                                    if past_20days_min <= 0.5:  # Check actual value condition
-                                        # Add only if bottom not already detected
-                                        if bottom_date not in detected_long_ma_bottoms:
-                                            detected_long_ma_bottoms.add(bottom_date)
-                                            # Use the date when the bottom was first detected as signal date
-                                            signal_date = current_date
-                                            self.long_ma_bottoms.append(signal_date)
-                                            logger.info(
-                                                f'New {self.long_ma}{self.ma_type.upper()} bottom detected at: {bottom_date.strftime("%Y-%m-%d")}'
-                                            )
-                                            logger.info(f'  Signal date: {signal_date.strftime("%Y-%m-%d")}')
-                                            logger.info(f'  Bottom value: {current_long_data.iloc[original_idx]:.4f}')
-                                            logger.info(f'  Past 20 days minimum: {past_20days_min:.4f}')
-                            except Exception as e:
-                                logger.error(f'Error processing long MA bottom at index {bottom_idx}: {e!s}')
-                                continue
-
-                    # Detect 200MA peaks
-                    if len(current_long_data) > self.long_ma:
-                        peaks, _ = find_peaks(current_long_data.values, prominence=0.015)
-
-                        # Process detected peaks
-                        for peak_idx in peaks:
-                            try:
-                                peak_date = current_long_data.index[peak_idx]
-
-                                if pd.isna(peak_date):
-                                    logger.warning(f'Found NaT peak date at index {peak_idx}, skipping...')
-                                    continue
-
-                                # Verify 200MA value is above 0.5
-                                if current_long_data.iloc[peak_idx] >= 0.5:
-                                    # Add only if peak not already detected
-                                    if peak_date not in detected_peaks:
-                                        detected_peaks.add(peak_date)
-                                        # Use the date when the peak was first detected as signal date
-                                        signal_date = current_date
-                                        self.peaks.append(signal_date)
-                                        logger.info(
-                                            f'New {self.long_ma}{self.ma_type.upper()} peak detected at: {peak_date.strftime("%Y-%m-%d")}'
-                                        )
-                                        logger.info(f'  Signal date: {signal_date.strftime("%Y-%m-%d")}')
-                                        logger.info(f'  Peak value: {current_long_data.iloc[peak_idx]:.4f}')
-                            except Exception as e:
-                                logger.error(f'Error processing peak at index {peak_idx}: {e!s}')
-                                continue
-                except Exception as e:
-                    logger.error(f'Error processing data at index {i}: {e!s}')
-                    continue
-
-            logger.info('Signal detection completed successfully')
-
-        except Exception as e:
-            logger.error(f'Error detecting signals: {e!s}')
-            raise
+        logger.info('TV signal detection completed:')
+        logger.info(f'  Peak signals (exit): {len(self._tv_peak_signals)}')
+        logger.info(f'  Long MA trough signals (entry): {len(self._tv_long_trough_signals)}')
+        logger.info(f'  Short MA trough signals (entry): {len(self._tv_short_trough_signals)}')
 
     def check_signals_and_trade(self):
         """Check signals and execute trades"""
         logger.info('Checking signals and executing trades')
 
-        # Get current position
-        self.current_position = self.get_current_position()
+        # Sync position and entry prices from broker
+        self._sync_position_from_broker()
         logger.info(f'Current position: {self.current_position} shares')
 
         # Get current price
@@ -760,6 +606,24 @@ class MarketBreadthTrader:
             return
 
         logger.info(f'Current price: ${current_price:.2f}')
+
+        # --- Stop loss check (before signal-based trading) ---
+        if self.current_position > 0 and self.entry_prices:
+            avg_entry = sum(self.entry_prices) / len(self.entry_prices)
+            stop_loss_price = avg_entry * (1 - self.stop_loss_pct)
+
+            logger.info(f'Stop loss check: avg_entry=${avg_entry:.2f}, stop=${stop_loss_price:.2f}')
+
+            if current_price <= stop_loss_price:
+                logger.info(f'Stop loss triggered: price ${current_price:.2f} <= stop ${stop_loss_price:.2f}')
+                order = self.execute_sell(self.current_position, reason='stop loss')
+                if order:
+                    logger.info(f'Stop loss exit: {self.current_position} shares at ${current_price:.2f}')
+                    self.current_position = 0
+                    self.entry_prices = []
+                else:
+                    logger.error('Failed to execute stop loss exit')
+                return  # Stop loss takes priority, skip other signals
 
         # Current date
         if self.testmode:
@@ -779,120 +643,92 @@ class MarketBreadthTrader:
         logger.info(f'  Short MA bottom signal: {"Detected" if has_short_ma_bottom else "Not detected"}')
         logger.info(f'  Long MA bottom signal: {"Detected" if has_long_ma_bottom else "Not detected"}')
         logger.info(f'  Peak signal: {"Detected" if has_peak else "Not detected"}')
-        logger.info(f'  Short MA bottoms: {[d.strftime("%Y-%m-%d") for d in self.short_ma_bottoms]}')
-        logger.info(f'  Long MA bottoms: {[d.strftime("%Y-%m-%d") for d in self.long_ma_bottoms]}')
-        logger.info(f'  Peaks: {[d.strftime("%Y-%m-%d") for d in self.peaks]}')
 
         # Check if current date matches signal date
-        if has_short_ma_bottom:
-            # Entry at 8MA bottom
-            logger.info(f'Short MA bottom signal detected for {current_date.strftime("%Y-%m-%d")}')
+        if has_peak and self.current_position > 0:
+            # Exit at 200MA peak (check exit before entry)
+            logger.info(f'Long MA peak signal detected for {current_date.strftime("%Y-%m-%d")}')
 
-            # Enter if no position
-            if self.current_position == 0:
-                # Use half of available capital
-                account = self.api.get_account()
-                available_capital = float(account.buying_power)
-                entry_amount = available_capital / 2
-
-                # Calculate number of shares to buy
-                shares = self._calculate_shares(entry_amount, current_price)
-
-                if shares > 0:
-                    # Execute entry
-                    order = self.execute_buy(shares, reason='short_ma_bottom')
-                    if order:
-                        logger.info(f'Entry executed at short MA bottom: {shares} shares at ${current_price:.2f}')
-                        # Initialize highest price
-                        self.highest_price = current_price
-                    else:
-                        logger.error('Failed to execute entry at short MA bottom')
-                else:
-                    logger.info('No shares to buy due to insufficient capital')
+            order = self.execute_sell(self.current_position, reason='peak exit')
+            if order:
+                logger.info(f'Exit executed at long MA peak: {self.current_position} shares at ${current_price:.2f}')
+                self.current_position = 0
+                self.entry_prices = []
             else:
-                logger.info(f'Already have position ({self.current_position} shares), not entering at short MA bottom')
+                logger.error('Failed to execute exit at long MA peak')
 
         elif has_long_ma_bottom:
             # Entry at 200MA bottom
             logger.info(f'Long MA bottom signal detected for {current_date.strftime("%Y-%m-%d")}')
 
-            # Enter if no position
-            if self.current_position == 0:
-                # Use all available capital
+            # Skip if already have position (no_pyramiding)
+            if self.no_pyramiding and self.current_position > 0:
+                logger.info(f'Already have position ({self.current_position} shares), no_pyramiding=True, skipping')
+            else:
+                # Use all available capital (100%)
                 account = self.api.get_account()
                 available_capital = float(account.buying_power)
 
-                # Calculate number of shares to buy
                 shares = self._calculate_shares(available_capital, current_price)
 
                 if shares > 0:
-                    # Execute entry
                     order = self.execute_buy(shares, reason='long_ma_bottom')
                     if order:
                         logger.info(f'Entry executed at long MA bottom: {shares} shares at ${current_price:.2f}')
-                        # Initialize highest price
-                        self.highest_price = current_price
+                        self.entry_prices.append(current_price)
                     else:
                         logger.error('Failed to execute entry at long MA bottom')
                 else:
                     logger.info('No shares to buy due to insufficient capital')
-            else:
-                logger.info(f'Already have position ({self.current_position} shares), not entering at long MA bottom')
 
-        elif has_peak and self.current_position > 0:
-            # Exit at 200MA peak
-            logger.info(f'Long MA peak signal detected for {current_date.strftime("%Y-%m-%d")}')
+        elif has_short_ma_bottom:
+            # Entry at short MA bottom
+            logger.info(f'Short MA bottom signal detected for {current_date.strftime("%Y-%m-%d")}')
 
-            # Execute exit
-            order = self.execute_sell(self.current_position, reason='peak exit')
-            if order:
-                logger.info(f'Exit executed at long MA peak: {self.current_position} shares at ${current_price:.2f}')
-                # Reset position
-                self.current_position = 0
-                self.entry_prices = []
-                self.stop_loss_prices = []
-                self.highest_price = None
+            # Skip if already have position (no_pyramiding)
+            if self.no_pyramiding and self.current_position > 0:
+                logger.info(f'Already have position ({self.current_position} shares), no_pyramiding=True, skipping')
             else:
-                logger.error('Failed to execute exit at long MA peak')
+                # Use all available capital (100%, aligned with backtest)
+                account = self.api.get_account()
+                available_capital = float(account.buying_power)
+
+                shares = self._calculate_shares(available_capital, current_price)
+
+                if shares > 0:
+                    order = self.execute_buy(shares, reason='short_ma_bottom')
+                    if order:
+                        logger.info(f'Entry executed at short MA bottom: {shares} shares at ${current_price:.2f}')
+                        self.entry_prices.append(current_price)
+                    else:
+                        logger.error('Failed to execute entry at short MA bottom')
+                else:
+                    logger.info('No shares to buy due to insufficient capital')
         else:
             logger.info('No trading signals detected for today')
 
         logger.info('Signal check and trade execution completed')
 
     def _calculate_shares(self, amount, price):
-        """Calculate number of shares to buy"""
-        return int(amount / (price * (1 + self.slippage)))
+        """Calculate number of shares to buy, accounting for slippage and commission."""
+        return int(amount / (price * (1 + self.slippage + self.commission)))
 
 
 def main():
     parser = argparse.ArgumentParser(description='Market Breadth Trading')
-    parser.add_argument('--short_ma', type=int, default=8, help='Short-term moving average period (default: 8)')
+    parser.add_argument('--short_ma', type=int, default=5, help='Short-term moving average period (default: 5)')
     parser.add_argument('--long_ma', type=int, default=200, help='Long-term moving average period (default: 200)')
     parser.add_argument(
         '--initial_capital', type=float, default=50000, help='Initial investment amount (default: 50000 dollars)'
     )
-    parser.add_argument('--slippage', type=float, default=0.001, help='Slippage (default: 0.1%)')
-    parser.add_argument('--commission', type=float, default=0.001, help='Transaction fee (default: 0.1%)')
+    parser.add_argument('--slippage', type=float, default=0.0005, help='Slippage (default: 0.05%)')
+    parser.add_argument('--commission', type=float, default=0.0001, help='Transaction fee (default: 0.01%)')
     parser.add_argument('--use_saved_data', action='store_true', help='Whether to use saved data')
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
-    parser.add_argument('--threshold', type=float, default=0.5, help='Threshold for bottom detection (default: 0.5)')
     parser.add_argument('--ma_type', type=str, default='ema', help='Moving average type (default: ema)')
     parser.add_argument('--symbol', type=str, default='SSO', help='Stock symbol (default: SSO)')
     parser.add_argument('--stop_loss_pct', type=float, default=0.08, help='Stop loss percentage (default: 8%)')
     parser.add_argument('--disable_short_ma_entry', action='store_true', help='Disable short-term moving average entry')
-    parser.add_argument('--use_trailing_stop', action='store_true', help='Use trailing stop instead of fixed stop loss')
-    parser.add_argument('--trailing_stop_pct', type=float, default=0.2, help='Trailing stop percentage (default: 20%)')
-    parser.add_argument(
-        '--background_exit_threshold', type=float, default=0.5, help='Background exit threshold (default: 0.5)'
-    )
-    parser.add_argument(
-        '--use_background_color_signals',
-        action='store_true',
-        help='Use background color change signals for entry and exit',
-    )
-    parser.add_argument(
-        '--partial_exit', action='store_true', help='Exit with half of the position when exit signal is triggered'
-    )
     parser.add_argument(
         '--closing_time_minutes',
         type=int,
@@ -901,6 +737,25 @@ def main():
     )
     parser.add_argument('--testmode', action='store_true', help='Enable test mode (no actual trading)')
     parser.add_argument('--test_date', type=str, help='Test date in YYYY-MM-DD format (required for test mode)')
+    # TV mode pivot detection parameters
+    parser.add_argument('--pivot_len_long', type=int, default=20, help='Pivot window for long MA (default: 20)')
+    parser.add_argument('--pivot_len_short', type=int, default=10, help='Pivot window for short MA (default: 10)')
+    parser.add_argument(
+        '--prom_thresh_long', type=float, default=0.005, help='Prominence threshold for long MA (default: 0.005)'
+    )
+    parser.add_argument(
+        '--prom_thresh_short', type=float, default=0.03, help='Prominence threshold for short MA (default: 0.03)'
+    )
+    parser.add_argument('--peak_level', type=float, default=0.70, help='Peak exit level threshold (default: 0.70)')
+    parser.add_argument(
+        '--trough_level_long', type=float, default=0.40, help='Long MA trough entry level (default: 0.40)'
+    )
+    parser.add_argument(
+        '--trough_level_short', type=float, default=0.20, help='Short MA trough entry level (default: 0.20)'
+    )
+    parser.add_argument(
+        '--allow_pyramiding', action='store_true', default=False, help='Allow pyramiding (default: disabled)'
+    )
 
     args = parser.parse_args()
 
@@ -915,19 +770,21 @@ def main():
         commission=args.commission,
         use_saved_data=args.use_saved_data,
         debug=args.debug,
-        threshold=args.threshold,
         ma_type=args.ma_type,
         symbol=args.symbol,
         stop_loss_pct=args.stop_loss_pct,
         disable_short_ma_entry=args.disable_short_ma_entry,
-        use_trailing_stop=args.use_trailing_stop,
-        trailing_stop_pct=args.trailing_stop_pct,
-        background_exit_threshold=args.background_exit_threshold,
-        use_background_color_signals=args.use_background_color_signals,
-        partial_exit=args.partial_exit,
         closing_time_minutes=args.closing_time_minutes,
         testmode=args.testmode,
         test_date=args.test_date,
+        pivot_len_long=args.pivot_len_long,
+        pivot_len_short=args.pivot_len_short,
+        prom_thresh_long=args.prom_thresh_long,
+        prom_thresh_short=args.prom_thresh_short,
+        peak_level=args.peak_level,
+        trough_level_long=args.trough_level_long,
+        trough_level_short=args.trough_level_short,
+        no_pyramiding=not args.allow_pyramiding,
     )
 
     trader.run()

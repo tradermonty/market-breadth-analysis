@@ -168,15 +168,247 @@ class TestMarketBreadthTrader(unittest.TestCase):
         self.assertIsNotNone(self.trader.long_ma_line)
 
     def test_calculate_shares(self):
-        """Test share calculation"""
+        """Test share calculation includes both slippage and commission"""
         # Normal case
         shares = self.trader._calculate_shares(10000, 50.0)
-        expected_shares = int(10000 / (50.0 * (1 + self.trader.slippage)))
+        expected_shares = int(10000 / (50.0 * (1 + self.trader.slippage + self.trader.commission)))
         self.assertEqual(shares, expected_shares)
 
         # Case with fractional shares
         shares = self.trader._calculate_shares(10000, 33.33)
-        self.assertEqual(shares, int(10000 / (33.33 * (1 + self.trader.slippage))))
+        self.assertEqual(shares, int(10000 / (33.33 * (1 + self.trader.slippage + self.trader.commission))))
+
+    @patch('trade.run_market_breadth_trade.MarketBreadthTrader._initialize_alpaca')
+    def test_detect_signals_populates_peaks_and_troughs(self, mock_init_alpaca):
+        """Test that _detect_signals() populates peaks and troughs from synthetic data"""
+        mock_init_alpaca.return_value = Mock()
+
+        trader = MarketBreadthTrader(short_ma=5, long_ma=20, symbol='SSO')
+
+        # Generate synthetic breadth data: sin wave with 200 business days
+        np.random.seed(42)
+        n = 200
+        dates = pd.bdate_range(start='2024-01-01', periods=n)
+        t = np.linspace(0, 4 * np.pi, n)
+        breadth = 0.5 + 0.35 * np.sin(t)
+        breadth = np.clip(breadth, 0.01, 0.99)
+
+        trader.breadth_index = pd.Series(breadth, index=dates)
+        trader.short_ma_line = trader.breadth_index.ewm(span=5, adjust=False).mean()
+        trader.long_ma_line = trader.breadth_index.ewm(span=20, adjust=False).mean()
+
+        trader._detect_signals()
+
+        # Should detect at least one peak and one trough
+        self.assertGreater(len(trader.peaks), 0, 'Should detect at least one peak')
+        has_troughs = len(trader.long_ma_bottoms) > 0 or len(trader.short_ma_bottoms) > 0
+        self.assertTrue(has_troughs, 'Should detect at least one trough (long or short)')
+
+        # Signal dictionaries should be populated
+        self.assertIsInstance(trader._tv_peak_signals, dict)
+        self.assertIsInstance(trader._tv_long_trough_signals, dict)
+        self.assertIsInstance(trader._tv_short_trough_signals, dict)
+
+    @patch('trade.run_market_breadth_trade.MarketBreadthTrader._initialize_alpaca')
+    def test_detect_signals_matches_backtest_precompute(self, mock_init_alpaca):
+        """Test that live _detect_signals() matches backtest _precompute_tv_signals()"""
+        from backtest.backtest import detect_pivot_high, detect_pivot_low
+
+        mock_init_alpaca.return_value = Mock()
+
+        # Generate same synthetic data for both
+        np.random.seed(42)
+        n = 200
+        dates = pd.bdate_range(start='2024-01-01', periods=n)
+        t = np.linspace(0, 4 * np.pi, n)
+        breadth = 0.5 + 0.35 * np.sin(t)
+        breadth = np.clip(breadth, 0.01, 0.99)
+
+        breadth_series = pd.Series(breadth, index=dates)
+        short_ma_line = breadth_series.ewm(span=5, adjust=False).mean()
+        long_ma_line = breadth_series.ewm(span=20, adjust=False).mean()
+
+        # --- Live trader side ---
+        trader = MarketBreadthTrader(short_ma=5, long_ma=20, symbol='SSO')
+        trader.breadth_index = breadth_series
+        trader.short_ma_line = short_ma_line
+        trader.long_ma_line = long_ma_line
+        trader._detect_signals()
+
+        # --- Backtest side (replicate _precompute_tv_signals logic) ---
+        bt_peak_signals = {}
+        for confirm_date, pivot_date, val in detect_pivot_high(
+            long_ma_line, trader.pivot_len_long, trader.prom_thresh_long, trader.peak_level
+        ):
+            if confirm_date not in bt_peak_signals:
+                bt_peak_signals[confirm_date] = (pivot_date, val)
+
+        bt_long_trough_signals = {}
+        for confirm_date, pivot_date, val in detect_pivot_low(
+            long_ma_line, trader.pivot_len_long, trader.prom_thresh_long
+        ):
+            if val < trader.trough_level_long:
+                if confirm_date not in bt_long_trough_signals:
+                    bt_long_trough_signals[confirm_date] = (pivot_date, val)
+
+        bt_short_trough_signals = {}
+        for confirm_date, pivot_date, val in detect_pivot_low(
+            short_ma_line, trader.pivot_len_short, trader.prom_thresh_short
+        ):
+            confirm_loc = breadth_series.index.get_loc(confirm_date)
+            start_loc = max(0, confirm_loc - 19)
+            recent_min = breadth_series.iloc[start_loc : confirm_loc + 1].min()
+            if recent_min <= trader.trough_level_short:
+                if confirm_date not in bt_short_trough_signals:
+                    bt_short_trough_signals[confirm_date] = (pivot_date, val)
+
+        # Compare signal dictionaries
+        self.assertEqual(trader._tv_peak_signals, bt_peak_signals, 'Peak signals mismatch')
+        self.assertEqual(trader._tv_long_trough_signals, bt_long_trough_signals, 'Long trough signals mismatch')
+        self.assertEqual(trader._tv_short_trough_signals, bt_short_trough_signals, 'Short trough signals mismatch')
+
+    def test_stop_loss_triggers(self):
+        """Test that stop loss triggers sell when price drops below threshold"""
+        # Set up position with entry price
+        self.trader.current_position = 100
+        self.trader.entry_prices = [50.0]
+
+        # Set up mock: price below stop loss (50 * (1 - 0.08) = 46.0)
+        self.mock_bar.c = 45.0
+        self.mock_api.get_latest_bar.return_value = self.mock_bar
+
+        # Mock _sync_position_from_broker to preserve our test state
+        self.trader._sync_position_from_broker = Mock()
+        self.trader._sync_position_from_broker.side_effect = lambda: None
+
+        # Set up mock for sell order
+        mock_order = Mock()
+        self.mock_api.submit_order.return_value = mock_order
+
+        self.trader.check_signals_and_trade()
+
+        # Verify sell was called with stop loss reason
+        self.mock_api.submit_order.assert_called_once_with(
+            symbol='SSO', qty=100, side='sell', type='market', time_in_force='day'
+        )
+        self.assertEqual(self.trader.entry_prices, [])
+        self.assertEqual(self.trader.current_position, 0)
+
+    def test_stop_loss_recovery_from_broker(self):
+        """Test that stop loss works after process restart (entry_prices recovered from broker)"""
+        # Simulate process restart: entry_prices is empty
+        self.trader.entry_prices = []
+        self.trader.current_position = 0
+
+        # Set up broker position with avg_entry_price
+        self.mock_position.qty = 100
+        self.mock_position.avg_entry_price = '50.0'
+        self.mock_api.get_position.return_value = self.mock_position
+
+        # Price below stop loss (50 * 0.92 = 46.0)
+        self.mock_bar.c = 45.0
+        self.mock_api.get_latest_bar.return_value = self.mock_bar
+
+        # Set up mock for sell order
+        mock_order = Mock()
+        self.mock_api.submit_order.return_value = mock_order
+
+        self.trader.check_signals_and_trade()
+
+        # Verify entry_prices was recovered from broker
+        # and stop loss triggered sell
+        self.mock_api.submit_order.assert_called_once_with(
+            symbol='SSO', qty=100, side='sell', type='market', time_in_force='day'
+        )
+        self.assertEqual(self.trader.current_position, 0)
+        self.assertEqual(self.trader.entry_prices, [])
+
+    def test_no_pyramiding_blocks_second_entry(self):
+        """Test that no_pyramiding=True blocks entry when position already exists"""
+        # Set up existing position
+        self.trader.current_position = 100
+        self.trader.entry_prices = [50.0]
+        self.trader.no_pyramiding = True
+
+        # Mock _sync_position_from_broker to preserve our test state
+        self.trader._sync_position_from_broker = Mock()
+        self.trader._sync_position_from_broker.side_effect = lambda: None
+
+        # Set up price above stop loss so stop loss doesn't trigger
+        self.mock_bar.c = 55.0
+        self.mock_api.get_latest_bar.return_value = self.mock_bar
+
+        # Set up a long_ma_bottom signal for today
+        today = pd.to_datetime(datetime.now().strftime('%Y-%m-%d'))
+        self.trader.long_ma_bottoms = [today]
+        self.trader.short_ma_bottoms = []
+        self.trader.peaks = []
+
+        self.trader.check_signals_and_trade()
+
+        # Verify no buy order was submitted (pyramiding blocked)
+        buy_calls = [call for call in self.mock_api.submit_order.call_args_list if call[1].get('side') == 'buy']
+        self.assertEqual(len(buy_calls), 0, 'Should not place buy order when pyramiding is disabled')
+
+    def test_allow_pyramiding_permits_second_entry(self):
+        """Test that no_pyramiding=False allows additional entry with existing position"""
+        # Set up existing position
+        self.trader.current_position = 100
+        self.trader.entry_prices = [50.0]
+        self.trader.no_pyramiding = False
+
+        # Mock _sync_position_from_broker to preserve our test state
+        self.trader._sync_position_from_broker = Mock()
+        self.trader._sync_position_from_broker.side_effect = lambda: None
+
+        # Set up price above stop loss so stop loss doesn't trigger
+        self.mock_bar.c = 55.0
+        self.mock_api.get_latest_bar.return_value = self.mock_bar
+
+        # Set up a long_ma_bottom signal for today
+        today = pd.to_datetime(datetime.now().strftime('%Y-%m-%d'))
+        self.trader.long_ma_bottoms = [today]
+        self.trader.short_ma_bottoms = []
+        self.trader.peaks = []
+
+        # Mock account for buying power
+        mock_account = Mock()
+        mock_account.buying_power = '10000.0'
+        self.mock_api.get_account.return_value = mock_account
+
+        # Set up mock for buy order
+        mock_order = Mock()
+        self.mock_api.submit_order.return_value = mock_order
+
+        self.trader.check_signals_and_trade()
+
+        # Verify buy order was submitted (pyramiding allowed)
+        buy_calls = [call for call in self.mock_api.submit_order.call_args_list if call[1].get('side') == 'buy']
+        self.assertEqual(len(buy_calls), 1, 'Should place buy order when pyramiding is allowed')
+        self.assertEqual(len(self.trader.entry_prices), 2, 'Should append new entry price')
+
+    def test_sync_clears_entry_prices_when_no_position(self):
+        """Test that _sync_position_from_broker clears entry_prices when broker has no position"""
+        # Simulate stale entry_prices from a previous session
+        self.trader.entry_prices = [50.0, 52.0]
+
+        # Broker returns 404 (no position)
+        self.mock_api.get_position.side_effect = Exception('position does not exist')
+
+        self.trader._sync_position_from_broker()
+
+        self.assertEqual(self.trader.current_position, 0)
+        self.assertEqual(self.trader.entry_prices, [], 'entry_prices should be cleared when no position')
+
+    def test_sync_raises_on_api_error(self):
+        """Test that _sync_position_from_broker raises on transient API errors"""
+        # Simulate a network/API error (not a 404)
+        self.mock_api.get_position.side_effect = Exception('connection timeout')
+
+        with self.assertRaises(Exception) as ctx:
+            self.trader._sync_position_from_broker()
+
+        self.assertIn('connection timeout', str(ctx.exception))
 
 
 if __name__ == '__main__':
