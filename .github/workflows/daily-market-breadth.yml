@@ -46,7 +46,7 @@ jobs:
     - name: Run market breadth analysis
       env:
         FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
-      run: python market_breadth.py
+      run: python market_breadth.py --include_50ma
 
     - name: Verify outputs
       run: |
