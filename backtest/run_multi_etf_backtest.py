@@ -18,7 +18,7 @@ def run_multi_etf_backtest(
     etfs,
     start_date=None,
     end_date=None,
-    short_ma=20,
+    short_ma=5,
     long_ma=200,
     initial_capital=50000,
     slippage=0.001,
@@ -27,7 +27,7 @@ def run_multi_etf_backtest(
     debug=False,
     threshold=0.5,
     ma_type='ema',
-    stop_loss_pct=0.10,
+    stop_loss_pct=0.08,
     no_show_plot=True,
     # TradingView alignment parameters
     tv_mode=False,
@@ -207,6 +207,10 @@ def run_multi_etf_backtest(
                 'Expected Value': backtest.expected_value,
                 'Avg. PnL per Trade': backtest.avg_pnl_per_trade,
                 'Pareto Ratio': backtest.pareto_ratio,
+                'B&H Return': backtest.bh_total_return,
+                'B&H CAGR': backtest.bh_cagr,
+                'B&H Sharpe': backtest.bh_sharpe,
+                'B&H Max DD': backtest.bh_max_drawdown,
             }
 
             results.append(result)
@@ -231,6 +235,10 @@ def run_multi_etf_backtest(
                     'Expected Value': np.nan,
                     'Avg. PnL per Trade': np.nan,
                     'Pareto Ratio': np.nan,
+                    'B&H Return': np.nan,
+                    'B&H CAGR': np.nan,
+                    'B&H Sharpe': np.nan,
+                    'B&H Max DD': np.nan,
                 }
             )
             continue
@@ -260,6 +268,10 @@ def run_multi_etf_backtest(
     formatted_results['Expected Value'] = formatted_results['Expected Value'].map('${:.2f}'.format)
     formatted_results['Avg. PnL per Trade'] = formatted_results['Avg. PnL per Trade'].map('${:.2f}'.format)
     formatted_results['Pareto Ratio'] = formatted_results['Pareto Ratio'].map('{:.2f}'.format)
+    formatted_results['B&H Return'] = formatted_results['B&H Return'].map('{:.2%}'.format)
+    formatted_results['B&H CAGR'] = formatted_results['B&H CAGR'].map('{:.2%}'.format)
+    formatted_results['B&H Sharpe'] = formatted_results['B&H Sharpe'].map('{:.2f}'.format)
+    formatted_results['B&H Max DD'] = formatted_results['B&H Max DD'].map('{:.2%}'.format)
 
     # Generate MD format table
     md_table = formatted_results.to_markdown(index=False)
@@ -348,13 +360,13 @@ if __name__ == '__main__':
     # Run backtest
     run_multi_etf_backtest(
         etfs=etfs,
-        start_date='2001-01-01',
-        end_date='2025-09-30',
+        start_date='2008-01-01',
+        end_date='2026-02-26',
         short_ma=5,
         long_ma=200,
         initial_capital=50000,
-        slippage=0.001,
-        commission=0.001,
+        slippage=0.0,
+        commission=0.0001,
         use_saved_data=True,
         debug=False,
         threshold=0.5,
@@ -363,7 +375,7 @@ if __name__ == '__main__':
         no_show_plot=True,
         tv_mode=True,
         no_pyramiding=True,
-        two_stage_exit=True,
+        two_stage_exit=False,
         use_volatility_stop=False,
-        bullish_regime_suppression=True,
+        bullish_regime_suppression=False,
     )

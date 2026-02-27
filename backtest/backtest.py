@@ -49,7 +49,7 @@ class Backtest:
         self,
         start_date=None,
         end_date=None,
-        short_ma=8,
+        short_ma=5,
         long_ma=200,
         initial_capital=50000,
         slippage=0.001,
@@ -59,7 +59,7 @@ class Backtest:
         threshold=0.5,
         ma_type='ema',
         symbol='SSO',
-        stop_loss_pct=0.10,
+        stop_loss_pct=0.08,
         disable_short_ma_entry=False,
         use_trailing_stop=False,
         trailing_stop_pct=0.2,
@@ -169,9 +169,9 @@ class Backtest:
 
         # Force Pine-compatible defaults if requested.
         if self.tv_pine_compat:
-            self._apply_tv_pine_compat_defaults()
+            self._apply_tv_pine_compat_defaults(stop_loss_pct=stop_loss_pct)
 
-    def _apply_tv_pine_compat_defaults(self):
+    def _apply_tv_pine_compat_defaults(self, stop_loss_pct=0.10):
         """Apply TradingView Pine-script-compatible defaults.
 
         This mode intentionally disables non-Pine extensions so behavior can be
@@ -189,7 +189,7 @@ class Backtest:
         self.partial_exit = False
 
         # Align trading costs / stop model to Pine defaults.
-        self.stop_loss_pct = 0.08
+        # Do NOT override stop_loss_pct — honor caller's value.
         self.slippage = 0.0
         self.commission = 0.0002
 
@@ -306,7 +306,7 @@ class Backtest:
         # Priority: tv_price_csv > tv_pine_compat OHLC > sp500_data column > individual fetch.
         if getattr(self, 'tv_price_csv', None):
             self.price_data = self._load_tv_price_data()
-        elif self.tv_pine_compat:
+        elif self.tv_pine_compat or self.tv_mode:
             ohlc = get_stock_price_ohlc(
                 self.symbol,
                 self.start_date,
@@ -699,13 +699,30 @@ class Backtest:
                         stop_loss_price = self.highest_price * (1 - self.trailing_stop_pct)
                     else:
                         stop_loss_price = avg_entry * (1 - self.stop_loss_pct)
-                    if price <= stop_loss_price:
+
+                    # Check stop loss using intraday low if available, else close
+                    triggered = False
+                    fill_at = price  # default: close-based
+                    if 'low' in self.price_data.columns:
+                        bar_low = self.price_data.loc[date, 'low']
+                        bar_open = self.price_data.loc[date, 'open']
+                        if pd.notna(bar_low) and pd.notna(bar_open):
+                            if bar_low <= stop_loss_price:
+                                fill_at = min(bar_open, stop_loss_price)
+                                triggered = True
+                        elif price <= stop_loss_price:
+                            triggered = True
+                    elif price <= stop_loss_price:
+                        triggered = True
+
+                    if triggered:
                         print('\n[TV] Stop loss triggered:')
                         print(f'Date: {date.strftime("%Y-%m-%d")}')
                         print(f'Avg entry price: ${avg_entry:.2f}')
                         print(f'Current price: ${price:.2f}')
                         print(f'Stop loss price: ${stop_loss_price:.2f}')
-                        self._execute_exit(date, price, reason='stop loss')
+                        print(f'Fill price: ${fill_at:.2f}')
+                        self._execute_exit(date, fill_at, reason='stop loss')
                         available_capital = self.current_capital
                         stop_loss_fired = True
 
@@ -1217,6 +1234,12 @@ class Backtest:
         buy_hold_cummax = self.price_data['adjusted_close'].expanding().max()
         buy_hold_drawdown = self.price_data['adjusted_close'] / buy_hold_cummax - 1
         buy_hold_max_drawdown = buy_hold_drawdown.min()
+
+        # Store Buy & Hold metrics as instance attributes
+        self.bh_total_return = buy_hold_return
+        self.bh_cagr = buy_hold_cagr
+        self.bh_sharpe = buy_hold_sharpe
+        self.bh_max_drawdown = buy_hold_max_drawdown
 
         # Display performance metrics
         print('\nBacktest results:')
@@ -1956,7 +1979,7 @@ def main():
     parser.add_argument(
         '--end_date', type=str, help='Backtest end date (YYYY-MM-DD format). If not specified, current date'
     )
-    parser.add_argument('--short_ma', type=int, default=8, help='Short-term moving average period (default: 8)')
+    parser.add_argument('--short_ma', type=int, default=5, help='Short-term moving average period (default: 5)')
     parser.add_argument('--long_ma', type=int, default=200, help='Long-term moving average period (default: 200)')
     parser.add_argument(
         '--initial_capital', type=float, default=50000, help='Initial investment amount (default: 50000 dollars)'
@@ -1968,7 +1991,7 @@ def main():
     parser.add_argument('--threshold', type=float, default=0.5, help='Threshold for bottom detection (default: 0.5)')
     parser.add_argument('--ma_type', type=str, default='ema', help='Moving average type (default: ema)')
     parser.add_argument('--symbol', type=str, default='SSO', help='Stock symbol (default: SSO)')
-    parser.add_argument('--stop_loss_pct', type=float, default=0.1, help='Stop loss percentage (default: 8%%)')
+    parser.add_argument('--stop_loss_pct', type=float, default=0.08, help='Stop loss percentage (default: 8%%)')
     parser.add_argument('--disable_short_ma_entry', action='store_true', help='Disable short-term moving average entry')
     parser.add_argument('--use_trailing_stop', action='store_true', help='Use trailing stop instead of fixed stop loss')
     parser.add_argument('--trailing_stop_pct', type=float, default=0.2, help='Trailing stop percentage (default: 20%%)')

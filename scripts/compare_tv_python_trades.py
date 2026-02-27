@@ -29,6 +29,14 @@ def normalize_reason(reason: str) -> str:
     if pd.isna(reason):
         return ''
     key = str(reason).strip().lower()
+    # Normalize common unicode dash variants seen in TV exports.
+    key = (
+        key.replace('\u2010', '-')
+        .replace('\u2011', '-')
+        .replace('\u2012', '-')
+        .replace('\u2013', '-')
+        .replace('\u2014', '-')
+    )
     return REASON_MAP.get(key, key)
 
 
@@ -69,12 +77,96 @@ def load_python_trades(csv_path: str) -> pd.DataFrame:
 
 
 def load_tv_trades(csv_path: str) -> pd.DataFrame:
-    """Load TradingView trade log CSV."""
-    df = pd.read_csv(csv_path, parse_dates=['entry_date', 'exit_date'])
-    df['entry_date'] = pd.to_datetime(df['entry_date']).dt.normalize()
-    df['exit_date'] = pd.to_datetime(df['exit_date']).dt.normalize()
-    df['exit_reason_norm'] = df['reason'].apply(normalize_reason)
-    return df.sort_values('entry_date').reset_index(drop=True)
+    """Load TradingView trade log CSV.
+
+    Supports two schemas:
+    1) Normalized format: entry_date/exit_date/reason
+    2) Raw TradingView export: Trade # / Type / Date and time / Signal
+       (Entry/Exit rows per trade; open trades are excluded)
+    """
+    df = pd.read_csv(csv_path)
+    col_map = {c.lower(): c for c in df.columns}
+
+    # Schema A: normalized trades CSV (one row per closed trade)
+    if {'entry_date', 'exit_date'}.issubset(col_map):
+        entry_col = col_map['entry_date']
+        exit_col = col_map['exit_date']
+        reason_col = col_map.get('reason', col_map.get('exit_reason'))
+        if reason_col is None:
+            raise ValueError(f'TV CSV missing reason column: {csv_path}')
+
+        out = pd.DataFrame()
+        out['entry_date'] = pd.to_datetime(df[entry_col], errors='coerce').dt.normalize()
+        out['exit_date'] = pd.to_datetime(df[exit_col], errors='coerce').dt.normalize()
+        out['reason'] = df[reason_col].astype(str)
+        out = out.dropna(subset=['entry_date', 'exit_date'])
+        out['exit_reason_norm'] = out['reason'].apply(normalize_reason)
+        return out.sort_values('entry_date').reset_index(drop=True)
+
+    # Schema B: raw TradingView export (entry/exit rows for each trade)
+    required = {'trade #', 'type', 'date and time'}
+    if required.issubset(col_map):
+        trade_col = col_map['trade #']
+        type_col = col_map['type']
+        date_col = col_map['date and time']
+        signal_col = col_map.get('signal')
+
+        records = []
+        for trade_no, grp in df.groupby(trade_col):
+            g = grp.copy()
+            g[date_col] = pd.to_datetime(g[date_col], errors='coerce')
+            g = g.dropna(subset=[date_col]).sort_values(date_col)
+            if g.empty:
+                continue
+
+            type_series = g[type_col].astype(str).str.strip().str.lower()
+            entry_rows = g[type_series.str.contains('entry long', na=False)]
+            exit_rows = g[type_series.str.contains('exit long', na=False)]
+
+            if entry_rows.empty or exit_rows.empty:
+                continue
+
+            entry = entry_rows.iloc[0]
+            exit_row = exit_rows.iloc[-1]
+
+            signal = ''
+            if signal_col and signal_col in exit_row.index:
+                signal = str(exit_row[signal_col]).strip()
+
+            # Exclude open trades (TV marks them with signal "Open").
+            if normalize_reason(signal) == 'open':
+                continue
+
+            records.append(
+                {
+                    'trade_no': trade_no,
+                    'entry_date': pd.to_datetime(entry[date_col]).normalize(),
+                    'exit_date': pd.to_datetime(exit_row[date_col]).normalize(),
+                    'reason': signal,
+                }
+            )
+
+        out = pd.DataFrame(records)
+        if out.empty:
+            return pd.DataFrame(columns=['entry_date', 'exit_date', 'reason', 'exit_reason_norm'])
+
+        out['exit_reason_norm'] = out['reason'].apply(normalize_reason)
+        return out.sort_values('entry_date').reset_index(drop=True)
+
+    raise ValueError(f'Unsupported TV CSV schema for {csv_path}. Columns were: {list(df.columns)}')
+
+
+def _to_trade_key(df: pd.DataFrame):
+    keys = set()
+    for _, row in df.iterrows():
+        keys.add(
+            (
+                str(pd.to_datetime(row['entry_date']).date()),
+                str(pd.to_datetime(row['exit_date']).date()),
+                str(row['exit_reason_norm']),
+            )
+        )
+    return keys
 
 
 # ---------------------------------------------------------------------------
@@ -92,6 +184,9 @@ def compare_trades(py_df: pd.DataFrame, tv_df: pd.DataFrame, trading_days, toler
         'reason_matches': 0,
         'reason_total': 0,
         'calendar_fallbacks': 0,
+        'exact_matches': 0,
+        'tv_only': [],
+        'python_only': [],
         'pass': True,
     }
 
@@ -151,6 +246,15 @@ def compare_trades(py_df: pd.DataFrame, tv_df: pd.DataFrame, trading_days, toler
     reason_rate = results['reason_matches'] / results['reason_total'] if results['reason_total'] > 0 else 0.0
     results['reason_match_rate'] = reason_rate
 
+    py_keys = _to_trade_key(py_df)
+    tv_keys = _to_trade_key(tv_df)
+    exact = sorted(py_keys & tv_keys)
+    tv_only = sorted(tv_keys - py_keys)
+    py_only = sorted(py_keys - tv_keys)
+    results['exact_matches'] = len(exact)
+    results['tv_only'] = tv_only
+    results['python_only'] = py_only
+
     if results['first_mismatch_bar_diff'] > tolerance_bars:
         results['pass'] = False
     if reason_rate < 0.85:
@@ -189,6 +293,17 @@ def print_report(results, tolerance_bars: int):
 
     rate = results.get('reason_match_rate', 0.0)
     print(f'\nReason match rate: {results["reason_matches"]}/{results["reason_total"]} = {rate:.1%}')
+    print(f'Exact trade tuple matches: {results["exact_matches"]}')
+
+    if results.get('tv_only'):
+        print('\nTV-only trades (not found in Python):')
+        for entry_date, exit_date, reason in results['tv_only']:
+            print(f'  {entry_date} -> {exit_date}  ({reason})')
+
+    if results.get('python_only'):
+        print('\nPython-only trades (not found in TV):')
+        for entry_date, exit_date, reason in results['python_only']:
+            print(f'  {entry_date} -> {exit_date}  ({reason})')
 
     print(f'\nAcceptance criteria (tolerance_bars={tolerance_bars}):')
     print(f'  First mismatch bar diff <= {tolerance_bars}: ', end='')
