@@ -296,6 +296,20 @@ class Backtest:
 
             warnings.warn('tv_pine_compat is most accurate with --tv_breadth_csv', UserWarning, stacklevel=2)
 
+    def _validate_weekly_trailing_columns(self):
+        """Validate that price_data has all OHLC columns needed for weekly trailing.
+
+        Weekly trailing always requires full OHLC so that aggregate_to_weekly
+        uses the adjusted OHLC path (not the close-only fallback).
+        """
+        required_cols = {'adjusted_close', 'open', 'close', 'high', 'low'}
+        missing = required_cols - set(self.price_data.columns)
+        if missing:
+            raise RuntimeError(
+                f'Weekly trailing requires columns {required_cols} but missing: {missing}. '
+                'Ensure OHLC data is available for the symbol.'
+            )
+
     def _load_tv_price_data(self):
         """Load OHLC price data from a TV-exported CSV."""
         import pathlib as _pathlib
@@ -425,22 +439,11 @@ class Backtest:
 
         # Validate and compute adjusted OHLC columns for weekly trailing
         if self.enable_weekly_trailing:
-            required_cols = {'adjusted_close', 'open', 'close'}
-            if self.weekly_trailing_type == 'weekly_nweek_low':
-                required_cols.add('low')
-            missing = required_cols - set(self.price_data.columns)
-            if missing:
-                raise RuntimeError(
-                    f'Weekly trailing requires columns {required_cols} but missing: {missing}. '
-                    'Ensure OHLC data is available for the symbol.'
-                )
-            # Compute adjusted OHLC from raw OHLC + adjustment ratio
+            self._validate_weekly_trailing_columns()
             adj_ratio = self.price_data['adjusted_close'] / self.price_data['close']
             self.price_data['adjusted_open'] = self.price_data['open'] * adj_ratio
-            if 'high' in self.price_data.columns:
-                self.price_data['adjusted_high'] = self.price_data['high'] * adj_ratio
-            if 'low' in self.price_data.columns:
-                self.price_data['adjusted_low'] = self.price_data['low'] * adj_ratio
+            self.price_data['adjusted_high'] = self.price_data['high'] * adj_ratio
+            self.price_data['adjusted_low'] = self.price_data['low'] * adj_ratio
 
         # Build breadth source (S&P500-derived breadth or external TV-compatible breadth CSV).
         if self.tv_breadth_csv:

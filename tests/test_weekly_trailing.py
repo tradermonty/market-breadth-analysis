@@ -339,28 +339,37 @@ class TestAggregateToWeekly(unittest.TestCase):
         self.assertIn('low', weekly.columns)
 
     def test_backtest_rejects_missing_ohlc(self):
-        """Backtest with enable_weekly_trailing raises RuntimeError when
-        required OHLC columns are missing from price_data.
+        """Backtest._validate_weekly_trailing_columns raises RuntimeError
+        when required OHLC columns are missing from price_data.
         """
         bt = _make_backtest(enable_weekly_trailing=True, tv_mode=False)
         bt.price_data = pd.DataFrame(
             {'adjusted_close': [100, 101, 102]},
             index=pd.bdate_range('2024-01-02', periods=3),
         )
-        bt.sp500_data = pd.DataFrame()
-        bt.breadth_index = pd.Series([0.5, 0.5, 0.5], index=bt.price_data.index)
-        # run() calls validation before aggregate; simulate by calling the
-        # validation path directly via a stripped-down approach
         with self.assertRaises(RuntimeError) as ctx:
-            # Trigger validation: replicate the check from run()
-            required_cols = {'adjusted_close', 'open', 'close'}
-            missing = required_cols - set(bt.price_data.columns)
-            if missing:
-                raise RuntimeError(
-                    f'Weekly trailing requires columns {required_cols} but missing: {missing}. '
-                    'Ensure OHLC data is available for the symbol.'
-                )
+            bt._validate_weekly_trailing_columns()
         self.assertIn('missing', str(ctx.exception))
+
+    def test_backtest_rejects_partial_ohlc(self):
+        """When high is missing but low exists, validation still rejects.
+        This prevents aggregate_to_weekly from falling back to close-only
+        mode which would make weekly_nweek_low inaccurate.
+        """
+        bt = _make_backtest(enable_weekly_trailing=True, tv_mode=False, weekly_trailing_type='weekly_nweek_low')
+        bt.price_data = pd.DataFrame(
+            {
+                'adjusted_close': [100, 101, 102],
+                'open': [99, 100, 101],
+                'close': [100, 101, 102],
+                'low': [98, 99, 100],
+                # 'high' intentionally missing
+            },
+            index=pd.bdate_range('2024-01-02', periods=3),
+        )
+        with self.assertRaises(RuntimeError) as ctx:
+            bt._validate_weekly_trailing_columns()
+        self.assertIn('high', str(ctx.exception))
 
 
 class TestIsWeekEnd(unittest.TestCase):
