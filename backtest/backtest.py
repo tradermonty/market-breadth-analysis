@@ -2189,10 +2189,10 @@ def main():
     )
     parser.add_argument('--trough_level_short', type=float, default=0.20, help='Short MA trough level (default: 0.20)')
     parser.add_argument(
-        '--no_pyramiding',
+        '--pyramiding',
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help='Single position, 100%% equity (default: on)',
+        default=False,
+        help='Allow multiple entries (pyramiding). Default: off (single position, 100%% equity)',
     )
 
     # Enhanced TV mode options
@@ -2302,7 +2302,7 @@ def main():
         peak_level=args.peak_level,
         trough_level_long=args.trough_level_long,
         trough_level_short=args.trough_level_short,
-        no_pyramiding=args.no_pyramiding,
+        no_pyramiding=not args.pyramiding,
         two_stage_exit=args.two_stage_exit,
         stage2_exit_mode=args.stage2_exit_mode,
         use_volatility_stop=args.use_volatility_stop,
