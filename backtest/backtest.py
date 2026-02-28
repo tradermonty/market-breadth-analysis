@@ -1,12 +1,8 @@
-import argparse
 import os
 import pathlib
-import platform
 import sys
 from datetime import datetime
 
-import matplotlib
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from scipy.signal import find_peaks
@@ -22,22 +18,8 @@ from market_breadth import (
     get_stock_price_ohlc,
     load_breadth_series_from_csv,
     load_stock_data,
-    plot_breadth_and_sp500_with_peaks,
     save_stock_data,
 )
-
-
-def _setup_matplotlib_backend():
-    """Set up matplotlib backend based on the operating system."""
-    system = platform.system().lower()
-    if system in ('darwin', 'windows'):
-        try:
-            matplotlib.use('TkAgg')
-        except (ImportError, ModuleNotFoundError):
-            matplotlib.use('Agg')
-    else:
-        matplotlib.use('Agg')
-
 
 # Create necessary directories
 reports_dir = pathlib.Path('reports')
@@ -45,55 +27,36 @@ reports_dir.mkdir(exist_ok=True)
 
 
 # Module-level functions for pivot detection (shared with trade/)
-def detect_pivot_high(series, pivot_len, prom_thresh, level_thresh):
-    """Detect pivot highs equivalent to TradingView ta.pivothigh(source, left, right).
+try:
+    from backtest.pivot_detection import detect_pivot_high, detect_pivot_low
+except ModuleNotFoundError:
+    from pivot_detection import detect_pivot_high, detect_pivot_low
 
-    A bar j is a pivot high if it is the maximum in [j-pivot_len, j+pivot_len].
-    Confirmation date = j + pivot_len (the bar where the pivot can first be observed).
-
-    Returns list of (confirm_date, pivot_date, pivot_value).
-    """
-    values = series.values
-    dates = series.index
-    n = len(values)
-    results = []
-
-    for j in range(pivot_len, n - pivot_len):
-        window = values[j - pivot_len : j + pivot_len + 1]
-        if values[j] == np.max(window):
-            # Prominence check: peak - window min
-            prominence = values[j] - np.min(window)
-            if prominence >= prom_thresh and values[j] >= level_thresh:
-                confirm_idx = j + pivot_len
-                results.append((dates[confirm_idx], dates[j], values[j]))
-
-    return results
-
-
-def detect_pivot_low(series, pivot_len, prom_thresh):
-    """Detect pivot lows equivalent to TradingView ta.pivotlow(source, left, right).
-
-    A bar j is a pivot low if it is the minimum in [j-pivot_len, j+pivot_len].
-    Confirmation date = j + pivot_len.
-    Level check is done by the caller (differs for 200-EMA vs short EMA).
-
-    Returns list of (confirm_date, pivot_date, pivot_value).
-    """
-    values = series.values
-    dates = series.index
-    n = len(values)
-    results = []
-
-    for j in range(pivot_len, n - pivot_len):
-        window = values[j - pivot_len : j + pivot_len + 1]
-        if values[j] == np.min(window):
-            # Prominence check: window max - trough
-            prominence = np.max(window) - values[j]
-            if prominence >= prom_thresh:
-                confirm_idx = j + pivot_len
-                results.append((dates[confirm_idx], dates[j], values[j]))
-
-    return results
+# Performance metric functions
+try:
+    from backtest.performance_metrics import (
+        calculate_avg_pnl_per_trade,
+        calculate_calmar_ratio,
+        calculate_expected_value,
+        calculate_max_drawdown,
+        calculate_pareto_ratio,
+        calculate_profit_factor,
+        calculate_profit_loss_ratio,
+        calculate_win_rate,
+        get_trade_pairs,
+    )
+except ModuleNotFoundError:
+    from performance_metrics import (
+        calculate_avg_pnl_per_trade,
+        calculate_calmar_ratio,
+        calculate_expected_value,
+        calculate_max_drawdown,
+        calculate_pareto_ratio,
+        calculate_profit_factor,
+        calculate_profit_loss_ratio,
+        calculate_win_rate,
+        get_trade_pairs,
+    )
 
 
 class Backtest:
@@ -1488,539 +1451,76 @@ class Backtest:
         print(f'CAGR difference: {relative_cagr:.2%}')
 
     def _calculate_max_drawdown(self):
-        """Calculate maximum drawdown"""
-        equity = self.equity_df['equity']
-        rolling_max = equity.expanding().max()
-        drawdowns = equity / rolling_max - 1
-        return drawdowns.min()
+        """Calculate maximum drawdown — delegates to performance_metrics module."""
+        return calculate_max_drawdown(self.equity_df)
 
     def _calculate_win_rate(self):
-        """Calculate win rate for each individual trade"""
+        """Calculate win rate — delegates to performance_metrics module."""
         if not self.trades:
             return 0
-
-        # Get trade pairs
         trade_pairs = self._cached_trade_pairs if self._cached_trade_pairs is not None else self._get_trade_pairs()
-
-        # Calculate profit/loss for each trade pair
-        profitable_trades = 0
-        total_trades = len(trade_pairs)
-
-        for pair in trade_pairs:
-            profit = pair['sell_proceeds'] - pair['buy_cost']
-            if profit > 0:
-                profitable_trades += 1
-
-        # Calculate win rate
-        win_rate = profitable_trades / total_trades if total_trades > 0 else 0
-
-        if self.debug:
-            print('\nWin rate details:')
-            print(f'Total trades: {total_trades}')
-            print(f'Winning trades: {profitable_trades}')
-            print(f'Losing trades: {total_trades - profitable_trades}')
-
-            # Display detailed trade information
-            print('\nTrade details:')
-            for i, pair in enumerate(trade_pairs):
-                profit = pair['sell_proceeds'] - pair['buy_cost']
-                profit_pct = (profit / pair['buy_cost']) * 100
-                print(f'Trade {i + 1}:')
-                print(f'  Buy date: {pair["buy_date"].strftime("%Y-%m-%d")}')
-                print(f'  Sell date: {pair["sell_date"].strftime("%Y-%m-%d")}')
-                print(f'  Shares: {pair["shares"]}')
-                print(f'  Buy price: ${pair["buy_price"]:.2f}')
-                print(f'  Sell price: ${pair["sell_price"]:.2f}')
-                print(f'  Profit: ${profit:.2f} ({profit_pct:.2f}%)')
-
-        return win_rate
+        return calculate_win_rate(trade_pairs, self.debug)
 
     def _calculate_profit_loss_ratio(self):
-        """Calculate profit-loss ratio"""
+        """Calculate profit-loss ratio — delegates to performance_metrics module."""
         if not self.trades:
             return 0
-
-        # Get trade pairs
         trade_pairs = self._cached_trade_pairs if self._cached_trade_pairs is not None else self._get_trade_pairs()
-
-        # Calculate profit/loss for each trade pair
-        profits = []
-        losses = []
-
-        for pair in trade_pairs:
-            profit = pair['sell_proceeds'] - pair['buy_cost']
-            if profit > 0:
-                profits.append(profit)
-            else:
-                losses.append(abs(profit))
-
-        # Calculate profit-loss ratio
-        avg_profit = np.mean(profits) if profits else 0
-        avg_loss = np.mean(losses) if losses else 0
-
-        if self.debug:
-            print('\nProfit-Loss ratio details:')
-            print(f'Total trades: {len(trade_pairs)}')
-            print(f'Profitable trades: {len(profits)}')
-            print(f'Losing trades: {len(losses)}')
-            print(f'Average profit: ${avg_profit:.2f}')
-            print(f'Average loss: ${avg_loss:.2f}')
-
-            # Display detailed trade information
-            print('\nTrade details:')
-            for i, pair in enumerate(trade_pairs):
-                profit = pair['sell_proceeds'] - pair['buy_cost']
-                profit_pct = (profit / pair['buy_cost']) * 100
-                print(f'Trade {i + 1}:')
-                print(f'  Buy date: {pair["buy_date"].strftime("%Y-%m-%d")}')
-                print(f'  Sell date: {pair["sell_date"].strftime("%Y-%m-%d")}')
-                print(f'  Shares: {pair["shares"]}')
-                print(f'  Buy price: ${pair["buy_price"]:.2f}')
-                print(f'  Sell price: ${pair["sell_price"]:.2f}')
-                print(f'  Profit: ${profit:.2f} ({profit_pct:.2f}%)')
-
-        return avg_profit / avg_loss if avg_loss > 0 else float('inf')
+        return calculate_profit_loss_ratio(trade_pairs, self.debug)
 
     def _calculate_profit_factor(self):
-        """Calculate profit factor"""
+        """Calculate profit factor — delegates to performance_metrics module."""
         if not self.trades:
             return 0
-
-        # Get trade pairs
         trade_pairs = self._cached_trade_pairs if self._cached_trade_pairs is not None else self._get_trade_pairs()
-
-        # Calculate profit/loss for each trade pair
-        total_profit = 0
-        total_loss = 0
-
-        for pair in trade_pairs:
-            profit = pair['sell_proceeds'] - pair['buy_cost']
-            if profit > 0:
-                total_profit += profit
-            else:
-                total_loss += abs(profit)
-
-        # Calculate profit factor
-        return total_profit / total_loss if total_loss > 0 else float('inf')
+        return calculate_profit_factor(trade_pairs)
 
     def _calculate_calmar_ratio(self):
-        """Calculate Calmar ratio"""
+        """Calculate Calmar ratio — delegates to performance_metrics module."""
         if not self.trades:
             return 0
-
-        # Calculate annual return
-        days = (self.equity_df.index[-1] - self.equity_df.index[0]).days
-        if days <= 0:
-            return 0
-        years = days / 365
-
-        # Annual Return calculation (handles negative returns)
-        if self.total_return <= -1:
-            annual_return = -1.0
-        else:
-            annual_return = (1 + self.total_return) ** (1 / years) - 1
-
-        # Get maximum drawdown
-        max_drawdown = abs(self.max_drawdown)
-
-        # Calculate Calmar ratio
-        if max_drawdown == 0:
-            return 0  # Return 0 if there is no drawdown
-        else:
-            return annual_return / max_drawdown
+        return calculate_calmar_ratio(self.total_return, self.max_drawdown, self.equity_df)
 
     def _calculate_expected_value(self):
-        """Calculate expected value per trade"""
+        """Calculate expected value per trade — delegates to performance_metrics module."""
         if not self.trades:
             return 0
-
-        # Get trade pairs
         trade_pairs = self._cached_trade_pairs if self._cached_trade_pairs is not None else self._get_trade_pairs()
-
-        # Calculate profit/loss for each trade pair
-        total_profit = 0
-        total_trades = len(trade_pairs)
-
-        for pair in trade_pairs:
-            profit = pair['sell_proceeds'] - pair['buy_cost']
-            total_profit += profit
-
-        # Calculate expected value
-        return total_profit / total_trades if total_trades > 0 else 0
+        return calculate_expected_value(trade_pairs)
 
     def _calculate_avg_pnl_per_trade(self):
-        """Calculate average PnL per trade"""
+        """Calculate average PnL per trade — delegates to performance_metrics module."""
         if not self.trades:
             return 0
-
-        # Get trade pairs
         trade_pairs = self._cached_trade_pairs if self._cached_trade_pairs is not None else self._get_trade_pairs()
-
-        # Calculate profit/loss for each trade pair
-        total_pnl = 0
-        total_trades = len(trade_pairs)
-
-        for pair in trade_pairs:
-            pnl = pair['sell_proceeds'] - pair['buy_cost']
-            total_pnl += pnl
-
-        # Calculate average PnL
-        return total_pnl / total_trades if total_trades > 0 else 0
+        return calculate_avg_pnl_per_trade(trade_pairs)
 
     def _calculate_pareto_ratio(self):
-        """Calculate Pareto ratio (80/20 rule)"""
+        """Calculate Pareto ratio — delegates to performance_metrics module."""
         if not self.trades:
             return 0
-
-        # Get trade pairs
         trade_pairs = self._cached_trade_pairs if self._cached_trade_pairs is not None else self._get_trade_pairs()
-
-        # Calculate profit/loss for each trade pair
-        trade_pnls = []
-
-        for pair in trade_pairs:
-            pnl = pair['sell_proceeds'] - pair['buy_cost']
-            trade_pnls.append(pnl)
-
-        # Sort profits/losses in descending order
-        trade_pnls.sort(reverse=True)
-
-        # Calculate total profit/loss
-        total_pnl = sum(trade_pnls)
-
-        if total_pnl <= 0:
-            return 0
-
-        # Calculate total profit/loss of top 20% trades
-        top_20_percent_count = max(1, int(len(trade_pnls) * 0.2))
-        top_20_percent_pnl = sum(trade_pnls[:top_20_percent_count])
-
-        # Calculate Pareto ratio
-        return top_20_percent_pnl / total_pnl
+        return calculate_pareto_ratio(trade_pairs)
 
     def _get_trade_pairs(self):
-        """Helper method to get trade pairs"""
-        trade_pairs = []
-        current_buy_trades = []
-
-        # Copy trade history to operate on (don't modify original data)
-        trades_copy = []
-        for trade in self.trades:
-            trade_copy = trade.copy()
-            # Keep mutable remaining shares and immutable original shares for cost allocation.
-            if 'shares' in trade_copy:
-                trade_copy['shares'] = int(trade_copy['shares'])
-            if trade_copy.get('action') == 'BUY' and 'shares' in trade_copy:
-                trade_copy['original_shares'] = trade_copy['shares']
-            trades_copy.append(trade_copy)
-
-        # Debug information
-        if self.debug:
-            print('\nTrade pairs calculation:')
-            print(f'Total trades: {len(trades_copy)}')
-            print(f'Buy trades: {sum(1 for t in trades_copy if t["action"] == "BUY")}')
-            print(f'Sell trades: {sum(1 for t in trades_copy if t["action"] == "SELL")}')
-
-        for trade in trades_copy:
-            if trade['action'] == 'BUY':
-                if trade['shares'] > 0:
-                    current_buy_trades.append(trade)
-                    if self.debug:
-                        print(f'Added buy trade: {trade["date"].strftime("%Y-%m-%d")}, Shares: {trade["shares"]}')
-            elif trade['action'] == 'SELL':
-                remaining_shares = trade['shares']
-
-                if self.debug:
-                    print(f'Processing sell trade: {trade["date"].strftime("%Y-%m-%d")}, Shares: {remaining_shares}')
-                    print(f'Current buy trades: {len(current_buy_trades)}')
-
-                while remaining_shares > 0 and current_buy_trades:
-                    buy_trade = current_buy_trades[0]
-                    if buy_trade['shares'] <= 0:
-                        current_buy_trades.pop(0)
-                        if self.debug:
-                            print('Removed empty buy trade')
-                        continue
-
-                    matched_shares = min(remaining_shares, buy_trade['shares'])
-                    original_shares = buy_trade.get('original_shares', buy_trade['shares'])
-
-                    trade_pairs.append(
-                        {
-                            'buy_date': buy_trade['date'],
-                            'sell_date': trade['date'],
-                            'shares': matched_shares,
-                            'buy_price': buy_trade['price'],
-                            'sell_price': trade['price'],
-                            'buy_cost': buy_trade['total_cost'] * (matched_shares / original_shares),
-                            'sell_proceeds': trade['total_proceeds'] * (matched_shares / trade['shares']),
-                        }
-                    )
-
-                    if self.debug:
-                        print(
-                            f'Created trade pair: Buy: {buy_trade["date"].strftime("%Y-%m-%d")}, '
-                            f'Sell: {trade["date"].strftime("%Y-%m-%d")}, Shares: {matched_shares}'
-                        )
-
-                    remaining_shares -= matched_shares
-                    buy_trade['shares'] -= matched_shares
-
-                    if buy_trade['shares'] == 0:
-                        current_buy_trades.pop(0)
-                        if self.debug:
-                            print('Removed fully matched buy trade')
-
-        if self.debug:
-            print(f'Total trade pairs created: {len(trade_pairs)}')
-
-        return trade_pairs
+        """Get trade pairs — delegates to performance_metrics module."""
+        return get_trade_pairs(self.trades, self.debug)
 
     def visualize_results(self, show_plot=True):
-        """Visualize results"""
-        if self.equity_df.empty:
-            print('No data to visualize.')
-            return
-
-        _setup_matplotlib_backend()
-
-        # Create subplots
-        _fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(15, 16))
-
-        # Price chart and trade points
-        ax1.plot(self.price_data.index, self.price_data['adjusted_close'], label=f'{self.symbol} Price')
-
-        # Display trade points
-        for trade in self.trades:
-            if trade['action'] == 'BUY':
-                ax1.scatter(trade['date'], trade['price'], color='green', marker='^', s=100, label='Buy')
-            elif trade['action'] == 'SELL':
-                # Check if this was a stop loss by checking the previous entry price
-                trade_idx = self.trades.index(trade)
-                if trade_idx > 0:
-                    prev_trade = self.trades[trade_idx - 1]
-                    if prev_trade['action'] == 'BUY':
-                        entry_price = prev_trade['price']
-                        stop_loss_price = entry_price * (1 - self.stop_loss_pct)
-
-                        # Determine if this was a stop loss
-                        if trade['price'] <= stop_loss_price:
-                            # Display stop loss trades with special markers
-                            if self.use_trailing_stop:
-                                # Display in blue for trailing stop
-                                ax1.scatter(
-                                    trade['date'],
-                                    trade['price'],
-                                    color='blue',
-                                    marker='x',
-                                    s=150,
-                                    label='Trailing Stop',
-                                )
-                            else:
-                                # Display in purple for regular stop loss
-                                ax1.scatter(
-                                    trade['date'], trade['price'], color='purple', marker='x', s=150, label='Stop Loss'
-                                )
-                        else:
-                            # Regular sell
-                            ax1.scatter(trade['date'], trade['price'], color='red', marker='v', s=100, label='Sell')
-
-        # Remove duplicate labels
-        handles, labels = ax1.get_legend_handles_labels()
-        by_label = dict(zip(labels, handles))
-        ax1.legend(by_label.values(), by_label.keys(), loc='center left', bbox_to_anchor=(0.02, 0.5))
-
-        ax1.set_title(f'{self.symbol} Price Chart with Trade Points')
-
-        # Breadth Index and moving averages
-        ax2.plot(self.breadth_index.index, self.breadth_index, label='Breadth Index')
-        ax2.plot(self.short_ma_line.index, self.short_ma_line, label=f'{self.short_ma}{self.ma_type.upper()}')
-        ax2.plot(self.long_ma_line.index, self.long_ma_line, label=f'{self.long_ma}{self.ma_type.upper()}')
-
-        # Set background color (based on trend)
-        for i in range(len(self.long_ma_trend) - 1):
-            if self.long_ma_trend.iloc[i] == -1 and self.short_ma_line.iloc[i] < self.long_ma_line.iloc[i]:
-                ax2.axvspan(
-                    self.long_ma_line.index[i], self.long_ma_line.index[i + 1], color=(1.0, 0.9, 0.96), alpha=0.3
-                )
-
-        # Detect and display background color change points
-        white_to_pink_changes = []  # White to pink change (exit)
-        pink_to_white_changes = []  # Pink to white change (entry)
-
-        # Only detect background color changes if use_background_color_signals is enabled
-        if self.use_background_color_signals:
-            for i in range(1, len(self.long_ma_trend)):
-                prev_trend = self.long_ma_trend.iloc[i - 1]
-                prev_short_ma = self.short_ma_line.iloc[i - 1]
-                prev_long_ma = self.long_ma_line.iloc[i - 1]
-
-                # Today's data
-                current_trend = self.long_ma_trend.iloc[i]
-                current_short_ma = self.short_ma_line.iloc[i]
-                current_long_ma = self.long_ma_line.iloc[i]
-
-                # White to pink change (exit)
-                prev_condition = not (prev_trend == -1 and prev_short_ma < prev_long_ma)
-                current_condition = current_trend == -1 and current_short_ma < current_long_ma
-
-                if prev_condition and current_condition and current_long_ma >= self.background_exit_threshold:
-                    white_to_pink_changes.append(self.long_ma_line.index[i])
-
-                # Pink to white change (entry)
-                prev_condition = prev_trend == -1 and prev_short_ma < prev_long_ma
-                current_condition = not (current_trend == -1 and current_short_ma < current_long_ma)
-
-                if prev_condition and current_condition and current_long_ma >= self.background_exit_threshold:
-                    pink_to_white_changes.append(self.long_ma_line.index[i])
-
-        # Display white to pink change points (exit)
-        if white_to_pink_changes and self.use_background_color_signals:
-            ax2.scatter(
-                white_to_pink_changes,
-                self.long_ma_line[white_to_pink_changes],
-                color='orange',
-                marker='x',
-                s=150,
-                label=f'White to Pink (Exit, MA≥{self.background_exit_threshold:.2f})',
-            )
-
-        # Display pink to white change points (entry)
-        if pink_to_white_changes and self.use_background_color_signals:
-            ax2.scatter(
-                pink_to_white_changes,
-                self.long_ma_line[pink_to_white_changes],
-                color='green',
-                marker='^',
-                s=150,
-                label=f'Pink to White (Entry, MA≥{self.background_exit_threshold:.2f})',
-            )
-
-        # Display signal points
-        ax2.scatter(
-            self.short_ma_bottoms,
-            self.short_ma_line[self.short_ma_bottoms],
-            color='green',
-            marker='^',
-            s=100,
-            label=f'{self.short_ma}{self.ma_type.upper()} Bottom',
-        )
-        ax2.scatter(
-            self.long_ma_bottoms,
-            self.long_ma_line[self.long_ma_bottoms],
-            color='blue',
-            marker='^',
-            s=100,
-            label=f'{self.long_ma}{self.ma_type.upper()} Bottom',
-        )
-        ax2.scatter(
-            self.peaks,
-            self.long_ma_line[self.peaks],
-            color='red',
-            marker='v',
-            s=100,
-            label=f'{self.long_ma}{self.ma_type.upper()} Peak',
-        )
-
-        ax2.set_title('Breadth Index and Moving Averages')
-        ax2.legend(loc='center left', bbox_to_anchor=(0.02, 0.5))
-
-        # Equity curve comparison
-        initial_price = self.price_data['adjusted_close'].iloc[0]
-        buy_hold_shares = int(self.initial_capital / (initial_price * (1 + self.slippage)))
-        buy_hold_equity = self.price_data['adjusted_close'] * buy_hold_shares
-
-        ax3.plot(self.equity_df.index, self.equity_df['equity'], label='Strategy')
-        ax3.plot(buy_hold_equity.index, buy_hold_equity, label='Buy & Hold')
-        ax3.set_title('Equity Curve Comparison')
-        ax3.legend(loc='center left', bbox_to_anchor=(0.02, 0.5))
-
-        # Drawdown chart
-        equity = self.equity_df['equity']
-        rolling_max = equity.expanding().max()
-        drawdown = equity / rolling_max - 1
-
-        # Buy & Hold's drawdown calculation
-        buy_hold_rolling_max = buy_hold_equity.expanding().max()
-        buy_hold_drawdown = buy_hold_equity / buy_hold_rolling_max - 1
-
-        # Plot both drawdowns
-        ax4.fill_between(drawdown.index, drawdown, 0, color='red', alpha=0.3, label='Strategy')
-        ax4.plot(drawdown.index, drawdown, color='red', linewidth=1)
-        ax4.plot(buy_hold_drawdown.index, buy_hold_drawdown, color='blue', linewidth=1, label='Buy & Hold')
-        ax4.fill_between(buy_hold_drawdown.index, buy_hold_drawdown, 0, color='blue', alpha=0.3)
-
-        ax4.set_title('Drawdown Comparison')
-        ax4.set_ylabel('Drawdown (%)')
-        ax4.grid(True)
-        ax4.legend(loc='center left', bbox_to_anchor=(0.02, 0.5))
-
-        # Add horizontal line at -10% for reference
-        ax4.axhline(y=-0.1, color='darkred', linestyle='--', alpha=0.7)
-        ax4.text(drawdown.index[-1], -0.1, ' -10%', verticalalignment='center')
-
-        plt.tight_layout()
-        plt.savefig(f'reports/backtest_results_{self.symbol}.png')
-        if show_plot:
-            plt.show()  # Display chart
-        plt.close(_fig)
-
-        # Generate Plotly breadth chart with TV signal markers (if TV mode)
-        if self.tv_mode and hasattr(self, '_tv_peak_signals'):
-            # Merge long + short trough signals into one dict for the chart
-            tv_trough_merged = {}
-            for sig_dict in (
-                getattr(self, '_tv_long_trough_signals', {}),
-                getattr(self, '_tv_short_trough_signals', {}),
-            ):
-                for k, v in sig_dict.items():
-                    if k not in tv_trough_merged:
-                        tv_trough_merged[k] = v
-
-            # Extract S&P500 price Series for the chart (expects 1-D, not multi-column DF)
-            if 'SPY' in self.sp500_data.columns:
-                sp500_price_series = self.sp500_data['SPY']
-            else:
-                # Fallback: use the backtest symbol's price data
-                sp500_price_series = self.price_data['adjusted_close']
-                sp500_price_series.name = self.symbol
-
-            try:
-                plot_breadth_and_sp500_with_peaks(
-                    self.above_ma,
-                    sp500_price_series,
-                    short_ma_period=self.short_ma,
-                    start_date=self.start_date,
-                    end_date=self.end_date,
-                    output_dir='reports',
-                    tv_peak_signals=self._tv_peak_signals,
-                    tv_trough_signals=tv_trough_merged,
-                )
-            except Exception as e:
-                print(f'Plotly chart generation skipped: {e}')
+        """Visualize results — delegates to visualization module."""
+        try:
+            from backtest.visualization import visualize_backtest_results
+        except ModuleNotFoundError:
+            from visualization import visualize_backtest_results
+        visualize_backtest_results(self, show_plot)
 
     def save_trade_log(self, filename=None):
-        """Save trade log to CSV file (Phase 1)"""
-        if not self.trade_log:
-            print('No trades to save.')
-            return None
-
-        # Generate default filename if not provided
-        if filename is None:
-            filename = f'reports/trade_log_{self.symbol}_{self.start_date}_{self.end_date}.csv'
-
-        # Convert trade_log to DataFrame
-        trade_df = pd.DataFrame(self.trade_log)
-
-        # Format datetime columns
-        trade_df['entry_date'] = pd.to_datetime(trade_df['entry_date']).dt.strftime('%Y-%m-%d')
-        trade_df['exit_date'] = pd.to_datetime(trade_df['exit_date']).dt.strftime('%Y-%m-%d')
-
-        # Save to CSV
-        trade_df.to_csv(filename, index=False)
-        print(f'\nTrade log saved to: {filename}')
-
-        return filename
+        """Save trade log to CSV file — delegates to visualization module."""
+        try:
+            from backtest.visualization import save_trade_log_csv
+        except ModuleNotFoundError:
+            from visualization import save_trade_log_csv
+        return save_trade_log_csv(self.trade_log, self.symbol, self.start_date, self.end_date, filename)
 
     # --- TradingView alignment methods ---
 
@@ -2147,151 +1647,12 @@ class Backtest:
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Backtest using Market Breadth indicator')
-    parser.add_argument(
-        '--start_date',
-        type=str,
-        help='Backtest start date (YYYY-MM-DD format). If not specified, 10 years before end date',
-    )
-    parser.add_argument(
-        '--end_date', type=str, help='Backtest end date (YYYY-MM-DD format). If not specified, current date'
-    )
-    parser.add_argument('--short_ma', type=int, default=5, help='Short-term moving average period (default: 5)')
-    parser.add_argument('--long_ma', type=int, default=200, help='Long-term moving average period (default: 200)')
-    parser.add_argument(
-        '--initial_capital', type=float, default=50000, help='Initial investment amount (default: 50000 dollars)'
-    )
-    parser.add_argument('--slippage', type=float, default=0.0005, help='Slippage (default: 0.05%%)')
-    parser.add_argument('--commission', type=float, default=0.0001, help='Transaction fee (default: 0.01%%)')
-    parser.add_argument('--use_saved_data', action='store_true', help='Whether to use saved data')
-    parser.add_argument('--debug', action='store_true', help='Enable debug mode')
-    parser.add_argument('--threshold', type=float, default=0.5, help='Threshold for bottom detection (default: 0.5)')
-    parser.add_argument('--ma_type', type=str, default='ema', help='Moving average type (default: ema)')
-    parser.add_argument('--symbol', type=str, default='SSO', help='Stock symbol (default: SSO)')
-    parser.add_argument('--stop_loss_pct', type=float, default=0.08, help='Stop loss percentage (default: 8%%)')
-    parser.add_argument('--disable_short_ma_entry', action='store_true', help='Disable short-term moving average entry')
-    parser.add_argument('--use_trailing_stop', action='store_true', help='Use trailing stop instead of fixed stop loss')
-    parser.add_argument('--trailing_stop_pct', type=float, default=0.2, help='Trailing stop percentage (default: 20%%)')
-    parser.add_argument(
-        '--background_exit_threshold', type=float, default=0.5, help='Background exit threshold (default: 0.5)'
-    )
-    parser.add_argument(
-        '--use_background_color_signals',
-        action='store_true',
-        help='Use background color change signals for entry and exit',
-    )
-    parser.add_argument(
-        '--partial_exit', action='store_true', help='Exit with half of the position when exit signal is triggered'
-    )
-    parser.add_argument(
-        '--no_show_plot', action='store_true', help='Do not show plot after saving (default: show plot)'
-    )
+    try:
+        from backtest.cli import build_argument_parser
+    except ModuleNotFoundError:
+        from cli import build_argument_parser
 
-    # TradingView alignment options
-    parser.add_argument(
-        '--tv_mode',
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help='TradingView-aligned signal detection (default: on)',
-    )
-    parser.add_argument('--tv_pine_compat', action='store_true', help='Enable Pine-compatible TV backtest mode')
-    parser.add_argument(
-        '--tv_breadth_csv',
-        type=str,
-        default=None,
-        help='Path to breadth CSV (e.g., S5TH export with date/close columns)',
-    )
-    parser.add_argument(
-        '--tv_price_csv',
-        type=str,
-        default=None,
-        help='Path to TV-exported price CSV (date,open,high,low,close)',
-    )
-    parser.add_argument(
-        '--pivot_len_long', type=int, default=20, help='Pivot confirmation bars for long MA (default: 20)'
-    )
-    parser.add_argument(
-        '--pivot_len_short', type=int, default=10, help='Pivot confirmation bars for short MA (default: 10)'
-    )
-    parser.add_argument(
-        '--prom_thresh_long', type=float, default=0.005, help='Prominence threshold for long MA pivots (default: 0.005)'
-    )
-    parser.add_argument(
-        '--prom_thresh_short', type=float, default=0.03, help='Prominence threshold for short MA pivots (default: 0.03)'
-    )
-    parser.add_argument('--peak_level', type=float, default=0.70, help='Peak exit level threshold (default: 0.70)')
-    parser.add_argument(
-        '--trough_level_long', type=float, default=0.40, help='Long MA trough entry level (default: 0.40)'
-    )
-    parser.add_argument('--trough_level_short', type=float, default=0.20, help='Short MA trough level (default: 0.20)')
-    parser.add_argument(
-        '--pyramiding',
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help='Allow multiple entries (pyramiding). Default: off (single position, 100%% equity)',
-    )
-
-    # Enhanced TV mode options
-    parser.add_argument(
-        '--two_stage_exit', action='store_true', help='Enable two-stage exit (50%% profit + trend break)'
-    )
-    parser.add_argument(
-        '--stage2_exit_mode',
-        type=str,
-        default='trend_break',
-        help='Stage 2 exit mode: trend_break or ma_cross (default: trend_break)',
-    )
-    parser.add_argument('--use_volatility_stop', action='store_true', help='Use volatility-based stop instead of fixed')
-    parser.add_argument('--vol_atr_period', type=int, default=14, help='Volatility calculation period (default: 14)')
-    parser.add_argument(
-        '--vol_atr_multiplier', type=float, default=2.5, help='Volatility stop multiplier (default: 2.5)'
-    )
-    parser.add_argument(
-        '--vol_trailing_mode',
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help='Volatility stop trails highest price (use --no-vol_trailing_mode to disable)',
-    )
-    parser.add_argument(
-        '--bullish_regime_suppression', action='store_true', help='Suppress peak exits in bullish regime'
-    )
-    parser.add_argument(
-        '--bullish_breadth_threshold',
-        type=float,
-        default=0.55,
-        help='Breadth threshold for bullish regime (default: 0.55)',
-    )
-
-    # Chart-mode option
-    parser.add_argument(
-        '--chart_mode',
-        action='store_true',
-        help='Use chart-style peak/trough detection (find_peaks with distance=50 for long MA, '
-        'no level filters). Walk-forward: signal dates may differ from chart peak/trough positions',
-    )
-
-    # Weekly trailing stop options
-    parser.add_argument(
-        '--enable_weekly_trailing',
-        action='store_true',
-        help='Enable weekly trailing stop exit (auto-disables tv_mode)',
-    )
-    parser.add_argument(
-        '--weekly_trailing_type',
-        type=str,
-        default='weekly_ema',
-        choices=['weekly_ema', 'weekly_nweek_low'],
-        help='Weekly trailing type (default: weekly_ema)',
-    )
-    parser.add_argument('--weekly_ema_period', type=int, default=10, help='Weekly EMA period (default: 10)')
-    parser.add_argument('--weekly_nweek_low_period', type=int, default=4, help='N-week low period (default: 4)')
-    parser.add_argument(
-        '--weekly_transition_weeks',
-        type=int,
-        default=3,
-        help='Transition weeks before weekly trailing activates (default: 3)',
-    )
-
+    parser = build_argument_parser()
     args = parser.parse_args()
 
     # Set default values if dates are not specified
