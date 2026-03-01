@@ -10,7 +10,7 @@
             "request": "launch",
             "program": "${file}",
             "console": "integratedTerminal",
-            "python": "/Users/takueisaotome/.virtualenvs/alpaca/bin/python"
+            "python": "${userHome}/.virtualenvs/alpaca/bin/python"
         },
         {
             "name": "Python Debugger: Market Breadth Test Mode",
@@ -18,7 +18,7 @@
             "request": "launch",
             "program": "trade/run_market_breadth_trade.py",
             "console": "integratedTerminal",
-            "python": "/Users/takueisaotome/.virtualenvs/alpaca/bin/python",
+            "python": "${userHome}/.virtualenvs/alpaca/bin/python",
             "args": ["--testmode", "--test_date", "2025-04-25"]
         }
     ]
