@@ -31,7 +31,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*.py" = ["E501", "E402"]
+"tests/*.py" = ["E501"]
 
 [tool.ruff.format]
 quote-style = "single"
@@ -45,11 +45,26 @@ ignore-words-list = "ags,hist,thr,assertIn,trough"
 exclude_dirs = ["tests", "archive", "venv311"]
 skips = ["B101"]
 
-# [tool.mypy]
-# python_version = "3.10"
-# warn_return_any = true
-# warn_unused_configs = true
-# ignore_missing_imports = true
-# exclude = ["archive/", "venv311/"]
-# # TODO: Enable when type hints are added across the codebase
-# # Currently only fmp_data_fetcher.py has type annotations
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["fmp_data_fetcher.py"]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+warn_return_any = true
+warn_unused_configs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unreachable = true
+no_implicit_optional = true
+strict_equality = true
+enable_error_code = [
+    "ignore-without-code",
+    "redundant-cast",
+    "truthy-bool",
+]
+exclude = ["archive/", "venv311/"]

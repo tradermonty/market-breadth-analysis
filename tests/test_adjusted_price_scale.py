@@ -5,14 +5,9 @@ Verifies that stop loss and fill price logic uses adjusted OHLC columns
 triggers when stock splits cause raw and adjusted prices to diverge.
 """
 
-import os
-import sys
 import unittest
 
 import pandas as pd
-
-# Ensure project root is on path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backtest.backtest import Backtest
 

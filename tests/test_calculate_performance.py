@@ -3,14 +3,11 @@
 Verifies CAGR, Sharpe, B&H guards added by the code review fix.
 """
 
-import os
-import sys
 import unittest
 
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from backtest.backtest import Backtest
 
 

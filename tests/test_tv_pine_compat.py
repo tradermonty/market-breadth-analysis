@@ -6,14 +6,9 @@ Tests verify:
 3. Entry same-bar stop skip: Phase 0 entry skips Phase 1 stop on the same bar
 """
 
-import os
-import sys
 import unittest
 
 import pandas as pd
-
-# Ensure project root is on path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backtest.backtest import Backtest
 

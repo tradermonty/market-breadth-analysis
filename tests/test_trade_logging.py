@@ -4,13 +4,10 @@ TDD approach - Tests written before implementation
 """
 
 import os
-import sys
 import unittest
 
 import pandas as pd
 
-# Add parent directory to path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from backtest.backtest import Backtest
 
 

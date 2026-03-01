@@ -6,15 +6,11 @@ All file output tests use tempfile.mkdtemp() to avoid polluting reports/.
 
 import os
 import shutil
-import sys
 import tempfile
 import unittest
 
 import numpy as np
 import pandas as pd
-
-# Ensure project root is on the path so we can import market_breadth
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from market_breadth import (
     detect_bearish_regions,

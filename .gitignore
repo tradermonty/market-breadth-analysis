@@ -25,3 +25,14 @@ trade/entry_prices_*.json
 # Sub-projects (managed independently)
 rsp_breadth_strategy/
 schd_schg_strategy/
+
+# IDE
+.idea/
+
+# Type checking
+.mypy_cache/
+
+# Build artifacts
+*.egg-info/
+dist/
+build/

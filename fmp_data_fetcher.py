@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 class FMPDataFetcher:
     """Financial Modeling Prep API クライアント"""
 
-    def __init__(self, api_key: str = None):
+    def __init__(self, api_key: str | None = None):
         """
         FMPDataFetcherの初期化
 
@@ -42,7 +42,7 @@ class FMPDataFetcher:
         self.rate_limiting_active = False  # 動的制御フラグ
         self.calls_per_minute = 750  # Premium planの最大値（限界まで使用）
         self.calls_per_second = 12.5  # 750/60 = 12.5 calls/sec
-        self.call_timestamps = []
+        self.call_timestamps: list[datetime] = []
         self.last_request_time = datetime(1970, 1, 1)
         self.min_request_interval = 0.08  # 1/12.5 = 0.08秒間隔（理論値）
         self.rate_limit_cooldown_until = datetime(1970, 1, 1)  # 制限解除時刻
@@ -52,7 +52,7 @@ class FMPDataFetcher:
 
         logger.info('FMP Data Fetcher initialized successfully')
 
-    def _rate_limit_check(self):
+    def _rate_limit_check(self) -> None:
         """最大パフォーマンス制限チェック - 429発生まで制限を最小限に"""
         now = datetime.now()
 
@@ -100,14 +100,14 @@ class FMPDataFetcher:
 
         self.last_request_time = now
 
-    def _activate_rate_limiting(self, duration_minutes: int = 5):
+    def _activate_rate_limiting(self, duration_minutes: int = 5) -> None:
         """429エラー発生時にレート制限を有効化"""
         self.rate_limiting_active = True
         self.max_performance_mode = False
         self.rate_limit_cooldown_until = datetime.now() + timedelta(minutes=duration_minutes)
         logger.warning(f'Rate limiting activated for {duration_minutes} minutes due to 429 error')
 
-    def _make_request(self, endpoint: str, params: dict = None, max_retries: int = 3) -> dict | None:
+    def _make_request(self, endpoint: str, params: dict | None = None, max_retries: int = 3) -> dict | list | None:
         """
         FMP APIへのリクエスト実行（リトライと指数バックオフ付き）
 
@@ -163,7 +163,7 @@ class FMPDataFetcher:
 
                 response.raise_for_status()
 
-                data = response.json()
+                data: dict[str, Any] | list[Any] | None = response.json()
 
                 # Check for empty or invalid responses
                 if data is None:
@@ -195,7 +195,7 @@ class FMPDataFetcher:
         return None
 
     def get_earnings_calendar(
-        self, from_date: str, to_date: str, target_symbols: list[str] = None, us_only: bool = True
+        self, from_date: str, to_date: str, target_symbols: list[str] | None = None, us_only: bool = True
     ) -> list[dict]:
         """
         決算カレンダーをBulk取得 (Premium+ plan required)
@@ -244,7 +244,7 @@ class FMPDataFetcher:
 
         # 期間が90日を超える場合は分割
         max_days = 30  # 30日ごとに分割（安全マージン）
-        all_data = []
+        all_data: list[Any] = []
 
         current_start = start_dt
         while current_start < end_dt:
@@ -294,7 +294,7 @@ class FMPDataFetcher:
         return all_data
 
     def _get_earnings_calendar_alternative(
-        self, from_date: str, to_date: str, target_symbols: list[str] = None, us_only: bool = True
+        self, from_date: str, to_date: str, target_symbols: list[str] | None = None, us_only: bool = True
     ) -> list[dict]:
         """
         代替決算カレンダー取得
@@ -607,7 +607,7 @@ class FMPDataFetcher:
 
         if data and isinstance(data, list) and len(data) > 0:
             logger.debug('Successfully fetched profile using v3 endpoint')
-            return data[0]
+            return data[0]  # type: ignore[no-any-return]
 
         logger.warning(f'Failed to fetch company profile for {symbol}')
         return None
@@ -670,7 +670,7 @@ class FMPDataFetcher:
 
         return df
 
-    def _parse_timing(self, time_str: str) -> str:
+    def _parse_timing(self, time_str: str) -> str | None:
         """
         FMPの時間情報をBefore/AfterMarket形式に変換
 
@@ -759,12 +759,12 @@ class FMPDataFetcher:
         if isinstance(data, dict):
             # Standard format with 'historical' field
             if 'historical' in data:
-                return data['historical']
+                return data['historical']  # type: ignore[no-any-return]
             # Alternative format with direct data
             elif 'results' in data:
-                return data['results']
+                return data['results']  # type: ignore[no-any-return]
             # Chart format
-            elif isinstance(data, dict) and 'date' in str(data):
+            elif 'date' in str(data):
                 return [data]
         elif isinstance(data, list):
             # Direct list format

@@ -11,14 +11,10 @@ Tests cover:
 8. chart_mode + weekly_trailing combo works
 """
 
-import os
-import sys
 import unittest
 
 import numpy as np
 import pandas as pd
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backtest.backtest import Backtest
 from backtest.weekly_trailing import aggregate_to_weekly, check_weekly_trailing_stop, is_week_end

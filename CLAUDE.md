@@ -42,16 +42,12 @@ Market Breadth Analysis Tool - A quantitative trading system that analyzes S&P50
 
 ### Run All Tests
 ```bash
-python tests/test_trade_logging.py      # Trade logging unit tests (11 cases)
-python tests/test_tv_pine_compat.py     # TradingView Pine compat tests (7 cases)
-python tests/test_market_breadth_trader.py  # Market breadth trader tests (9 cases)
-python tests/test_sp500_fetch.py        # Data fetching tests
-python tests/test_market_breadth_utils.py
+python -m pytest tests/ -v     # All 10 test files
 ```
 
 ### Run Single Test
 ```bash
-python -m unittest tests.test_trade_logging.TestTradeLogging.test_06_pnl_calculation
+python -m pytest tests/test_trade_logging.py::TestTradeLogging::test_06_pnl_calculation -v
 ```
 
 ### Test Strategy

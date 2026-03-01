@@ -24,13 +24,16 @@ jobs:
           python-version: '3.11'
 
       - name: Install tools
-        run: pip install ruff codespell tomli
+        run: pip install ruff codespell tomli mypy pandas-stubs types-requests types-tqdm
 
       - name: Ruff lint
         run: ruff check .
 
       - name: Ruff format check
         run: ruff format --check .
+
+      - name: Mypy type check
+        run: mypy --config-file pyproject.toml
 
       - name: Codespell
         run: codespell
@@ -83,8 +86,4 @@ jobs:
           pip install -r requirements.txt --ignore-installed PyQt5
 
       - name: Run tests
-        run: |
-          python tests/test_trade_logging.py
-          python tests/test_plotly_chart.py
-          PYTHONPATH=. python tests/test_market_breadth_utils.py
-          python tests/test_market_breadth_trader.py
+        run: python -m pytest tests/ -v --tb=short

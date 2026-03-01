@@ -9,15 +9,12 @@ logic in market_breadth.py:
 - No level thresholds, no 20-day breadth min check, no len > long_ma gate
 """
 
-import os
-import sys
 import unittest
 
 import numpy as np
 import pandas as pd
 from scipy.signal import find_peaks
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from backtest.backtest import Backtest
 
 
