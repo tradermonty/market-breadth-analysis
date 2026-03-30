@@ -9,6 +9,8 @@ reports/*
 !reports/backtest_results_summary.md
 !reports/backtest_results_summary.csv
 !reports/backtest_results_sample.png
+!reports/downtrend_forecast.html
+!reports/index.html
 archive/*
 !archive/.gitkeep
 __pycache__/
