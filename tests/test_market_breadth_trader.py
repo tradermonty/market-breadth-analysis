@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 
-from trade.run_market_breadth_trade import MarketBreadthTrader
+from trade.run_market_breadth_trade import MarketBreadthTrader, _now_et
 
 # Test logging configuration
 logging.basicConfig(level=logging.INFO)
@@ -43,6 +43,9 @@ class TestMarketBreadthTrader(unittest.TestCase):
         calendar_day = Mock()
         calendar_day.close = '16:00'
         self.mock_api.get_calendar.return_value = [calendar_day]
+
+        # MJ-003: Reset acted signals to prevent cross-test contamination
+        self.trader._acted_signals = set()
 
     def test_initialization(self):
         """Test initialization"""
@@ -268,6 +271,7 @@ class TestMarketBreadthTrader(unittest.TestCase):
         # Set up position with entry price
         self.trader.current_position = 100
         self.trader.entry_prices = [50.0]
+        self.trader.entry_lots = [{'price': 50.0, 'shares': self.trader.current_position}]
 
         # Set up mock: price below stop loss (50 * (1 - 0.08) = 46.0)
         self.mock_bar.c = 45.0
@@ -340,6 +344,7 @@ class TestMarketBreadthTrader(unittest.TestCase):
         # Set up existing position
         self.trader.current_position = 100
         self.trader.entry_prices = [50.0]
+        self.trader.entry_lots = [{'price': 50.0, 'shares': self.trader.current_position}]
         self.trader.no_pyramiding = True
 
         # Mock _sync_position_from_broker to preserve our test state
@@ -351,7 +356,7 @@ class TestMarketBreadthTrader(unittest.TestCase):
         self.mock_api.get_latest_bar.return_value = self.mock_bar
 
         # Set up a long_ma_bottom signal for today
-        today = pd.to_datetime(datetime.now().strftime('%Y-%m-%d'))
+        today = pd.to_datetime(_now_et().strftime('%Y-%m-%d'))
         self.trader.long_ma_bottoms = [today]
         self.trader.short_ma_bottoms = []
         self.trader.peaks = []
@@ -367,6 +372,7 @@ class TestMarketBreadthTrader(unittest.TestCase):
         # Set up existing position
         self.trader.current_position = 100
         self.trader.entry_prices = [50.0]
+        self.trader.entry_lots = [{'price': 50.0, 'shares': self.trader.current_position}]
         self.trader.no_pyramiding = False
 
         # Mock _sync_position_from_broker to preserve our test state
@@ -378,7 +384,7 @@ class TestMarketBreadthTrader(unittest.TestCase):
         self.mock_api.get_latest_bar.return_value = self.mock_bar
 
         # Set up a long_ma_bottom signal for today
-        today = pd.to_datetime(datetime.now().strftime('%Y-%m-%d'))
+        today = pd.to_datetime(_now_et().strftime('%Y-%m-%d'))
         self.trader.long_ma_bottoms = [today]
         self.trader.short_ma_bottoms = []
         self.trader.peaks = []
@@ -411,6 +417,7 @@ class TestMarketBreadthTrader(unittest.TestCase):
         """Test that _sync_position_from_broker clears entry_prices when broker has no position"""
         # Simulate stale entry_prices from a previous session
         self.trader.entry_prices = [50.0, 52.0]
+        self.trader.entry_lots = [{'price': 50.0, 'shares': 50}, {'price': 52.0, 'shares': 50}]
 
         # Broker returns 404 (no position)
         self.mock_api.get_position.side_effect = Exception('position does not exist')
@@ -606,7 +613,7 @@ class TestMarketBreadthTrader(unittest.TestCase):
         self.mock_api.get_latest_bar.return_value = self.mock_bar
 
         # Set up a long_ma_bottom signal for today
-        today = pd.to_datetime(datetime.now().strftime('%Y-%m-%d'))
+        today = pd.to_datetime(_now_et().strftime('%Y-%m-%d'))
         self.trader.long_ma_bottoms = [today]
         self.trader.short_ma_bottoms = []
         self.trader.peaks = []
@@ -713,15 +720,16 @@ class TestMarketBreadthTrader(unittest.TestCase):
         tmp_dir = tempfile.mkdtemp()
         trader._entry_prices_path = lambda: os.path.join(tmp_dir, 'entry_prices_TEST.json')
 
+        trader.entry_lots = [{'price': 55.0, 'shares': 100}, {'price': 60.0, 'shares': 50}]
         trader.entry_prices = [55.0, 60.0]
         trader._save_entry_prices()
 
-        # Verify file exists and contents are correct
+        # Verify file exists and contents are correct (MJ-002: new format)
         path = trader._entry_prices_path()
         self.assertTrue(os.path.exists(path))
         with open(path) as f:
             saved = json.load(f)
-        self.assertEqual(saved, [55.0, 60.0])
+        self.assertEqual(saved, {'lots': [{'price': 55.0, 'shares': 100}, {'price': 60.0, 'shares': 50}]})
 
         # Cleanup
         os.remove(path)
@@ -729,29 +737,34 @@ class TestMarketBreadthTrader(unittest.TestCase):
 
     @patch('trade.run_market_breadth_trade.MarketBreadthTrader._initialize_alpaca')
     def test_entry_prices_recovered_from_disk(self, mock_init):
-        """Entry prices are recovered from disk before falling back to broker"""
+        """Entry lots are recovered from disk when format matches broker qty (MJ-002)"""
         mock_api = Mock()
         mock_init.return_value = mock_api
 
         trader = MarketBreadthTrader(symbol='TEST')
 
-        # Write entry prices to disk
+        # Write entry lots to disk in new format
         tmp_dir = tempfile.mkdtemp()
         entry_path = os.path.join(tmp_dir, 'entry_prices_TEST.json')
         trader._entry_prices_path = lambda: entry_path
+        new_format = {'lots': [{'price': 55.0, 'shares': 60}, {'price': 60.0, 'shares': 40}]}
         with open(entry_path, 'w') as f:
-            json.dump([55.0, 60.0], f)
+            json.dump(new_format, f)
 
-        # Simulate broker position without local entry_prices
+        # Simulate broker position without local entry_lots
         mock_position = Mock()
-        mock_position.qty = 100
+        mock_position.qty = 100  # 60 + 40 = 100 matches
         mock_position.avg_entry_price = '57.5'
         mock_api.get_position.return_value = mock_position
 
         trader.entry_prices = []
+        trader.entry_lots = []
         trader._sync_position_from_broker()
 
-        # Should recover from disk (2 prices), not broker (1 avg)
+        # Should recover lots from disk (2 lots totaling 100 shares)
+        self.assertEqual(len(trader.entry_lots), 2)
+        self.assertEqual(trader.entry_lots[0]['price'], 55.0)
+        self.assertEqual(sum(lot['shares'] for lot in trader.entry_lots), 100)
         self.assertEqual(trader.entry_prices, [55.0, 60.0])
         self.assertEqual(trader.current_position, 100)
 
@@ -785,6 +798,7 @@ class TestMarketBreadthTrader(unittest.TestCase):
         """Partial fill on stop loss correctly updates remaining position"""
         self.trader.current_position = 100
         self.trader.entry_prices = [50.0]
+        self.trader.entry_lots = [{'price': 50.0, 'shares': self.trader.current_position}]
 
         # Price below stop loss
         self.mock_bar.c = 45.0
@@ -828,7 +842,7 @@ class TestMarketBreadthTrader(unittest.TestCase):
         self.mock_api.get_latest_bar.return_value = self.mock_bar
 
         # Set up a long_ma_bottom signal for today
-        today = pd.to_datetime(datetime.now().strftime('%Y-%m-%d'))
+        today = pd.to_datetime(_now_et().strftime('%Y-%m-%d'))
         self.trader.long_ma_bottoms = [today]
         self.trader.short_ma_bottoms = []
         self.trader.peaks = []
@@ -873,7 +887,7 @@ class TestMarketBreadthTrader(unittest.TestCase):
         self.mock_api.get_latest_bar.return_value = self.mock_bar
 
         # Set up a long_ma_bottom signal for today
-        today = pd.to_datetime(datetime.now().strftime('%Y-%m-%d'))
+        today = pd.to_datetime(_now_et().strftime('%Y-%m-%d'))
         self.trader.long_ma_bottoms = [today]
         self.trader.short_ma_bottoms = []
         self.trader.peaks = []
@@ -901,7 +915,9 @@ class TestMarketBreadthTrader(unittest.TestCase):
 
         # current_position should reflect filled qty
         self.assertEqual(self.trader.current_position, 181)
-        self.assertEqual(self.trader.entry_prices, [55.0])
+        self.assertEqual(len(self.trader.entry_lots), 1)
+        self.assertEqual(self.trader.entry_lots[0]['price'], 55.0)
+        self.assertEqual(self.trader.entry_lots[0]['shares'], 181)
 
     # --- Step 1 test: shutdown path in _wait_for_fill ---
 

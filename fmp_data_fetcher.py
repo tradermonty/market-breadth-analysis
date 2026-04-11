@@ -9,6 +9,7 @@ import logging
 import os
 import time
 from datetime import datetime, timedelta
+from enum import Enum, auto
 from typing import Any
 
 import pandas as pd
@@ -17,6 +18,14 @@ import requests
 # ログ設定
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+class RateLimitState(Enum):
+    """Rate limiting state for FMP API (MJ-007: replaces two-boolean pattern)."""
+
+    MAX_PERFORMANCE = auto()  # No throttling until 429
+    NORMAL = auto()  # Theoretical interval enforced
+    CONSERVATIVE = auto()  # Post-429 cooldown mode
 
 
 class FMPDataFetcher:
@@ -34,77 +43,78 @@ class FMPDataFetcher:
             raise ValueError('FMP API key is required. Set FMP_API_KEY environment variable.')
 
         self.base_url = 'https://financialmodelingprep.com/api/v3'
-        self.alt_base_url = 'https://financialmodelingprep.com/api/v3'
         self.session = requests.Session()
 
-        # Maximum performance rate limiting - 750 calls/minフル活用
-        # Starter: 300 calls/min, Premium: 750 calls/min, Ultimate: 3000 calls/min
-        self.rate_limiting_active = False  # 動的制御フラグ
-        self.calls_per_minute = 750  # Premium planの最大値（限界まで使用）
-        self.calls_per_second = 12.5  # 750/60 = 12.5 calls/sec
+        # Rate limiting state (MJ-007: single enum replaces two booleans)
+        self._rate_state = RateLimitState.MAX_PERFORMANCE
+        self.calls_per_minute = 750  # Premium plan max
+        self.calls_per_second = 12.5  # 750/60
         self.call_timestamps: list[datetime] = []
         self.last_request_time = datetime(1970, 1, 1)
-        self.min_request_interval = 0.08  # 1/12.5 = 0.08秒間隔（理論値）
-        self.rate_limit_cooldown_until = datetime(1970, 1, 1)  # 制限解除時刻
-
-        # パフォーマンス最適化フラグ
-        self.max_performance_mode = True  # 429発生まで制限なし
+        self.min_request_interval = 0.08  # 1/12.5 seconds
+        self.rate_limit_cooldown_until = datetime(1970, 1, 1)
 
         logger.info('FMP Data Fetcher initialized successfully')
 
-    def _rate_limit_check(self) -> None:
-        """最大パフォーマンス制限チェック - 429発生まで制限を最小限に"""
-        now = datetime.now()
+    # Backward-compatible properties for code that reads the old flags
+    @property
+    def rate_limiting_active(self) -> bool:
+        return self._rate_state == RateLimitState.CONSERVATIVE
 
-        # クールダウン期間後の制限解除チェック
-        if self.rate_limiting_active and now > self.rate_limit_cooldown_until:
-            self.rate_limiting_active = False
-            self.max_performance_mode = True
+    @property
+    def max_performance_mode(self) -> bool:
+        return self._rate_state == RateLimitState.MAX_PERFORMANCE
+
+    def _now(self) -> datetime:
+        """Return current time. Override in tests for deterministic behavior."""
+        return datetime.now()
+
+    def _rate_limit_check(self) -> None:
+        """Rate limit check using single state enum (MJ-007)."""
+        now = self._now()
+
+        # Check cooldown expiry
+        if self._rate_state == RateLimitState.CONSERVATIVE and now > self.rate_limit_cooldown_until:
+            self._rate_state = RateLimitState.MAX_PERFORMANCE
             logger.info('Rate limiting deactivated - returning to maximum performance')
 
-        # 429エラー発生時のみ厳格な制限を適用
-        if self.rate_limiting_active:
-            self.max_performance_mode = False
-            # 保守的な制限を適用
+        if self._rate_state == RateLimitState.CONSERVATIVE:
+            # Conservative mode: strict throttling after 429
             time_since_last = (now - self.last_request_time).total_seconds()
-            if time_since_last < 0.2:  # 429発生時は0.2秒間隔
+            if time_since_last < 0.2:
                 sleep_time = 0.2 - time_since_last
                 logger.warning(f'Conservative rate limiting: sleeping {sleep_time:.3f}s')
                 time.sleep(sleep_time)
-                now = datetime.now()
+                now = self._now()
 
-            # 1分以内のコール履歴をフィルター
             self.call_timestamps = [ts for ts in self.call_timestamps if (now - ts).total_seconds() < 60]
 
-            # 保守的な1分間制限（300 calls/min）
             if len(self.call_timestamps) >= 300:
                 sleep_time = 60 - (now - self.call_timestamps[0]).total_seconds() + 1
                 logger.warning(f'Conservative per-minute limit: sleeping {sleep_time:.1f}s')
                 time.sleep(sleep_time)
-                now = datetime.now()
-        elif self.max_performance_mode:
-            # 最大パフォーマンスモード：429発生まで制限を完全に無効化
-            # ネットワーク遅延による自然なレート制限のみ
-            pass
-        else:
-            # 通常モード：理論値まで使用
+                now = self._now()
+
+        elif self._rate_state == RateLimitState.MAX_PERFORMANCE:
+            pass  # No throttling — network latency is the only limiter
+
+        elif self._rate_state == RateLimitState.NORMAL:
             time_since_last = (now - self.last_request_time).total_seconds()
             if time_since_last < self.min_request_interval:
                 sleep_time = self.min_request_interval - time_since_last
                 time.sleep(sleep_time)
-                now = datetime.now()
+                now = self._now()
 
-        # コール履歴の記録（429エラー時のみ）
-        if self.rate_limiting_active:
+        # Record call timestamps in conservative mode only
+        if self._rate_state == RateLimitState.CONSERVATIVE:
             self.call_timestamps.append(now)
 
         self.last_request_time = now
 
     def _activate_rate_limiting(self, duration_minutes: int = 5) -> None:
-        """429エラー発生時にレート制限を有効化"""
-        self.rate_limiting_active = True
-        self.max_performance_mode = False
-        self.rate_limit_cooldown_until = datetime.now() + timedelta(minutes=duration_minutes)
+        """Activate conservative rate limiting after 429 error."""
+        self._rate_state = RateLimitState.CONSERVATIVE
+        self.rate_limit_cooldown_until = self._now() + timedelta(minutes=duration_minutes)
         logger.warning(f'Rate limiting activated for {duration_minutes} minutes due to 429 error')
 
     def _make_request(self, endpoint: str, params: dict | None = None, max_retries: int = 3) -> dict | list | None:
@@ -1000,7 +1010,7 @@ class FMPDataFetcher:
         Returns:
             使用統計情報
         """
-        now = datetime.now()
+        now = self._now()
         recent_calls_minute = [ts for ts in self.call_timestamps if (now - ts).total_seconds() < 60]
         recent_calls_second = [ts for ts in self.call_timestamps if (now - ts).total_seconds() < 1]
 

@@ -21,7 +21,7 @@ def _make_backtest(**kwargs):
         'tv_pine_compat': True,
         'use_saved_data': True,
         'no_show_plot': True,
-        'initial_capital': 50000,
+        'initial_capital': 55000,
         'debug': True,
     }
     defaults.update(kwargs)

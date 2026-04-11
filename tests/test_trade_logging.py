@@ -571,6 +571,197 @@ class TestTradeLogging(unittest.TestCase):
         self.assertAlmostEqual(final_equity, expected_final, places=2)
 
 
+class TestPartialExitCalculation(unittest.TestCase):
+    """CR-002: _execute_exit must compute shares_to_sell FIRST, then calculate once."""
+
+    def _make_backtest(self, **kwargs):
+        defaults = {
+            'start_date': '2023-01-01',
+            'end_date': '2023-12-31',
+            'symbol': 'SPY',
+            'use_saved_data': True,
+            'no_show_plot': True,
+            'initial_capital': 100000,
+            'slippage': 0.001,
+            'commission': 0.001,
+            'partial_exit': True,
+        }
+        defaults.update(kwargs)
+        return Backtest(**defaults)
+
+    def test_20_partial_exit_commission_is_for_half_position(self):
+        """CR-002: Partial exit commission must be based on shares_to_sell, not full position."""
+        bt = self._make_backtest()
+
+        # Enter 200 shares at $100
+        test_date = pd.Timestamp('2023-06-15')
+        bt._execute_entry(test_date, 100.0, 200, reason='test')
+
+        # Partial exit at $110
+        exit_date = pd.Timestamp('2023-06-20')
+        bt._execute_exit(exit_date, 110.0, reason='peak exit')
+
+        # Should sell 100 shares (200 // 2)
+        self.assertEqual(bt.current_position, 100, 'Partial exit should sell half')
+
+        # Check that the SELL trade has correct commission for 100 shares, not 200
+        sell_trade = next(t for t in bt.trades if t['action'] == 'SELL')
+        exit_price = 110.0 * (1 - bt.slippage)
+        expected_commission = exit_price * 100 * bt.commission  # 100 shares, not 200
+        self.assertAlmostEqual(
+            sell_trade['commission'], expected_commission, places=4, msg='Commission should be for half position only'
+        )
+
+        # Check proceeds
+        expected_proceeds = exit_price * 100 - expected_commission
+        self.assertAlmostEqual(sell_trade['total_proceeds'], expected_proceeds, places=4)
+
+    def test_21_full_exit_commission_is_for_full_position(self):
+        """Full exit (force_full_exit=True) commission is for full position."""
+        bt = self._make_backtest()
+
+        test_date = pd.Timestamp('2023-06-15')
+        bt._execute_entry(test_date, 100.0, 200, reason='test')
+
+        exit_date = pd.Timestamp('2023-06-20')
+        bt._execute_exit(exit_date, 110.0, reason='stop loss', force_full_exit=True)
+
+        self.assertEqual(bt.current_position, 0, 'Full exit should close position')
+        sell_trade = next(t for t in bt.trades if t['action'] == 'SELL')
+        exit_price = 110.0 * (1 - bt.slippage)
+        expected_commission = exit_price * 200 * bt.commission
+        self.assertAlmostEqual(sell_trade['commission'], expected_commission, places=4)
+
+
+class TestLegacyModeSignalPriority(unittest.TestCase):
+    """CR-001: Legacy mode must check stop loss BEFORE entry signals.
+    MJ-005: Legacy mode must respect no_pyramiding flag.
+    MJ-008: _execute_entry() must return bool and guard against insufficient capital.
+    """
+
+    def _make_backtest(self, **kwargs):
+        """Create a Backtest with minimal defaults for unit testing."""
+        defaults = {
+            'start_date': '2023-01-01',
+            'end_date': '2023-12-31',
+            'symbol': 'SPY',
+            'use_saved_data': True,
+            'no_show_plot': True,
+            'tv_mode': False,  # Legacy mode
+            'initial_capital': 50000,
+            'slippage': 0.0005,
+            'commission': 0.0001,
+            'stop_loss_pct': 0.08,
+        }
+        defaults.update(kwargs)
+        return Backtest(**defaults)
+
+    def test_15_legacy_stop_loss_fires_before_entry(self):
+        """CR-001: When stop loss and entry signal coincide, stop loss must fire first."""
+        bt = self._make_backtest(stop_loss_pct=0.08)
+
+        # Set up: position at $100, stop loss at $92
+        test_date = pd.Timestamp('2023-06-15')
+        shares = bt._calculate_shares(bt.current_capital, 100.0)
+        result = bt._execute_entry(test_date, 100.0, shares, reason='long_ma_bottom')
+        self.assertTrue(result, 'Setup entry should succeed')
+
+        # Price drops to $91 — below stop loss ($92)
+        crash_date = pd.Timestamp('2023-06-20')
+        crash_price = 91.0
+
+        # Make this date also a short_ma_bottom signal
+        bt.short_ma_bottoms = {crash_date}
+        bt.long_ma_bottoms = set()
+        bt.peaks = set()
+        bt.use_background_color_signals = False
+
+        # Set up minimal data for legacy trades
+        bt.long_ma_trend = pd.Series([1, 1], index=[test_date, crash_date])
+        bt.short_ma_line = pd.Series([0.5, 0.5], index=[test_date, crash_date])
+        bt.long_ma_line = pd.Series([0.4, 0.4], index=[test_date, crash_date])
+
+        # Execute legacy trades at crash price
+        bt._execute_legacy_trades(1, crash_date, crash_price)
+
+        # Stop loss should have fired — position should be closed
+        self.assertEqual(bt.current_position, 0, 'Stop loss should fire before entry signal')
+        # Should have a SELL trade (stop loss), NOT a BUY trade
+        sell_trades = [t for t in bt.trades if t['action'] == 'SELL']
+        buy_trades = [t for t in bt.trades if t['action'] == 'BUY' and t['date'] == crash_date]
+        self.assertGreater(len(sell_trades), 0, 'Stop loss exit should be recorded')
+        self.assertEqual(len(buy_trades), 0, 'No entry should fire on stop loss day')
+
+    def test_16_legacy_no_pyramiding_blocks_entry(self):
+        """MJ-005: Legacy mode respects no_pyramiding flag."""
+        bt = self._make_backtest(no_pyramiding=True)
+
+        # Set up: existing position
+        test_date = pd.Timestamp('2023-06-15')
+        shares = bt._calculate_shares(bt.current_capital, 100.0)
+        result = bt._execute_entry(test_date, 100.0, shares, reason='long_ma_bottom')
+        self.assertTrue(result, 'Setup entry should succeed')
+        position_before = bt.current_position
+
+        # New entry signal while position exists
+        signal_date = pd.Timestamp('2023-06-20')
+        bt.short_ma_bottoms = {signal_date}
+        bt.long_ma_bottoms = set()
+        bt.peaks = set()
+        bt.use_background_color_signals = False
+
+        bt.long_ma_trend = pd.Series([1, 1], index=[test_date, signal_date])
+        bt.short_ma_line = pd.Series([0.5, 0.5], index=[test_date, signal_date])
+        bt.long_ma_line = pd.Series([0.4, 0.4], index=[test_date, signal_date])
+
+        bt._execute_legacy_trades(1, signal_date, 105.0)
+
+        # Position should NOT increase
+        self.assertEqual(
+            bt.current_position, position_before, 'no_pyramiding should prevent additional entry in legacy mode'
+        )
+
+    def test_17_execute_entry_returns_false_on_insufficient_capital(self):
+        """MJ-008: _execute_entry() returns False when capital is insufficient."""
+        bt = self._make_backtest(initial_capital=100)
+
+        test_date = pd.Timestamp('2023-06-15')
+        # Try to buy 1000 shares at $100 = $100,000 >> $100 capital
+        result = bt._execute_entry(test_date, 100.0, 1000, reason='test')
+
+        self.assertFalse(result, '_execute_entry should return False on insufficient capital')
+        self.assertEqual(bt.current_position, 0, 'Position should not change on failed entry')
+        self.assertAlmostEqual(bt.current_capital, 100, places=2, msg='Capital should not change on failed entry')
+
+    def test_18_execute_entry_returns_true_on_success(self):
+        """MJ-008: _execute_entry() returns True on successful entry."""
+        bt = self._make_backtest(initial_capital=50000)
+
+        test_date = pd.Timestamp('2023-06-15')
+        result = bt._execute_entry(test_date, 100.0, 50, reason='test')
+
+        self.assertTrue(result, '_execute_entry should return True on success')
+        self.assertEqual(bt.current_position, 50)
+
+    def test_19_calculate_shares_includes_commission(self):
+        """MJ-008: _calculate_shares accounts for commission in share count."""
+        bt = self._make_backtest(slippage=0.001, commission=0.001)
+
+        # With $50000 at $100/share, slippage=0.1%, commission=0.1%
+        shares = bt._calculate_shares(50000, 100.0)
+
+        # Cost per share = 100 * (1 + 0.001 + 0.001) = 100.2
+        # Expected shares = int(50000 / 100.2) = 499
+        expected = int(50000 / (100.0 * (1 + 0.001 + 0.001)))
+        self.assertEqual(shares, expected)
+
+        # Verify total cost fits within capital
+        entry_price = 100.0 * (1 + bt.slippage)
+        commission = entry_price * shares * bt.commission
+        total_cost = entry_price * shares + commission
+        self.assertLessEqual(total_cost, 50000, 'Calculated shares should not exceed available capital')
+
+
 if __name__ == '__main__':
     # Run tests with verbose output
     unittest.main(verbosity=2)

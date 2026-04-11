@@ -6,15 +6,12 @@ from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-import requests
 from dotenv import load_dotenv
 from plotly.subplots import make_subplots
-from requests.adapters import HTTPAdapter
 from scipy.signal import find_peaks
 from tqdm import tqdm
-from urllib3.util.retry import Retry
 
-from fmp_data_fetcher import FMPDataFetcher  # NEW: FMP API client
+from fmp_data_fetcher import FMPDataFetcher
 
 # Load environment variables
 load_dotenv()
@@ -25,19 +22,22 @@ reports_dir.mkdir(exist_ok=True)
 data_dir = pathlib.Path('data')
 data_dir.mkdir(exist_ok=True)
 
-# Instantiate global FMP data fetcher (use 'demo' key if environment variable is not set to allow tests).
-fmp_fetcher = FMPDataFetcher(api_key=os.getenv('FMP_API_KEY', 'demo'))
+# Lazy-initialized FMP data fetcher (CR-004: avoid import-time instantiation)
+_fmp_fetcher = None
 
-# Configure retry strategy for API calls
-retry_strategy = Retry(
-    total=3,  # number of retries
-    backoff_factor=1,  # wait 1, 2, 4 seconds between retries
-    status_forcelist=[429, 500, 502, 503, 504],  # HTTP status codes to retry on
-)
-adapter = HTTPAdapter(max_retries=retry_strategy)
-session = requests.Session()
-session.mount('https://', adapter)
-session.mount('http://', adapter)
+
+def _get_fmp_fetcher():
+    """Lazy-initialize the global FMP fetcher."""
+    global _fmp_fetcher
+    if _fmp_fetcher is None:
+        _fmp_fetcher = FMPDataFetcher(api_key=os.getenv('FMP_API_KEY', 'demo'))
+    return _fmp_fetcher
+
+
+def _set_fmp_fetcher(fetcher):
+    """Inject a custom fetcher (for testing)."""
+    global _fmp_fetcher
+    _fmp_fetcher = fetcher
 
 
 def save_stock_data(data, filename):
@@ -132,7 +132,7 @@ def load_breadth_series_from_csv(csv_path, value_col='close'):
 def get_sp500_tickers_from_fmp():
     """Get S&P500 ticker list from FMP API"""
     try:
-        tickers = fmp_fetcher.get_sp500_constituents()
+        tickers = _get_fmp_fetcher().get_sp500_constituents()
         if tickers:
             print(f'Successfully fetched {len(tickers)} S&P500 tickers from FMP')
             return tickers
@@ -169,7 +169,7 @@ def fetch_price_data_fmp(symbol: str, from_date: str, to_date: str) -> pd.Series
     pd.Series
         Series indexed by date containing the adjusted closing prices.
     """
-    data = fmp_fetcher.get_historical_price_data(symbol, from_date, to_date)
+    data = _get_fmp_fetcher().get_historical_price_data(symbol, from_date, to_date)
     if not data:
         return pd.Series(dtype='float64')
 
@@ -199,7 +199,7 @@ def fetch_price_ohlc_fmp(symbol: str, from_date: str, to_date: str) -> pd.DataFr
 
     Returns a DataFrame with columns: open, high, low, close, adjusted_close.
     """
-    data = fmp_fetcher.get_historical_price_data(symbol, from_date, to_date)
+    data = _get_fmp_fetcher().get_historical_price_data(symbol, from_date, to_date)
     if not data:
         return pd.DataFrame()
 
@@ -380,7 +380,7 @@ def get_latest_market_date():
         today_dt = datetime.today()
         start_lookup = (today_dt - timedelta(days=7)).strftime('%Y-%m-%d')
         end_lookup = today_dt.strftime('%Y-%m-%d')
-        data = fmp_fetcher.get_historical_price_data('SPY', start_lookup, end_lookup)
+        data = _get_fmp_fetcher().get_historical_price_data('SPY', start_lookup, end_lookup)
         if not data:
             raise ValueError('No data retrieved from FMP')
 
@@ -400,117 +400,111 @@ def get_latest_market_date():
         return datetime.today().strftime('%Y-%m-%d')
 
 
-def extract_chart_data(above_ma_200, sp500_data, short_ma_period=10, start_date=None, end_date=None):
-    """Extract chart data for CSV export"""
-    # Ensure both datasets have the same date range
-    common_dates = above_ma_200.index.intersection(sp500_data.index)
+def _extract_chart_data_generic(
+    above_ma, sp500_data, short_ma_period, start_date, end_date, ma_span, peak_distance, peak_prominence, threshold
+):
+    """Generic breadth chart data extraction for any MA period (MJ-009: DRY refactor)."""
+    common_dates = above_ma.index.intersection(sp500_data.index)
     if len(common_dates) == 0:
         raise ValueError('No common dates found between breadth data and S&P500 data')
 
-    # Align both datasets to common dates
-    above_ma_200 = above_ma_200.loc[common_dates]
+    above_ma = above_ma.loc[common_dates]
     sp500_data = sp500_data.loc[common_dates]
 
-    # Filter data by date range if specified
     if start_date and end_date:
         start_date = pd.to_datetime(start_date)
         end_date = pd.to_datetime(end_date)
-        mask = (above_ma_200.index >= start_date) & (above_ma_200.index <= end_date)
-        above_ma_200 = above_ma_200.loc[mask]
+        mask = (above_ma.index >= start_date) & (above_ma.index <= end_date)
+        above_ma = above_ma.loc[mask]
         sp500_data = sp500_data.loc[mask]
 
-    # Calculate percentage of stocks above 200-day moving average
-    breadth_index_200 = above_ma_200.mean(axis=1)
+    breadth_index = above_ma.mean(axis=1)
+    breadth_ma_long = breadth_index.ewm(span=ma_span, adjust=False).mean()
+    breadth_ma_short = breadth_index.ewm(span=short_ma_period, adjust=False).mean()
 
-    # Calculate 200-day and short-term moving averages for Breadth Index
-    breadth_ma_200 = breadth_index_200.ewm(span=200, adjust=False).mean()
-    breadth_ma_short = breadth_index_200.ewm(span=short_ma_period, adjust=False).mean()
+    breadth_ma_trend = calculate_trend_with_hysteresis(breadth_ma_long, threshold=0.001)
+    breadth_ma_trend = pd.Series(breadth_ma_trend, index=breadth_ma_long.index)
 
-    # Calculate 200MA slope using hysteresis
-    breadth_ma_200_trend = calculate_trend_with_hysteresis(breadth_ma_200, threshold=0.001)
-    breadth_ma_200_trend = pd.Series(breadth_ma_200_trend, index=breadth_ma_200.index)
+    peaks, _ = find_peaks(breadth_ma_long, distance=peak_distance, prominence=peak_prominence)
+    troughs, _ = find_peaks(-breadth_ma_long, distance=peak_distance, prominence=peak_prominence)
 
-    # Detect peaks (tops) and troughs (bottoms)
-    peaks, _ = find_peaks(breadth_ma_200, distance=50, prominence=0.015)
-    troughs, _ = find_peaks(-breadth_ma_200, distance=50, prominence=0.015)
+    below_threshold = breadth_ma_short[breadth_ma_short < threshold]
+    if len(below_threshold) >= 2:
+        troughs_below, _ = find_peaks(-below_threshold, prominence=0.02)
+    else:
+        troughs_below = np.array([], dtype=int)
 
-    # Extract data where short-term moving average is below 0.4
-    below_04 = breadth_ma_short[breadth_ma_short < 0.4]
+    peaks_avg = breadth_ma_long.iloc[peaks].mean() if len(peaks) > 0 else 0.0
+    troughs_avg = below_threshold.iloc[troughs_below].mean() if len(troughs_below) > 0 else 0.0
 
-    # Detect troughs for data below 0.4 using find_peaks
-    troughs_below_04, _ = find_peaks(-below_04, prominence=0.02)
-
-    # Calculate average values for peaks and troughs
-    peaks_avg = breadth_ma_200.iloc[peaks].mean()
-    troughs_avg_below_04 = below_04.iloc[troughs_below_04].mean()
-
-    # Return all calculated data
     return {
-        'breadth_index_200': breadth_index_200,
-        'breadth_ma_200': breadth_ma_200,
+        'breadth_index': breadth_index,
+        'breadth_ma_long': breadth_ma_long,
         'breadth_ma_short': breadth_ma_short,
-        'breadth_ma_200_trend': breadth_ma_200_trend,
+        'breadth_ma_trend': breadth_ma_trend,
         'sp500_data': sp500_data,
         'peaks': peaks,
         'troughs': troughs,
-        'troughs_below_04': troughs_below_04,
-        'below_04': below_04,
+        'troughs_below': troughs_below,
+        'below_threshold': below_threshold,
         'peaks_avg': peaks_avg,
-        'troughs_avg_below_04': troughs_avg_below_04,
+        'troughs_avg': troughs_avg,
+    }
+
+
+def extract_chart_data(above_ma_200, sp500_data, short_ma_period=10, start_date=None, end_date=None):
+    """Extract chart data for 200-day MA breadth analysis."""
+    g = _extract_chart_data_generic(
+        above_ma_200,
+        sp500_data,
+        short_ma_period,
+        start_date,
+        end_date,
+        ma_span=200,
+        peak_distance=50,
+        peak_prominence=0.015,
+        threshold=0.4,
+    )
+    return {
+        'breadth_index_200': g['breadth_index'],
+        'breadth_ma_200': g['breadth_ma_long'],
+        'breadth_ma_short': g['breadth_ma_short'],
+        'breadth_ma_200_trend': g['breadth_ma_trend'],
+        'sp500_data': g['sp500_data'],
+        'peaks': g['peaks'],
+        'troughs': g['troughs'],
+        'troughs_below_04': g['troughs_below'],
+        'below_04': g['below_threshold'],
+        'peaks_avg': g['peaks_avg'],
+        'troughs_avg_below_04': g['troughs_avg'],
     }
 
 
 def extract_chart_data_50(above_ma_50, sp500_data, short_ma_period=10, start_date=None, end_date=None):
-    """Extract chart data for 50-day MA breadth analysis.
-
-    Same structure as extract_chart_data() but with parameters tuned for 50-day MA.
-    """
-    common_dates = above_ma_50.index.intersection(sp500_data.index)
-    if len(common_dates) == 0:
-        raise ValueError('No common dates found between 50-day breadth data and S&P500 data')
-
-    above_ma_50 = above_ma_50.loc[common_dates]
-    sp500_data = sp500_data.loc[common_dates]
-
-    if start_date and end_date:
-        start_date = pd.to_datetime(start_date)
-        end_date = pd.to_datetime(end_date)
-        mask = (above_ma_50.index >= start_date) & (above_ma_50.index <= end_date)
-        above_ma_50 = above_ma_50.loc[mask]
-        sp500_data = sp500_data.loc[mask]
-
-    breadth_index_50 = above_ma_50.mean(axis=1)
-    breadth_ma_50_long = breadth_index_50.ewm(span=50, adjust=False).mean()
-    breadth_ma_50_short = breadth_index_50.ewm(span=short_ma_period, adjust=False).mean()
-    breadth_ma_50_trend = calculate_trend_with_hysteresis(breadth_ma_50_long, threshold=0.001)
-    breadth_ma_50_trend = pd.Series(breadth_ma_50_trend, index=breadth_ma_50_long.index)
-
-    # Peak/trough detection (shorter distance for 50-day MA's faster oscillation)
-    peaks_50, _ = find_peaks(breadth_ma_50_long, distance=30, prominence=0.02)
-    troughs_50, _ = find_peaks(-breadth_ma_50_long, distance=30, prominence=0.02)
-
-    below_03_50 = breadth_ma_50_short[breadth_ma_50_short < 0.3]
-    if len(below_03_50) >= 2:
-        troughs_below_03_50, _ = find_peaks(-below_03_50, prominence=0.02)
-    else:
-        troughs_below_03_50 = np.array([], dtype=int)
-
-    # NaN guards for averages
-    peaks_avg_50 = breadth_ma_50_long.iloc[peaks_50].mean() if len(peaks_50) > 0 else 0.0
-    troughs_avg_50 = below_03_50.iloc[troughs_below_03_50].mean() if len(troughs_below_03_50) > 0 else 0.0
-
+    """Extract chart data for 50-day MA breadth analysis."""
+    g = _extract_chart_data_generic(
+        above_ma_50,
+        sp500_data,
+        short_ma_period,
+        start_date,
+        end_date,
+        ma_span=50,
+        peak_distance=30,
+        peak_prominence=0.02,
+        threshold=0.3,
+    )
     return {
-        'breadth_index_50': breadth_index_50,
-        'breadth_ma_50_long': breadth_ma_50_long,
-        'breadth_ma_50_short': breadth_ma_50_short,
-        'breadth_ma_50_trend': breadth_ma_50_trend,
-        'sp500_data': sp500_data,
-        'peaks_50': peaks_50,
-        'troughs_50': troughs_50,
-        'troughs_below_03_50': troughs_below_03_50,
-        'below_03_50': below_03_50,
-        'peaks_avg_50': peaks_avg_50,
-        'troughs_avg_50': troughs_avg_50,
+        'breadth_index_50': g['breadth_index'],
+        'breadth_ma_50_long': g['breadth_ma_long'],
+        'breadth_ma_50_short': g['breadth_ma_short'],
+        'breadth_ma_50_trend': g['breadth_ma_trend'],
+        'sp500_data': g['sp500_data'],
+        'peaks_50': g['peaks'],
+        'troughs_50': g['troughs'],
+        'troughs_below_03_50': g['troughs_below'],
+        'below_03_50': g['below_threshold'],
+        'peaks_avg_50': g['peaks_avg'],
+        'troughs_avg_50': g['troughs_avg'],
     }
 
 

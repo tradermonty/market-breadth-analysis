@@ -41,6 +41,12 @@ logger = logging.getLogger('market_breadth_trade')
 TZ_NY = ZoneInfo('US/Eastern')
 TZ_UTC = ZoneInfo('UTC')
 
+
+def _now_et():
+    """Return current datetime in US/Eastern. Patchable for tests."""
+    return datetime.now(tz=TZ_NY)
+
+
 # Load environment variables
 load_dotenv()
 ALPACA_API_KEY = os.getenv('ALPACA_API_KEY')
@@ -114,6 +120,10 @@ class MarketBreadthTrader:
         # Initialize variables
         self.current_position = 0
         self.entry_prices = []
+        self.entry_lots = []  # MJ-002: [{'price': float, 'shares': int}, ...]
+
+        # MJ-003: Track acted-on signals to prevent duplicate trades
+        self._acted_signals = self._load_acted_signals()
 
         # Initialize signal-related variables
         self.short_ma_bottoms = []
@@ -157,7 +167,7 @@ class MarketBreadthTrader:
             current_dt = self.test_dt
             logger.debug(f'Test mode time: {current_dt}')
         else:
-            current_dt = datetime.now().astimezone(TZ_NY)
+            current_dt = _now_et()
 
         cal = self.api.get_calendar(start=str(current_dt.date()), end=str(current_dt.date()))
 
@@ -199,25 +209,40 @@ class MarketBreadthTrader:
             return 0
 
     def _sync_position_from_broker(self):
-        """Sync position and entry prices from broker.
+        """Sync position and entry lots from broker.
 
-        Recovers entry_prices from broker's avg_entry_price when local state
-        is lost (e.g. after process restart).
+        MJ-002: Recovers entry_lots from disk or broker's avg_entry_price.
+        Validates lots total against broker qty for consistency.
 
         Raises on transient API/network errors to prevent accidental trades.
         """
         try:
             position = self.api.get_position(self.symbol)
-            self.current_position = int(position.qty)
-            if self.current_position > 0 and not self.entry_prices:
+            broker_qty = int(position.qty)
+            self.current_position = broker_qty
+            if self.current_position > 0 and not self.entry_lots:
                 saved = self._load_entry_prices()
-                if saved:
-                    self.entry_prices = saved
-                    logger.info(f'Recovered {len(saved)} entry prices from disk')
-                else:
+                use_broker_fallback = True
+
+                if saved and isinstance(saved, dict) and 'lots' in saved:
+                    lots = saved['lots']
+                    lots_total = sum(lot['shares'] for lot in lots)
+                    if lots_total == broker_qty:
+                        self.entry_lots = lots
+                        use_broker_fallback = False
+                        logger.info(f'Recovered {len(lots)} entry lots from disk')
+                    else:
+                        logger.warning(
+                            f'Lots total ({lots_total}) != broker qty ({broker_qty}); '
+                            f'falling back to broker avg_entry_price'
+                        )
+
+                if use_broker_fallback:
                     avg_price = float(position.avg_entry_price)
-                    self.entry_prices = [avg_price]
-                    logger.info(f'Recovered entry price from broker: ${avg_price:.2f}')
+                    self.entry_lots = [{'price': avg_price, 'shares': broker_qty}]
+                    logger.info(f'Using broker avg_entry_price: ${avg_price:.2f} x {broker_qty} shares')
+
+                self.entry_prices = [lot['price'] for lot in self.entry_lots]
         except Exception as e:
             # Alpaca returns 404 with "position does not exist" when no position
             err_str = str(e)
@@ -225,6 +250,7 @@ class MarketBreadthTrader:
                 logger.info(f'No position found for {self.symbol}')
                 self.current_position = 0
                 self.entry_prices = []
+                self.entry_lots = []
                 self._clear_entry_prices_file()
             else:
                 logger.error(f'API error syncing position for {self.symbol}: {e}')
@@ -353,7 +379,7 @@ class MarketBreadthTrader:
                 logger.debug(f'Current test time: {current_dt}')
             else:
                 # Use current time in normal mode
-                current_dt = datetime.now().astimezone(TZ_NY)
+                current_dt = _now_et()
 
             # Check if market is open (skip in test mode)
             if not self.testmode and not self.is_market_open():
@@ -413,7 +439,7 @@ class MarketBreadthTrader:
                 today = pd.Timestamp(self.test_date)
                 logger.info(f'Test mode: Using test date {today.strftime("%Y-%m-%d")} as current date')
             else:
-                today = datetime.now()
+                today = _now_et()
 
             yesterday = (today - timedelta(days=1)).strftime('%Y-%m-%d')
             start_date = (today - timedelta(days=365)).strftime('%Y-%m-%d')
@@ -507,7 +533,7 @@ class MarketBreadthTrader:
                 today = pd.Timestamp(self.test_date)
                 logger.info(f'Test mode: Using test date {today.strftime("%Y-%m-%d")} as current date')
             else:
-                today = pd.Timestamp(datetime.now().strftime('%Y-%m-%d'))
+                today = pd.Timestamp(_now_et().strftime('%Y-%m-%d'))
 
             # Temporarily store price data in dictionary
             price_dict = {}
@@ -564,7 +590,7 @@ class MarketBreadthTrader:
             bars = self.api.get_latest_bar(ticker)
             if bars and hasattr(bars, 'c'):
                 logger.info(f'Success: Got latest price for {ticker}: ${bars.c:.2f}')
-                return pd.Series([bars.c], index=[pd.Timestamp(datetime.now().strftime('%Y-%m-%d'))])
+                return pd.Series([bars.c], index=[pd.Timestamp(_now_et().strftime('%Y-%m-%d'))])
             else:
                 logger.warning(f'Failed: Could not get latest price for {ticker} (no valid bar data)')
                 return pd.Series()
@@ -623,11 +649,16 @@ class MarketBreadthTrader:
         logger.info(f'  Long MA trough signals (entry): {len(self._tv_long_trough_signals)}')
         logger.info(f'  Short MA trough signals (entry): {len(self._tv_short_trough_signals)}')
 
-    def _find_recent_signal(self, signal_dates, current_date, lookback_days=5):
-        """Find the most recent signal within lookback_days of current_date."""
+    def _find_recent_signal(self, signal_dates, current_date, signal_type='', lookback_days=5):
+        """Find the most recent signal within lookback_days of current_date.
+
+        MJ-003: Skips signals already in _acted_signals to prevent duplicates.
+        """
         for d in sorted(signal_dates, reverse=True):
             delta = (current_date - d).days
             if 0 <= delta <= lookback_days:
+                if signal_type and (signal_type, d.strftime('%Y-%m-%d')) in self._acted_signals:
+                    continue
                 return d
         return None
 
@@ -648,8 +679,11 @@ class MarketBreadthTrader:
         logger.info(f'Current price: ${current_price:.2f}')
 
         # --- Stop loss check (before signal-based trading) ---
-        if self.current_position > 0 and self.entry_prices:
-            avg_entry = sum(self.entry_prices) / len(self.entry_prices)
+        # MJ-002: Use cost-weighted average for stop loss calculation
+        if self.current_position > 0 and self.entry_lots:
+            total_cost = sum(lot['price'] * lot['shares'] for lot in self.entry_lots)
+            total_shares = sum(lot['shares'] for lot in self.entry_lots)
+            avg_entry = total_cost / total_shares if total_shares > 0 else 0
             stop_loss_price = avg_entry * (1 - self.stop_loss_pct)
 
             logger.info(f'Stop loss check: avg_entry=${avg_entry:.2f}, stop=${stop_loss_price:.2f}')
@@ -661,14 +695,7 @@ class MarketBreadthTrader:
                     filled = self._wait_for_fill(order)
                     if filled:
                         filled_qty = int(filled.filled_qty) if filled.filled_qty is not None else self.current_position
-                        self.current_position -= filled_qty
-                        if self.current_position <= 0:
-                            self.current_position = 0
-                            self.entry_prices = []
-                            self._clear_entry_prices_file()
-                        else:
-                            logger.warning(f'Partial exit: {filled_qty} sold, {self.current_position} remaining')
-                            self._save_entry_prices()
+                        self._update_lots_after_sell(filled_qty)
                         logger.info(f'Stop loss exit: {filled_qty} shares at ${current_price:.2f}')
                     else:
                         logger.error('Stop loss order not filled — position remains open')
@@ -681,27 +708,29 @@ class MarketBreadthTrader:
             current_date = pd.Timestamp(self.test_date)
             logger.info(f'Test mode: Using test date {current_date.strftime("%Y-%m-%d")} as current date')
         else:
-            current_date = pd.to_datetime(datetime.now().strftime('%Y-%m-%d'))
+            current_date = pd.to_datetime(_now_et().strftime('%Y-%m-%d'))
 
         # Check for signals (with lookback for missed days)
-        has_peak = self._find_recent_signal(self.peaks, current_date) is not None
-        has_long_ma_bottom = self._find_recent_signal(self.long_ma_bottoms, current_date) is not None
-        has_short_ma_bottom = (
-            self._find_recent_signal(self.short_ma_bottoms, current_date) is not None
-            and not self.disable_short_ma_entry
+        # MJ-003: Keep signal dates (not bools) for acted_signals tracking
+        peak_signal_date = self._find_recent_signal(self.peaks, current_date, 'peak')
+        long_trough_date = self._find_recent_signal(self.long_ma_bottoms, current_date, 'long_trough')
+        short_trough_date = (
+            self._find_recent_signal(self.short_ma_bottoms, current_date, 'short_trough')
+            if not self.disable_short_ma_entry
+            else None
         )
 
         # Log signal detection status
         logger.info('Signal detection status:')
         logger.info(f'  Current date: {current_date.strftime("%Y-%m-%d")}')
-        logger.info(f'  Short MA bottom signal: {"Detected" if has_short_ma_bottom else "Not detected"}')
-        logger.info(f'  Long MA bottom signal: {"Detected" if has_long_ma_bottom else "Not detected"}')
-        logger.info(f'  Peak signal: {"Detected" if has_peak else "Not detected"}')
+        logger.info(f'  Short MA bottom signal: {"Detected" if short_trough_date else "Not detected"}')
+        logger.info(f'  Long MA bottom signal: {"Detected" if long_trough_date else "Not detected"}')
+        logger.info(f'  Peak signal: {"Detected" if peak_signal_date else "Not detected"}')
 
         # Check if current date matches signal date
-        if has_peak and self.current_position > 0:
+        if peak_signal_date is not None and self.current_position > 0:
             # Exit at 200MA peak (check exit before entry)
-            logger.info(f'Long MA peak signal detected for {current_date.strftime("%Y-%m-%d")}')
+            logger.info(f'Long MA peak signal detected for {peak_signal_date.strftime("%Y-%m-%d")}')
 
             order = self.execute_sell(self.current_position, reason='peak exit')
             if order:
@@ -709,22 +738,18 @@ class MarketBreadthTrader:
                 if filled:
                     filled_qty = int(filled.filled_qty) if filled.filled_qty is not None else self.current_position
                     logger.info(f'Exit executed at long MA peak: {filled_qty} shares at ${current_price:.2f}')
-                    self.current_position -= filled_qty
-                    if self.current_position <= 0:
-                        self.current_position = 0
-                        self.entry_prices = []
-                        self._clear_entry_prices_file()
-                    else:
-                        logger.warning(f'Partial exit: {filled_qty} sold, {self.current_position} remaining')
-                        self._save_entry_prices()
+                    self._update_lots_after_sell(filled_qty)
+                    # MJ-003: Record acted signal only after confirmed fill
+                    self._acted_signals.add(('peak', peak_signal_date.strftime('%Y-%m-%d')))
+                    self._save_acted_signals()
                 else:
                     logger.error('Peak exit order not filled — position remains open')
             else:
                 logger.error('Failed to execute exit at long MA peak')
 
-        elif has_long_ma_bottom:
+        elif long_trough_date is not None:
             # Entry at 200MA bottom
-            logger.info(f'Long MA bottom signal detected for {current_date.strftime("%Y-%m-%d")}')
+            logger.info(f'Long MA bottom signal detected for {long_trough_date.strftime("%Y-%m-%d")}')
 
             # Skip if already have position (no_pyramiding)
             if self.no_pyramiding and self.current_position > 0:
@@ -747,8 +772,12 @@ class MarketBreadthTrader:
                             )
                             self.current_position += filled_qty
                             logger.info(f'Entry executed at long MA bottom: {filled_qty} shares at ${fill_price:.2f}')
-                            self.entry_prices.append(fill_price)
+                            self.entry_lots.append({'price': fill_price, 'shares': filled_qty})
+                            self.entry_prices = [lot['price'] for lot in self.entry_lots]
                             self._save_entry_prices()
+                            # MJ-003: Record acted signal only after confirmed fill
+                            self._acted_signals.add(('long_trough', long_trough_date.strftime('%Y-%m-%d')))
+                            self._save_acted_signals()
                             if filled_qty < shares:
                                 logger.warning(f'Partial buy fill: {filled_qty} of {shares} requested')
                         else:
@@ -758,9 +787,9 @@ class MarketBreadthTrader:
                 else:
                     logger.info('No shares to buy due to insufficient capital')
 
-        elif has_short_ma_bottom:
+        elif short_trough_date is not None:
             # Entry at short MA bottom
-            logger.info(f'Short MA bottom signal detected for {current_date.strftime("%Y-%m-%d")}')
+            logger.info(f'Short MA bottom signal detected for {short_trough_date.strftime("%Y-%m-%d")}')
 
             # Skip if already have position (no_pyramiding)
             if self.no_pyramiding and self.current_position > 0:
@@ -783,8 +812,12 @@ class MarketBreadthTrader:
                             )
                             self.current_position += filled_qty
                             logger.info(f'Entry executed at short MA bottom: {filled_qty} shares at ${fill_price:.2f}')
-                            self.entry_prices.append(fill_price)
+                            self.entry_lots.append({'price': fill_price, 'shares': filled_qty})
+                            self.entry_prices = [lot['price'] for lot in self.entry_lots]
                             self._save_entry_prices()
+                            # MJ-003: Record acted signal only after confirmed fill
+                            self._acted_signals.add(('short_trough', short_trough_date.strftime('%Y-%m-%d')))
+                            self._save_acted_signals()
                             if filled_qty < shares:
                                 logger.warning(f'Partial buy fill: {filled_qty} of {shares} requested')
                         else:
@@ -807,22 +840,41 @@ class MarketBreadthTrader:
         return f'trade/entry_prices_{self.symbol}.json'
 
     def _save_entry_prices(self):
-        """Persist entry_prices to disk as JSON."""
+        """Persist entry_lots to disk as JSON (MJ-002: new format with lots)."""
         try:
+            data = {'lots': self.entry_lots}
             with open(self._entry_prices_path(), 'w') as f:
-                json.dump(self.entry_prices, f)
+                json.dump(data, f)
         except Exception as e:
             logger.error(f'Failed to save entry prices: {e}', exc_info=True)
 
     def _load_entry_prices(self):
-        """Load entry_prices from disk. Returns list or None."""
+        """Load entry data from disk. Returns dict with 'lots' key, or None.
+
+        MJ-002: Supports new format {"lots": [...]}. Old flat-list format
+        returns None so the caller falls back to broker avg_entry_price.
+        """
         try:
             path = self._entry_prices_path()
             if os.path.exists(path):
                 with open(path) as f:
-                    prices = json.load(f)
-                if isinstance(prices, list) and all(isinstance(p, int | float) for p in prices):
-                    return prices
+                    data = json.load(f)
+                if isinstance(data, dict) and 'lots' in data:
+                    lots = data['lots']
+                    # Validate lot schema: each lot must have numeric 'price' and int 'shares'
+                    if isinstance(lots, list) and all(
+                        isinstance(lot, dict)
+                        and isinstance(lot.get('price'), int | float)
+                        and isinstance(lot.get('shares'), int)
+                        and lot['shares'] > 0
+                        for lot in lots
+                    ):
+                        return data  # New format, validated
+                    logger.warning('Corrupted lots data in entry_prices file; falling back to broker data')
+                    return None
+                # Old format (flat list) — cannot infer per-lot quantities
+                logger.info('Old entry_prices format detected; falling back to broker data')
+                return None
         except Exception as e:
             logger.error(f'Failed to load entry prices: {e}', exc_info=True)
         return None
@@ -832,6 +884,56 @@ class MarketBreadthTrader:
         path = self._entry_prices_path()
         if os.path.exists(path):
             os.remove(path)
+
+    def _update_lots_after_sell(self, filled_qty):
+        """Update entry_lots using FIFO after a sell, and sync position/prices (MJ-002)."""
+        remaining_to_sell = filled_qty
+        while remaining_to_sell > 0 and self.entry_lots:
+            lot = self.entry_lots[0]
+            if lot['shares'] <= remaining_to_sell:
+                remaining_to_sell -= lot['shares']
+                self.entry_lots.pop(0)
+            else:
+                lot['shares'] -= remaining_to_sell
+                remaining_to_sell = 0
+
+        self.current_position -= filled_qty
+        if self.current_position <= 0:
+            self.current_position = 0
+            self.entry_lots = []
+            self.entry_prices = []
+            self._clear_entry_prices_file()
+        else:
+            self.entry_prices = [lot['price'] for lot in self.entry_lots]
+            self._save_entry_prices()
+
+    # --- MJ-003: Acted signals persistence ---
+
+    def _acted_signals_path(self):
+        """Return the file path for persisted acted signals."""
+        return f'trade/acted_signals_{self.symbol}.json'
+
+    def _save_acted_signals(self):
+        """Persist acted signals to disk."""
+        try:
+            data = [list(item) for item in self._acted_signals]
+            with open(self._acted_signals_path(), 'w') as f:
+                json.dump(data, f)
+        except Exception as e:
+            logger.error(f'Failed to save acted signals: {e}', exc_info=True)
+
+    def _load_acted_signals(self):
+        """Load acted signals from disk. Returns set of (type, date_str) tuples."""
+        try:
+            path = self._acted_signals_path()
+            if os.path.exists(path):
+                with open(path) as f:
+                    data = json.load(f)
+                if isinstance(data, list):
+                    return {tuple(item) for item in data if isinstance(item, list) and len(item) == 2}
+        except Exception as e:
+            logger.error(f'Failed to load acted signals: {e}', exc_info=True)
+        return set()
 
 
 def main():

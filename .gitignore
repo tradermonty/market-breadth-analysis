@@ -23,6 +23,10 @@ venv311/
 !backtest_results_summary.csv
 # Runtime state files
 trade/entry_prices_*.json
+trade/acted_signals_*.json
+
+# Code review reports (private)
+reviews/
 
 # Sub-projects (managed independently)
 rsp_breadth_strategy/
