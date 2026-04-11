@@ -622,10 +622,9 @@ class Backtest:
 
         # Calculate number of exits due to background color changes
         background_change_exits = 0
-        for trade in self.trades:
+        for trade_idx, trade in enumerate(self.trades):
             if trade['action'] == 'SELL':
                 # Check if the previous trade was an exit due to background color change
-                trade_idx = self.trades.index(trade)
                 if trade_idx > 0:
                     prev_trade = self.trades[trade_idx - 1]
                     if prev_trade['action'] == 'BUY':
@@ -1129,6 +1128,8 @@ class Backtest:
 
     def _process_exit_fifo(self, exit_date, exit_price, total_shares_to_sell, total_proceeds, exit_reason):
         """Process exit using FIFO logic and record completed trades (Phase 1)"""
+        if total_shares_to_sell <= 0:
+            return
         remaining_shares = total_shares_to_sell
 
         while remaining_shares > 0 and self.open_positions:
@@ -1591,9 +1592,16 @@ class Backtest:
         self._pending_trend_break = False
 
     def _execute_stage1_exit(self, date, price):
-        """Execute stage 1 exit: sell half of current position."""
+        """Execute stage 1 exit: sell half of current position.
+
+        When position is 1 share (half rounds to 0), sell the full share
+        to avoid stranding the position (M-08 fix).
+        """
         shares_to_sell = self.current_position // 2
         if shares_to_sell <= 0:
+            # 1-share position: sell full to avoid stranding
+            if self.current_position > 0:
+                self._execute_exit(date, price, reason='peak exit (stage 1, full)', force_full_exit=True)
             return
         exit_price = price * (1 - self.slippage)
         commission = exit_price * shares_to_sell * self.commission

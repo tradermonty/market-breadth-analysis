@@ -89,15 +89,14 @@ def trigger_workflow():
         json={'ref': 'main'},
         timeout=15,
     )
-    if resp.status_code == 204:
-        return {
-            'status': 'triggered',
-            'message': 'Workflow triggered. Data will be ready in ~5 minutes.',
-            'runs_url': (
-                'https://github.com/tradermonty/market-breadth-analysis/actions/workflows/daily-market-breadth.yml'
-            ),
-        }
     resp.raise_for_status()
+    return {
+        'status': 'triggered',
+        'message': 'Workflow triggered. Data will be ready in ~5 minutes.',
+        'runs_url': (
+            'https://github.com/tradermonty/market-breadth-analysis/actions/workflows/daily-market-breadth.yml'
+        ),
+    }
 
 
 def fetch_market_breadth(max_age_hours=12):

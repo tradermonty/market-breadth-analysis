@@ -50,12 +50,11 @@ def visualize_backtest_results(bt, show_plot=True):
     ax1.plot(bt.price_data.index, bt.price_data['adjusted_close'], label=f'{bt.symbol} Price')
 
     # Display trade points
-    for trade in bt.trades:
+    for trade_idx, trade in enumerate(bt.trades):
         if trade['action'] == 'BUY':
             ax1.scatter(trade['date'], trade['price'], color='green', marker='^', s=100, label='Buy')
         elif trade['action'] == 'SELL':
             # Check if this was a stop loss by checking the previous entry price
-            trade_idx = bt.trades.index(trade)
             if trade_idx > 0:
                 prev_trade = bt.trades[trade_idx - 1]
                 if prev_trade['action'] == 'BUY':
