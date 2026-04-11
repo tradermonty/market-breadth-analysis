@@ -762,6 +762,142 @@ class TestLegacyModeSignalPriority(unittest.TestCase):
         self.assertLessEqual(total_cost, 50000, 'Calculated shares should not exceed available capital')
 
 
+class TestVolatilityStop(unittest.TestCase):
+    """M-04: Verify _compute_volatility_stop for both fallback and normal paths."""
+
+    def _make_backtest(self, **kwargs):
+        defaults = {
+            'start_date': '2023-01-01',
+            'end_date': '2023-12-31',
+            'symbol': 'SPY',
+            'use_saved_data': True,
+            'no_show_plot': True,
+            'initial_capital': 100000,
+            'slippage': 0.0,
+            'commission': 0.0,
+            'use_volatility_stop': True,
+            'vol_atr_period': 14,
+            'vol_atr_multiplier': 2.0,
+            'stop_loss_pct': 0.08,
+        }
+        defaults.update(kwargs)
+        return Backtest(**defaults)
+
+    def test_24_fallback_to_fixed_stop_when_insufficient_bars(self):
+        """With fewer bars than vol_atr_period, falls back to fixed stop_loss_pct."""
+        bt = self._make_backtest(vol_atr_period=14, stop_loss_pct=0.08)
+
+        # Inject 5 bars of price data (fewer than vol_atr_period=14)
+        dates = pd.date_range('2023-06-01', periods=5, freq='B')
+        bt.price_data = pd.DataFrame({'adjusted_close': [100, 101, 99, 102, 98]}, index=dates)
+
+        reference_price = 100.0
+        stop = bt._compute_volatility_stop(3, reference_price)  # i=3 < 14
+
+        # Should use fixed stop: 100 * (1 - 0.08) = 92.0
+        self.assertAlmostEqual(stop, 92.0)
+
+    def test_25_volatility_stop_uses_std_when_enough_bars(self):
+        """With enough bars, stop distance is proportional to realized volatility."""
+        import numpy as np
+
+        bt = self._make_backtest(vol_atr_period=14, vol_atr_multiplier=2.0)
+
+        # Inject 20 bars with known volatility
+        np.random.seed(42)
+        prices = 100 + np.cumsum(np.random.randn(20) * 0.5)
+        dates = pd.date_range('2023-06-01', periods=20, freq='B')
+        bt.price_data = pd.DataFrame({'adjusted_close': prices}, index=dates)
+
+        reference_price = prices[19]
+        stop = bt._compute_volatility_stop(19, reference_price)  # i=19 >= 14
+
+        # Should NOT be the fixed stop
+        fixed_stop = reference_price * (1 - 0.08)
+        self.assertNotAlmostEqual(stop, fixed_stop, places=2, msg='Volatility stop should differ from fixed stop')
+
+        # Should be below reference price
+        self.assertLess(stop, reference_price)
+
+
+class TestFifoPartialMatch(unittest.TestCase):
+    """M-01: Verify FIFO partial match correctly updates entry_shares and entry_cost."""
+
+    def _make_backtest(self, **kwargs):
+        defaults = {
+            'start_date': '2023-01-01',
+            'end_date': '2023-12-31',
+            'symbol': 'SPY',
+            'use_saved_data': True,
+            'no_show_plot': True,
+            'initial_capital': 100000,
+            'slippage': 0.0,
+            'commission': 0.0,
+        }
+        defaults.update(kwargs)
+        return Backtest(**defaults)
+
+    def test_22_partial_fifo_match_updates_cost_proportionally(self):
+        """Sell fewer shares than first lot — remaining lot has proportional cost."""
+        bt = self._make_backtest()
+
+        # Enter 100 shares at $50 (total cost = 5000, no slippage/commission)
+        bt._execute_entry(pd.Timestamp('2023-06-01'), 50.0, 100, reason='test')
+        self.assertEqual(len(bt.open_positions), 1)
+        self.assertEqual(bt.open_positions[0]['entry_shares'], 100)
+        self.assertAlmostEqual(bt.open_positions[0]['entry_cost'], 5000.0)
+
+        # Sell 40 of 100 shares at $60
+        bt._process_exit_fifo(
+            pd.Timestamp('2023-06-10'),
+            60.0,
+            40,
+            60.0 * 40,
+            'partial_test',
+        )
+
+        # Remaining lot: 60 shares, cost = 5000 * (60/100) = 3000
+        self.assertEqual(len(bt.open_positions), 1)
+        self.assertEqual(bt.open_positions[0]['entry_shares'], 60)
+        self.assertAlmostEqual(bt.open_positions[0]['entry_cost'], 3000.0)
+
+        # Trade log should have 1 completed trade for 40 shares
+        self.assertEqual(len(bt.trade_log), 1)
+        self.assertEqual(bt.trade_log[0]['exit_shares'], 40)
+
+    def test_23_partial_then_full_exit_pnl_consistent(self):
+        """Sell 40, then 60 — cumulative P&L matches total position P&L."""
+        bt = self._make_backtest()
+
+        # Enter 100 shares at $50
+        bt._execute_entry(pd.Timestamp('2023-06-01'), 50.0, 100, reason='test')
+
+        # Sell 40 at $60 → P&L = (60-50)*40 = $400
+        bt._process_exit_fifo(
+            pd.Timestamp('2023-06-10'),
+            60.0,
+            40,
+            60.0 * 40,
+            'partial',
+        )
+        self.assertAlmostEqual(bt.trade_log[0]['pnl_dollar'], 400.0)
+
+        # Sell remaining 60 at $55 → P&L = (55-50)*60 = $300
+        bt._process_exit_fifo(
+            pd.Timestamp('2023-06-15'),
+            55.0,
+            60,
+            55.0 * 60,
+            'full',
+        )
+        self.assertAlmostEqual(bt.trade_log[1]['pnl_dollar'], 300.0)
+
+        # Total P&L = $700, consistent with (weighted avg exit - 50) * 100
+        total_pnl = sum(t['pnl_dollar'] for t in bt.trade_log)
+        self.assertAlmostEqual(total_pnl, 700.0)
+        self.assertEqual(len(bt.open_positions), 0)
+
+
 if __name__ == '__main__':
     # Run tests with verbose output
     unittest.main(verbosity=2)

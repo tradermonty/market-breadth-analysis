@@ -1266,5 +1266,80 @@ class TestTimezoneCorrectness(unittest.TestCase):
         self.assertEqual(result.index[0], pd.Timestamp('2026-04-10'), 'Alpaca price index should use ET date')
 
 
+class TestUpdateLotsAfterSell(unittest.TestCase):
+    """M-02: _update_lots_after_sell oversell guard and FIFO correctness."""
+
+    @patch('trade.run_market_breadth_trade.MarketBreadthTrader._initialize_alpaca')
+    def setUp(self, mock_init):
+        mock_init.return_value = Mock()
+        self.trader = MarketBreadthTrader(symbol='TEST')
+        self.trader._acted_signals = set()
+        self.trader._save_entry_prices = Mock()
+        self.trader._clear_entry_prices_file = Mock()
+
+    def test_oversell_does_not_crash_and_clears_position(self):
+        """Selling more than lots total should not crash; position goes to 0."""
+        self.trader.entry_lots = [{'price': 50.0, 'shares': 80}]
+        self.trader.current_position = 80
+
+        self.trader._update_lots_after_sell(100)  # oversell by 20
+
+        self.assertEqual(self.trader.current_position, 0)
+        self.assertEqual(self.trader.entry_lots, [])
+
+    def test_fifo_partial_lot_reduction(self):
+        """Selling part of a lot reduces that lot's shares correctly."""
+        self.trader.entry_lots = [
+            {'price': 50.0, 'shares': 100},
+            {'price': 60.0, 'shares': 50},
+        ]
+        self.trader.current_position = 150
+
+        self.trader._update_lots_after_sell(120)  # consumes lot1 (100) + 20 from lot2
+
+        self.assertEqual(self.trader.current_position, 30)
+        self.assertEqual(len(self.trader.entry_lots), 1)
+        self.assertEqual(self.trader.entry_lots[0]['price'], 60.0)
+        self.assertEqual(self.trader.entry_lots[0]['shares'], 30)
+
+
+class TestSyncPositionLotsMismatch(unittest.TestCase):
+    """M-03: _sync_position_from_broker falls back to broker when lots mismatch."""
+
+    @patch('trade.run_market_breadth_trade.MarketBreadthTrader._initialize_alpaca')
+    def test_mismatch_falls_back_to_broker_avg(self, mock_init):
+        mock_api = Mock()
+        mock_init.return_value = mock_api
+
+        trader = MarketBreadthTrader(symbol='TEST')
+        trader._acted_signals = set()
+
+        # Write lots file with total 80 shares
+        tmp_dir = tempfile.mkdtemp()
+        entry_path = os.path.join(tmp_dir, 'entry_prices_TEST.json')
+        trader._entry_prices_path = lambda: entry_path
+        with open(entry_path, 'w') as f:
+            json.dump({'lots': [{'price': 55.0, 'shares': 50}, {'price': 60.0, 'shares': 30}]}, f)
+
+        # Broker says 100 shares (mismatch: 80 != 100)
+        mock_position = Mock()
+        mock_position.qty = 100
+        mock_position.avg_entry_price = '57.0'
+        mock_api.get_position.return_value = mock_position
+
+        trader.entry_lots = []
+        trader.entry_prices = []
+        trader._sync_position_from_broker()
+
+        # Should fall back to single lot at broker avg
+        self.assertEqual(len(trader.entry_lots), 1)
+        self.assertEqual(trader.entry_lots[0]['price'], 57.0)
+        self.assertEqual(trader.entry_lots[0]['shares'], 100)
+        self.assertEqual(trader.current_position, 100)
+
+        os.remove(entry_path)
+        os.rmdir(tmp_dir)
+
+
 if __name__ == '__main__':
     unittest.main()
