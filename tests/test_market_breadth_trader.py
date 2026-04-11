@@ -1129,5 +1129,142 @@ class TestMarketBreadthTrader(unittest.TestCase):
         os.rmdir(tmp_dir)
 
 
+class TestTimezoneCorrectness(unittest.TestCase):
+    """CR-005 regression: verify ET date derivation under UTC-host conditions.
+
+    When deployed on a UTC server after 21:00 UTC (= next calendar day in UTC but
+    still the same trading day in ET), all date-dependent logic must use the ET date.
+    """
+
+    TZ_NY = ZoneInfo('US/Eastern')
+
+    @patch('trade.run_market_breadth_trade.MarketBreadthTrader._initialize_alpaca')
+    def setUp(self, mock_init):
+        self.mock_api = Mock()
+        mock_init.return_value = self.mock_api
+        self.trader = MarketBreadthTrader(symbol='SSO')
+        self.trader._acted_signals = set()
+
+    @patch('trade.run_market_breadth_trade._now_et')
+    def test_analyze_market_uses_et_date_not_utc(self, mock_now):
+        """analyze_market() must use ET date, not UTC date, for FMP data fetch."""
+        # Simulate 2026-04-11 00:30 UTC = 2026-04-10 20:30 ET
+        # UTC calendar date is Apr 11, but ET calendar date is still Apr 10
+        et_time = datetime(2026, 4, 10, 20, 30, tzinfo=self.TZ_NY)
+        mock_now.return_value = et_time
+
+        # Stub out the heavy analyze_market internals — we only care about the date calc
+        self.trader._detect_signals = Mock()
+
+        # Patch get_sp500_tickers_from_fmp and data fetching to avoid real API calls
+        with (
+            patch('trade.run_market_breadth_trade.get_sp500_tickers_from_fmp', return_value=['AAPL']),
+            patch('trade.run_market_breadth_trade.get_multiple_stock_data') as mock_stock_data,
+            patch.object(self.trader, '_get_latest_prices_from_alpaca') as mock_alpaca,
+        ):
+            # Return minimal data so analyze_market can compute breadth
+            dates = pd.date_range('2025-01-01', '2026-04-10', freq='B')
+            mock_stock_data.return_value = pd.DataFrame(
+                {'AAPL': np.random.default_rng(42).random(len(dates)) * 100 + 100},
+                index=dates,
+            )
+            mock_alpaca.return_value = pd.DataFrame(
+                {'AAPL': [155.0]},
+                index=[pd.Timestamp('2026-04-10')],
+            )
+
+            self.trader.analyze_market()
+
+        # Verify: analyze_market computes yesterday = today - 1 day (ET-based).
+        # _now_et() returns Apr 10 ET, so yesterday = Apr 9, NOT Apr 10 (which UTC would give).
+        call_args = mock_stock_data.call_args
+        end_date_arg = call_args[1].get('end_date') or call_args[0][2]
+        self.assertIn(
+            '2026-04-09',
+            str(end_date_arg),
+            'yesterday should be based on ET date (Apr 10 - 1 = Apr 9), not UTC (Apr 11 - 1 = Apr 10)',
+        )
+
+    @patch('trade.run_market_breadth_trade._now_et')
+    def test_check_signals_uses_et_date(self, mock_now):
+        """check_signals_and_trade() must derive current_date from ET, not UTC."""
+        # 2026-04-11 00:30 UTC = 2026-04-10 20:30 ET
+        et_time = datetime(2026, 4, 10, 20, 30, tzinfo=self.TZ_NY)
+        mock_now.return_value = et_time
+
+        self.trader.current_position = 0
+        self.trader.entry_prices = []
+        self.trader.entry_lots = []
+        self.trader._sync_position_from_broker = Mock()
+
+        # Set signal for ET date (Apr 10)
+        et_date = pd.Timestamp('2026-04-10')
+        self.trader.long_ma_bottoms = [et_date]
+        self.trader.short_ma_bottoms = []
+        self.trader.peaks = []
+
+        self.mock_api.get_latest_bar.return_value = Mock(c=100.0)
+        mock_account = Mock()
+        mock_account.cash = '50000.0'
+        self.mock_api.get_account.return_value = mock_account
+
+        mock_order = Mock()
+        mock_order.id = 'test-order'
+        self.mock_api.submit_order.return_value = mock_order
+
+        filled = Mock()
+        filled.filled_qty = 499
+        filled.filled_avg_price = '100.0'
+        self.trader._wait_for_fill = Mock(return_value=filled)
+        self.trader._save_entry_prices = Mock()
+        self.trader._save_acted_signals = Mock()
+
+        self.trader.check_signals_and_trade()
+
+        # Signal on Apr 10 should match when _now_et() returns Apr 10 ET
+        self.assertEqual(
+            self.trader.current_position, 499, 'Signal on ET date should fire when _now_et returns that ET date'
+        )
+
+    @patch('trade.run_market_breadth_trade._now_et')
+    def test_check_signals_misses_utc_date_signal(self, mock_now):
+        """A signal set for UTC date (Apr 11) should NOT fire when ET date is Apr 10."""
+        et_time = datetime(2026, 4, 10, 20, 30, tzinfo=self.TZ_NY)
+        mock_now.return_value = et_time
+
+        self.trader.current_position = 0
+        self.trader.entry_prices = []
+        self.trader.entry_lots = []
+        self.trader._sync_position_from_broker = Mock()
+
+        # Signal for UTC date (Apr 11) — wrong date from ET perspective
+        utc_date = pd.Timestamp('2026-04-11')
+        self.trader.long_ma_bottoms = [utc_date]
+        self.trader.short_ma_bottoms = []
+        self.trader.peaks = []
+
+        self.mock_api.get_latest_bar.return_value = Mock(c=100.0)
+
+        self.trader.check_signals_and_trade()
+
+        # Should NOT fire because Apr 11 is tomorrow in ET
+        self.assertEqual(self.trader.current_position, 0, 'Signal on UTC date (tomorrow in ET) should not fire')
+
+    @patch('trade.run_market_breadth_trade._now_et')
+    def test_get_latest_prices_uses_et_date_index(self, mock_now):
+        """_get_latest_prices_from_alpaca() index must use ET date."""
+        et_time = datetime(2026, 4, 10, 20, 30, tzinfo=self.TZ_NY)
+        mock_now.return_value = et_time
+
+        mock_bar = Mock()
+        mock_bar.c = 155.0
+        self.mock_api.get_latest_bar.return_value = mock_bar
+
+        result = self.trader._get_latest_prices_from_alpaca(['AAPL'])
+
+        # Index should be ET date (Apr 10), not UTC date (Apr 11)
+        self.assertEqual(result.index[0], pd.Timestamp('2026-04-10'), 'Alpaca price index should use ET date')
+
+
 if __name__ == '__main__':
     unittest.main()
