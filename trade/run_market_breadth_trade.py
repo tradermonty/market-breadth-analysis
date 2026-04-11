@@ -900,9 +900,13 @@ class MarketBreadthTrader:
         if remaining_to_sell > 0:
             logger.warning(
                 f'Oversell detected: filled_qty={filled_qty} exceeds lots total by {remaining_to_sell}. '
-                f'Clearing all lots and resetting position.'
+                f'Forcing position to zero.'
             )
+            self.current_position = 0
             self.entry_lots = []
+            self.entry_prices = []
+            self._clear_entry_prices_file()
+            return
 
         self.current_position -= filled_qty
         if self.current_position <= 0:

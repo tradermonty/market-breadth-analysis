@@ -1277,7 +1277,7 @@ class TestUpdateLotsAfterSell(unittest.TestCase):
         self.trader._save_entry_prices = Mock()
         self.trader._clear_entry_prices_file = Mock()
 
-    def test_oversell_does_not_crash_and_clears_position(self):
+    def test_oversell_beyond_position_clears_to_zero(self):
         """Selling more than lots total should not crash; position goes to 0."""
         self.trader.entry_lots = [{'price': 50.0, 'shares': 80}]
         self.trader.current_position = 80
@@ -1286,6 +1286,20 @@ class TestUpdateLotsAfterSell(unittest.TestCase):
 
         self.assertEqual(self.trader.current_position, 0)
         self.assertEqual(self.trader.entry_lots, [])
+        self.assertEqual(self.trader.entry_prices, [])
+
+    def test_oversell_with_stale_lots_forces_zero(self):
+        """filled_qty exceeds lots total but not current_position — forces zero."""
+        # Stale state: position=100 but lots only account for 80 shares
+        self.trader.entry_lots = [{'price': 50.0, 'shares': 80}]
+        self.trader.current_position = 100
+
+        self.trader._update_lots_after_sell(90)  # 90 > lots(80), but < position(100)
+
+        # Must force to zero, not leave position=10 with empty lots
+        self.assertEqual(self.trader.current_position, 0)
+        self.assertEqual(self.trader.entry_lots, [])
+        self.assertEqual(self.trader.entry_prices, [])
 
     def test_fifo_partial_lot_reduction(self):
         """Selling part of a lot reduces that lot's shares correctly."""
