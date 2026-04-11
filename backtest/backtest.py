@@ -58,6 +58,12 @@ except ModuleNotFoundError:
         get_trade_pairs,
     )
 
+# Weekly trailing stop functions
+try:
+    from backtest.weekly_trailing import aggregate_to_weekly, check_weekly_trailing_stop, is_week_end
+except (ModuleNotFoundError, ImportError):
+    from weekly_trailing import aggregate_to_weekly, check_weekly_trailing_stop, is_week_end
+
 
 class Backtest:
     def __init__(
@@ -526,6 +532,33 @@ class Backtest:
 
         return pd.DataFrame()
 
+    def _process_pending_weekly_exit(self, i, date, price, pending):
+        """Process a pending weekly trailing stop exit at bar open. Returns True if fired."""
+        if pending and self.current_position > 0:
+            exit_price = (
+                self.price_data['adjusted_open'].iloc[i] if 'adjusted_open' in self.price_data.columns else price
+            )
+            self._execute_exit(date, exit_price, reason='weekly trailing', force_full_exit=True)
+            return True
+        return False
+
+    def _check_weekly_trailing_at_week_end(self, i, date, price, weekly_df):
+        """Check weekly trailing stop at week-end. Returns True if should set pending exit."""
+        if self.enable_weekly_trailing and self.current_position > 0 and self.open_positions:
+            if is_week_end(self.price_data.index, i):
+                earliest_entry = min(pos['entry_date'] for pos in self.open_positions)
+                return check_weekly_trailing_stop(
+                    current_close=price,
+                    weekly_df=weekly_df,
+                    entry_date=earliest_entry,
+                    current_date=date,
+                    trailing_type=self.weekly_trailing_type,
+                    ema_period=self.weekly_ema_period,
+                    nweek_low_period=self.weekly_nweek_low_period,
+                    transition_weeks=self.weekly_transition_weeks,
+                )
+        return False
+
     def execute_trades(self):
         """Execute trades"""
         # 検出済みのシグナルを記録する変数（_detect_legacy_signals で使用）
@@ -535,11 +568,6 @@ class Backtest:
 
         # Weekly trailing stop preparation
         if self.enable_weekly_trailing:
-            try:
-                from backtest.weekly_trailing import aggregate_to_weekly, check_weekly_trailing_stop, is_week_end
-            except (ModuleNotFoundError, ImportError):
-                from weekly_trailing import aggregate_to_weekly, check_weekly_trailing_stop, is_week_end
-
             weekly_df = aggregate_to_weekly(self.price_data)
             _pending_weekly_exit = False
         else:
@@ -550,15 +578,10 @@ class Backtest:
         for i, date in enumerate(self.price_data.index):
             price = self.price_data.loc[date, 'adjusted_close']
 
-            # Process pending weekly trailing exit (MJ-010: shared helper)
-            weekly_exit_fired = False
-            if _pending_weekly_exit and self.current_position > 0:
-                exit_price = (
-                    self.price_data['adjusted_open'].iloc[i] if 'adjusted_open' in self.price_data.columns else price
-                )
-                self._execute_exit(date, exit_price, reason='weekly trailing', force_full_exit=True)
+            # Process pending weekly trailing exit at bar open
+            weekly_exit_fired = self._process_pending_weekly_exit(i, date, price, _pending_weekly_exit)
+            if weekly_exit_fired:
                 _pending_weekly_exit = False
-                weekly_exit_fired = True
 
             if self.tv_mode:
                 if not weekly_exit_fired:
@@ -568,26 +591,9 @@ class Backtest:
                 if not weekly_exit_fired:
                     self._execute_legacy_trades(i, date, price)
 
-            # Weekly trailing check at week-end (MJ-010: shared helper)
-            if (
-                self.enable_weekly_trailing
-                and self.current_position > 0
-                and not _pending_weekly_exit
-                and self.open_positions
-            ):
-                if is_week_end(self.price_data.index, i):
-                    earliest_entry = min(pos['entry_date'] for pos in self.open_positions)
-                    if check_weekly_trailing_stop(
-                        current_close=price,
-                        weekly_df=weekly_df,
-                        entry_date=earliest_entry,
-                        current_date=date,
-                        trailing_type=self.weekly_trailing_type,
-                        ema_period=self.weekly_ema_period,
-                        nweek_low_period=self.weekly_nweek_low_period,
-                        transition_weeks=self.weekly_transition_weeks,
-                    ):
-                        _pending_weekly_exit = True
+            # Check weekly trailing stop at week-end
+            if not _pending_weekly_exit and self._check_weekly_trailing_at_week_end(i, date, price, weekly_df):
+                _pending_weekly_exit = True
 
             # Update equity curve
             self.equity_curve.append({'date': date, 'equity': self.current_capital + (self.current_position * price)})
