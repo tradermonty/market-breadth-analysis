@@ -24,7 +24,10 @@ jobs:
           python-version: '3.11'
 
       - name: Install tools
-        run: pip install ruff codespell tomli mypy pandas-stubs types-requests types-tqdm
+        # Pin ruff: newer versions reformat Markdown code blocks in README/CLAUDE/docs,
+        # which the repository has not been formatted against. Keeping the version fixed
+        # keeps the format check deterministic without unrelated doc churn.
+        run: pip install ruff==0.9.6 codespell tomli mypy pandas-stubs types-requests types-tqdm
 
       - name: Ruff lint
         run: ruff check .
