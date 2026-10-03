@@ -32,6 +32,9 @@ The latest market breadth data is automatically updated twice daily and publishe
 | Data CSV | [market_breadth_data.csv](https://tradermonty.github.io/market-breadth-analysis/market_breadth_data.csv) |
 | Summary CSV | [market_breadth_summary.csv](https://tradermonty.github.io/market-breadth-analysis/market_breadth_summary.csv) |
 
+GitHub [disables scheduled workflows after 60 days without repository activity](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule).
+The daily workflow checks the default branch and pushes an empty keepalive commit only when its latest commit is at least 30 days old. Only this job has `contents: write`; it runs independently of analysis and never commits generated data. Branch rules must allow this bot push. If the workflow is already disabled, a repository administrator must enable it with `gh workflow enable daily-market-breadth.yml` and run `gh workflow run daily-market-breadth.yml --ref main` to refresh the feed.
+
 ## Prerequisites
 
 - Python 3.8 or higher

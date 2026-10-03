@@ -32,6 +32,9 @@ S&P500銘柄のマーケットブレッドを分析・可視化するツール�
 | データCSV | [market_breadth_data.csv](https://tradermonty.github.io/market-breadth-analysis/market_breadth_data.csv) |
 | サマリーCSV | [market_breadth_summary.csv](https://tradermonty.github.io/market-breadth-analysis/market_breadth_summary.csv) |
 
+GitHub は[リポジトリに60日間活動がないと定期ワークフローを無効化します](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule)。
+日次ワークフローはデフォルトブランチを確認し、最後のコミットから30日以上経過した場合だけ空の keepalive コミットを push します。この専用ジョブだけに `contents: write` を付与し、分析処理の成否に関係なく実行します。生成データはコミットしません。ブランチルールで bot の push を許可する必要があります。すでに無効化されている場合は、リポジトリ管理者が `gh workflow enable daily-market-breadth.yml` で再有効化し、`gh workflow run daily-market-breadth.yml --ref main` でデータを更新してください。
+
 ## 必要条件
 
 - Python 3.8以上
