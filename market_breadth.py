@@ -22,6 +22,16 @@ reports_dir.mkdir(exist_ok=True)
 data_dir = pathlib.Path('data')
 data_dir.mkdir(exist_ok=True)
 
+# Issue #7: minimum fraction of constituents that must be MA-eligible (have a computable
+# moving average) at the published latest date for the breadth observation to be considered
+# publication-quality. Configurable via --min_coverage.
+DEFAULT_MIN_COVERAGE = 0.9
+
+
+class CoverageThresholdError(ValueError):
+    """Raised when eligible coverage at the latest date is below the publication threshold."""
+
+
 # Lazy-initialized FMP data fetcher (CR-004: avoid import-time instantiation)
 _fmp_fetcher = None
 
@@ -320,7 +330,18 @@ def get_multiple_stock_data(tickers, start_date, end_date, use_saved_data=False)
 
 # Calculate whether each stock is above the specified moving average
 def calculate_above_ma(stock_data, window=200):
-    """Calculate whether each stock is above the specified moving average"""
+    """Calculate whether each stock is above the specified moving average.
+
+    Denominator policy (issue #7): only stocks that are MA-eligible on a given day are
+    counted in that day's breadth. A stock is eligible when its rolling moving average is
+    computable AND its price is observed; otherwise the cell is ``NaN`` so downstream
+    ``mean(axis=1)`` normalizes by the eligible count instead of treating missing/ineligible
+    observations as below-MA. Non-computable days (no eligible stocks) yield ``NaN`` breadth.
+
+    Returns a float64 DataFrame where each cell is ``1.0`` (above MA), ``0.0`` (computable
+    but at/below MA), or ``NaN`` (not MA-eligible). This is a deliberate change in numerical
+    meaning versus the previous boolean frame, which counted missing observations as below-MA.
+    """
     print('\nCalculating moving averages:')
     print(f'Input data shape: {stock_data.shape}')
     print(f'Sample column names: {list(stock_data.columns[:5])}')
@@ -329,8 +350,12 @@ def calculate_above_ma(stock_data, window=200):
     # Calculate moving average
     ma_data = stock_data.rolling(window=window).mean()
 
-    # Check if price is above moving average
-    above_ma = stock_data > ma_data
+    # A stock is eligible when its price and rolling MA are both observed.
+    eligible = ma_data.notna() & stock_data.notna()
+
+    # Check if price is above moving average; mark ineligible cells as NaN so the mean()
+    # denominator is the eligible count. Cast to float before masking to avoid object dtype.
+    above_ma = (stock_data > ma_data).astype(float).where(eligible)
 
     # Calculate and print statistics
     daily_percentages = above_ma.mean(axis=1)
@@ -338,9 +363,62 @@ def calculate_above_ma(stock_data, window=200):
     print(f'Mean: {daily_percentages.mean():.3f}')
     print(f'Max: {daily_percentages.max():.3f}')
     print(f'Min: {daily_percentages.min():.3f}')
-    print(f'Number of stocks per day: {above_ma.sum(axis=1).mean():.1f}')
+    print(f'Average MA-eligible stocks above MA per day: {above_ma.fillna(0).gt(0).sum(axis=1).mean():.1f}')
 
     return above_ma
+
+
+def compute_breadth_coverage(above_ma):
+    """Compute per-day coverage metrics from an MA-eligible ``above_ma`` frame.
+
+    Distinguishes the constituent count, the number of MA-eligible stocks, and the number
+    of missing/ineligible observations. ``above_ma`` is the float frame returned by
+    ``calculate_above_ma`` (1.0 above, 0.0 computable-below, NaN ineligible).
+
+    Returns a DataFrame indexed like ``above_ma`` with columns:
+    ``constituent_count``, ``eligible_count``, ``missing_count``, ``above_count``, ``coverage``
+    (coverage = eligible_count / constituent_count). 200-day and 50-day breadth call this
+    independently, so their eligibility is recorded separately.
+    """
+    eligible = above_ma.notna()
+    constituent_count = above_ma.shape[1]
+    eligible_count = eligible.sum(axis=1)
+    if constituent_count > 0:
+        missing_count = constituent_count - eligible_count
+        coverage = eligible_count / constituent_count
+    else:
+        missing_count = pd.Series(0, index=above_ma.index)
+        coverage = pd.Series(0.0, index=above_ma.index)
+    above_count = above_ma.gt(0).sum(axis=1)
+    return pd.DataFrame(
+        {
+            'constituent_count': constituent_count,
+            'eligible_count': eligible_count,
+            'missing_count': missing_count,
+            'above_count': above_count,
+            'coverage': coverage,
+        }
+    )
+
+
+def enforce_coverage_threshold(coverage, min_coverage, label, market_date):
+    """Raise if the coverage at ``market_date`` is below ``min_coverage``.
+
+    Returns ``None`` when the latest-date coverage meets the threshold. On failure, raises a
+    ``CoverageThresholdError`` (a ``ValueError`` subclass) with a machine-readable, redacted
+    message exposing the eligible and missing counts, the coverage, and the market date, so
+    publication-quality analysis is not silently advanced on below-threshold data (issue #7).
+    """
+    if market_date not in coverage.index:
+        raise CoverageThresholdError(f'{label} coverage not computable for market date {market_date}')
+    eligible_count = int(coverage.loc[market_date, 'eligible_count'])
+    missing_count = int(coverage.loc[market_date, 'missing_count'])
+    cov = float(coverage.loc[market_date, 'coverage'])
+    if cov < min_coverage:
+        raise CoverageThresholdError(
+            f'{label} coverage below threshold: {cov:.3f} < {min_coverage:.3f} on '
+            f'{market_date} (eligible={eligible_count}, missing={missing_count})'
+        )
 
 
 # Calculate trend with hysteresis for slope
@@ -1072,7 +1150,15 @@ def get_stock_price_data(symbol, start_date, end_date, use_saved_data=False):
 
 
 def export_chart_data_to_csv(chart_data, short_ma_period, filename=None):
-    """Export chart data to CSV file"""
+    """Export chart data to CSV file.
+
+    Adds backward-compatible coverage columns (``Eligible_Count_200``, ``Missing_Count_200``,
+    ``Above_Count_200``, ``Coverage_200``; plus ``*_50`` equivalents when 50-day data is present)
+    when ``chart_data`` carries a ``coverage_200`` / ``coverage_50`` frame. New columns are
+    appended after the existing ones, so consumers reading by name are unaffected. Migrating
+    note: ``Breadth_Index_Raw`` now normalizes by MA-eligible stocks (see ``calculate_above_ma``),
+    so non-computable days report NaN instead of a spurious 0.
+    """
     if filename is None:
         current_date = datetime.now().strftime('%Y%m%d')
         filename = f'market_breadth_data_{current_date}_ma{short_ma_period}.csv'
@@ -1125,6 +1211,20 @@ def export_chart_data_to_csv(chart_data, short_ma_period, filename=None):
         f'Is_Trough_{short_ma_period}MA_Below_04',
     ]
 
+    # Add 200-day coverage columns when present (backward-compatible append)
+    coverage_200 = chart_data.get('coverage_200')
+    if coverage_200 is not None:
+        df['Eligible_Count_200'] = coverage_200['eligible_count']
+        df['Missing_Count_200'] = coverage_200['missing_count']
+        df['Above_Count_200'] = coverage_200['above_count']
+        df['Coverage_200'] = coverage_200['coverage']
+        column_order += [
+            'Eligible_Count_200',
+            'Missing_Count_200',
+            'Above_Count_200',
+            'Coverage_200',
+        ]
+
     # Add 50-day columns if chart_data_50 is present
     chart_data_50 = chart_data.get('chart_data_50')
     if chart_data_50 is not None:
@@ -1151,6 +1251,19 @@ def export_chart_data_to_csv(chart_data, short_ma_period, filename=None):
             'Is_Peak_50',
             'Is_Trough_50',
         ]
+
+        coverage_50 = chart_data.get('coverage_50')
+        if coverage_50 is not None:
+            df['Eligible_Count_50'] = coverage_50['eligible_count']
+            df['Missing_Count_50'] = coverage_50['missing_count']
+            df['Above_Count_50'] = coverage_50['above_count']
+            df['Coverage_50'] = coverage_50['coverage']
+            column_order += [
+                'Eligible_Count_50',
+                'Missing_Count_50',
+                'Above_Count_50',
+                'Coverage_50',
+            ]
 
     df = df[column_order]
 
@@ -1237,9 +1350,19 @@ def main():
         action='store_true',
         help='Include 50-day MA breadth analysis (adds a third panel)',
     )
+    parser.add_argument(
+        '--min_coverage',
+        type=float,
+        default=DEFAULT_MIN_COVERAGE,
+        help='Minimum fraction of constituents that must be MA-eligible at the latest date '
+        'to publish the breadth observation (default: 0.9)',
+    )
 
     # Set up command line arguments
     args = parser.parse_args()
+
+    if not 0 < args.min_coverage <= 1:
+        raise ValueError(f'--min_coverage must be in (0, 1], got {args.min_coverage}')
 
     if args.debug:
         print('Debug mode enabled')
@@ -1324,6 +1447,22 @@ def main():
                 above_ma_50 = calculate_above_ma(stock_data, window=50)
                 above_ma_50 = above_ma_50.loc[common_dates]
 
+            # Issue #7: enforce publication-quality coverage thresholds BEFORE plotting so a
+            # below-threshold run produces no chart/CSV artifacts (nothing gets published).
+            # Determine the latest plotted date by applying the same date mask the plot uses,
+            # then fail if 200-day (and 50-day, when enabled) coverage is below --min_coverage.
+            plot_mask = above_ma_200.index
+            if start_date and end_date:
+                sd = pd.to_datetime(start_date)
+                ed = pd.to_datetime(end_date)
+                plot_mask = plot_mask[(plot_mask >= sd) & (plot_mask <= ed)]
+            market_date = plot_mask.max()
+            coverage_200 = compute_breadth_coverage(above_ma_200)
+            enforce_coverage_threshold(coverage_200, args.min_coverage, '200-day breadth', market_date)
+            if above_ma_50 is not None:
+                coverage_50 = compute_breadth_coverage(above_ma_50)
+                enforce_coverage_threshold(coverage_50, args.min_coverage, '50-day breadth', market_date)
+
             # Visualize Breadth Index and S&P 500 price with specified date range
             _fig, chart_data = plot_breadth_and_sp500_with_peaks(
                 above_ma_200,
@@ -1334,11 +1473,22 @@ def main():
                 above_ma_50=above_ma_50,
             )
 
+            # Attach coverage to chart_data AFTER the plot call so the key-set contract of
+            # extract_chart_data* stays intact, aligned to the published index.
+            plotted_index = chart_data['breadth_index_200'].index
+            chart_data['coverage_200'] = coverage_200.reindex(plotted_index)
+            if above_ma_50 is not None:
+                chart_data['coverage_50'] = coverage_50.reindex(plotted_index)
+
             # Export CSV data for LLM/programmatic consumption (default: enabled)
             if not args.no_export_csv:
                 export_chart_data_to_csv(chart_data, args.short_ma)
         else:
             print('Error: Ticker list could not be retrieved.')
+    except CoverageThresholdError:
+        # Issue #7: below-threshold coverage must fail publication with a non-zero exit code,
+        # NOT be swallowed as a generic data-fetch error (which returns exit 0).
+        raise
     except ValueError as e:
         print(f'Error: {e}')
         print('Use --use_saved_data option to use previously saved data.')
