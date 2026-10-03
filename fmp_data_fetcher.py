@@ -15,6 +15,8 @@ from typing import Any
 import pandas as pd
 import requests
 
+from secret_redaction import redact, register_secret
+
 # ログ設定
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -41,6 +43,8 @@ class FMPDataFetcher:
         self.api_key = api_key or os.getenv('FMP_API_KEY')
         if not self.api_key:
             raise ValueError('FMP API key is required. Set FMP_API_KEY environment variable.')
+
+        register_secret(self.api_key)
 
         self.base_url = 'https://financialmodelingprep.com/api/v3'
         self.session = requests.Session()
@@ -192,11 +196,11 @@ class FMPDataFetcher:
             except requests.exceptions.RequestException as e:
                 if attempt < max_retries:
                     delay = 2**attempt  # 指数バックオフ
-                    logger.warning(f'Request failed for {endpoint}: {e}. Retrying in {delay}s...')
+                    logger.warning(f'Request failed for {endpoint}: {redact(str(e))}. Retrying in {delay}s...')
                     time.sleep(delay)
                     continue
                 else:
-                    logger.debug(f'Request failed for {endpoint} after {max_retries} retries: {e}')
+                    logger.debug(f'Request failed for {endpoint} after {max_retries} retries: {redact(str(e))}')
                     return None
             except json.JSONDecodeError as e:
                 logger.debug(f'JSON decode error for {endpoint}: {e}')
