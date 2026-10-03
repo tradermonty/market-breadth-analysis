@@ -187,7 +187,7 @@ def compare_trades(py_df: pd.DataFrame, tv_df: pd.DataFrame, trading_days, toler
         'exact_matches': 0,
         'tv_only': [],
         'python_only': [],
-        'pass': True,
+        'pass': True,  # nosec B105 - results flag, not a password
     }
 
     n = min(len(py_df), len(tv_df))
