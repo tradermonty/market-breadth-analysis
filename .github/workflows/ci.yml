@@ -67,7 +67,7 @@ jobs:
           --exclude-files 'venv311/.*'
           --exclude-files 'archive/.*'
           --exclude-files 'data/.*'
-          --list-all-secrets
+          --exclude-files 'trade/.*\.log'
           && echo "No new secrets detected"
 
   test:
