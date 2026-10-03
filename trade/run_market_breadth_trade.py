@@ -306,8 +306,31 @@ class MarketBreadthTrader:
             logger.error(f'Error executing sell order: {e}', exc_info=True)
             return None
 
+    def _parse_filled_qty(self, order):
+        """Normalize Alpaca ``filled_qty`` to an int, defaulting to 0 on non-numeric input.
+
+        Alpaca returns ``filled_qty`` as a raw JSON string (e.g. ``'4'``, or ``'4.0'``
+        for fractional fills). Parse via ``float`` so decimal representations are not
+        silently dropped as zero. Returns 0 for ``None`` and any non-numeric value so
+        callers can treat the order as unfilled.
+        """
+        qty = getattr(order, 'filled_qty', None)
+        if qty is None:
+            return 0
+        try:
+            return int(float(qty))
+        except (TypeError, ValueError):
+            return 0
+
     def _wait_for_fill(self, order, timeout_seconds=60):
-        """Poll order until filled, canceled, or timeout."""
+        """Poll order until filled, canceled, or timeout.
+
+        Returns an order object carrying a normalized, non-zero ``filled_qty`` when any
+        shares filled (full or partial), or ``None`` on a zero fill / unresolved outcome.
+        Issue #5: previously a canceled/expired order with a partial fill returned ``None``,
+        silently dropping the filled shares. ``filled_qty`` is normalized here so the
+        callers' ``int(filled.filled_qty)`` is safe against decimal string representations.
+        """
         if self.testmode:
             return SimpleNamespace(filled_avg_price=None, filled_qty=None, status='filled')
         deadline = time.time() + timeout_seconds
@@ -317,13 +340,24 @@ class MarketBreadthTrader:
                 logger.warning(f'Shutdown requested — aborting fill wait for order {order.id}')
                 shutdown_break = True
                 break
-            updated = self.api.get_order(order.id)
+            try:
+                updated = self.api.get_order(order.id)
+            except Exception as e:
+                logger.warning(f'Error polling order {order.id}: {e} — retrying')
+                time.sleep(2)
+                continue
             if updated.status == 'filled':
+                updated.filled_qty = self._parse_filled_qty(updated)
                 logger.info(f'Order {order.id} filled: {updated.filled_qty} @ ${float(updated.filled_avg_price):.2f}')
                 return updated
             if updated.status == 'partially_filled':
                 logger.info(f'Order {order.id} partially filled: {updated.filled_qty} of {updated.qty}')
             if updated.status in ('canceled', 'expired', 'rejected', 'suspended'):
+                filled_qty = self._parse_filled_qty(updated)
+                if filled_qty > 0:
+                    updated.filled_qty = filled_qty
+                    logger.warning(f'Order {order.id} ended {updated.status} with partial fill: {filled_qty} shares')
+                    return updated
                 logger.warning(f'Order {order.id} ended: {updated.status}')
                 return None
             time.sleep(2)
@@ -335,12 +369,15 @@ class MarketBreadthTrader:
             # Check if it filled during cancellation
             final = self.api.get_order(order.id)
             if final.status == 'filled':
+                final.filled_qty = self._parse_filled_qty(final)
                 logger.info(
                     f'Order {order.id} filled during cancel: {final.filled_qty} @ ${float(final.filled_avg_price):.2f}'
                 )
                 return final
-            if int(final.filled_qty or 0) > 0:
-                logger.warning(f'Order {order.id} partial fill after cancel: {final.filled_qty} shares')
+            final_qty = self._parse_filled_qty(final)
+            if final_qty > 0:
+                final.filled_qty = final_qty
+                logger.warning(f'Order {order.id} partial fill after cancel: {final_qty} shares')
                 return final
         except Exception as e:
             logger.error(f'Failed to cancel order {order.id}: {e}', exc_info=True)
