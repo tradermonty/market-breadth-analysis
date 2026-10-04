@@ -269,6 +269,84 @@ class TestShortIpoRetention(unittest.TestCase):
         self.assertTrue(above_50['IPO'].notna().any())
 
 
+class TestCachedUniverseReconciliation(unittest.TestCase):
+    def test_16_replacement_constituent_in_cache_blocks_publication(self):
+        # R1-P1 regression (reviewer case 1): the returned/cached frame holds a DEPARTED
+        # constituent C in place of the missing current constituent B. main() must reconcile
+        # the frame against the requested ticker identities so B is counted as missing, giving
+        # coverage 0.5 (not 1.0) and blocking publication.
+        dates = _make_dates(210)
+        start = dates[0].strftime('%Y-%m-%d')
+        end = dates[-1].strftime('%Y-%m-%d')
+        # Cache returns A and C; expected universe is [A, B] -> B is missing.
+        cache = pd.DataFrame(
+            {'A': np.linspace(100, 300, 210), 'C': np.linspace(80, 270, 210)},
+            index=dates,
+        )
+        sp500 = pd.Series(np.linspace(4000, 5000, 210), index=dates)
+
+        with (
+            mock.patch.object(mb, 'get_sp500_tickers_from_fmp', return_value=['A', 'B']),
+            mock.patch.object(mb, 'get_sp500_price_data', return_value=sp500),
+            mock.patch.object(mb, 'get_multiple_stock_data', return_value=cache),
+            mock.patch.object(mb, 'plot_breadth_and_sp500_with_peaks') as plot_mock,
+            mock.patch.object(mb, 'export_chart_data_to_csv') as export_mock,
+            mock.patch('sys.argv', ['market_breadth.py', '--use_saved_data', '--start_date', start, '--end_date', end]),
+        ):
+            with self.assertRaises(mb.CoverageThresholdError):
+                mb.main()
+            plot_mock.assert_not_called()
+            export_mock.assert_not_called()
+
+    def test_17_extra_cached_column_excluded_and_coverage_valid(self):
+        # R1-P1 regression (reviewer case 2): the cache contains an EXTRA obsolete column C
+        # that is not in the current universe (expected [A, B]). main() must exclude C from
+        # the breadth frame so coverage = eligible/2 stays in [0, 1] and missing >= 0.
+        dates = _make_dates(210)
+        start = dates[0].strftime('%Y-%m-%d')
+        end = dates[-1].strftime('%Y-%m-%d')
+        cache = pd.DataFrame(
+            {
+                'A': np.linspace(100, 300, 210),
+                'B': np.linspace(90, 280, 210),
+                'C': np.linspace(80, 270, 210),
+            },
+            index=dates,
+        )
+        sp500 = pd.Series(np.linspace(4000, 5000, 210), index=dates)
+        captured = {}
+
+        def fake_plot(above_ma_200, *args, **kwargs):
+            captured['cols'] = list(above_ma_200.columns)
+            chart = {'breadth_index_200': above_ma_200.mean(axis=1)}
+            captured['chart'] = chart
+            return None, chart
+
+        with (
+            mock.patch.object(mb, 'get_sp500_tickers_from_fmp', return_value=['A', 'B']),
+            mock.patch.object(mb, 'get_sp500_price_data', return_value=sp500),
+            mock.patch.object(mb, 'get_multiple_stock_data', return_value=cache),
+            mock.patch.object(mb, 'plot_breadth_and_sp500_with_peaks', side_effect=fake_plot) as plot_mock,
+            mock.patch.object(mb, 'export_chart_data_to_csv') as export_mock,
+            mock.patch(
+                'sys.argv',
+                ['market_breadth.py', '--use_saved_data', '--start_date', start, '--end_date', end, '--no_export_csv'],
+            ),
+        ):
+            # Coverage 1.0 (A and B eligible) passes the gate; main() must complete normally.
+            mb.main()
+        # Obsolete cached column C is excluded from the breadth frame.
+        self.assertEqual(captured['cols'], ['A', 'B'])
+        self.assertNotIn('C', captured['cols'])
+        self.assertTrue(plot_mock.called)
+        # With --no_export_csv nothing is exported.
+        export_mock.assert_not_called()
+        # Coverage stays in [0, 1] and missing count is non-negative over the current universe.
+        cov = captured['chart']['coverage_200']
+        self.assertTrue(cov['coverage'].between(0, 1).all())
+        self.assertTrue((cov['missing_count'] >= 0).all())
+
+
 class TestExportCoverageColumns(unittest.TestCase):
     def test_10_preserves_existing_column_order(self):
         dates = _make_dates(210)
