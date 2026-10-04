@@ -1,0 +1,1 @@
+{"dependencies": [{"name": "vuln-pkg", "version": "1.0.0", "vulns": [{"id": "PYSEC-0000-0001", "fix_versions": [], "aliases": ["GHSA-1111-aaaa-bbbb"], "description": "test vuln"}]}], "fixes": []}
