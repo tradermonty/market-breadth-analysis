@@ -9,7 +9,7 @@
 #   reason      why the exception is accepted (what mitigates the risk).
 #   owner       accountable person/@handle.
 # expires     ISO date. expires == today is still allowed; the day
-#               after, the exception fails CI. Missing/unparseable = fail.
+#               after, the exception fails CI. Missing/invalid dates fail.
 #
 # Current exceptions: all pinned transitively by alpaca-trade-api==3.2.0,
 # which hard-pins urllib3 <2 and msgpack ==1.0.3, blocking the fixes.

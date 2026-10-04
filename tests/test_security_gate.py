@@ -167,7 +167,7 @@ class TestSecurityGate(unittest.TestCase):
         base = self._allowlist(expires=_iso(DAYS))
         self._assert_invalid_allowlist_fails(
             base.replace(f"expires = '{_iso(DAYS)}'", "expires = 'not-a-date'"),
-            'unparseable expires',
+            'invalid expires',
             tag='09a',
         )
         self._assert_invalid_allowlist_fails(

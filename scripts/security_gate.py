@@ -123,7 +123,7 @@ def _parse_allowlist(path: str) -> list[dict]:
         if not expires:
             problems.append(f'{prefix}: missing expires')
         elif not isinstance(expires, str) or not ISO_DATE_RE.fullmatch(expires):
-            problems.append(f"{prefix}: unparseable expires '{expires}' (expected YYYY-MM-DD)")
+            problems.append(f"{prefix}: invalid expires '{expires}' (expected YYYY-MM-DD)")
         key = (exc.get('id'), exc.get('package'), exc.get('expires'))
         if key in seen:
             problems.append(f'{prefix}: duplicate allowlist entry')
