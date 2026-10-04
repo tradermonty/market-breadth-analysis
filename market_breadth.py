@@ -312,7 +312,12 @@ def get_multiple_stock_data(tickers, start_date, end_date, use_saved_data=False)
     for ticker in tqdm(tickers, desc='Stock data retrieval progress'):
         try:
             series = fetch_price_data_fmp(ticker, actual_start_date, end_date)
-            if len(series) > 200:  # Require reasonable history length
+            # Keep any non-empty history so recent IPO listings (shorter than the 200-day
+            # warmup) can still contribute to the shorter 50-day breadth; ineligible cells are
+            # NaN in the MA frame. Fully-empty series are dropped; fetch failures are excluded
+            # from the frame and reconciled against the expected universe at coverage time
+            # (issue #7) so they never shrink the denominator.
+            if not series.empty:
                 series.name = ticker
                 all_series.append(series)
         except Exception as e:
