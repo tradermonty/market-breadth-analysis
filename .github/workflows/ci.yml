@@ -10,6 +10,9 @@ on:
       - 'pyproject.toml'
       - '.pre-commit-config.yaml'
       - 'requirements.txt'
+      - 'scripts/**'
+      - 'security/**'
+      - '.secrets.baseline'
 
 jobs:
   lint:
@@ -44,6 +47,7 @@ jobs:
   security:
     name: Security Scan
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -58,17 +62,41 @@ jobs:
       - name: Bandit (SAST)
         run: bandit -c pyproject.toml -r . --exclude archive,venv311,tests
 
-      - name: pip-audit
-        run: pip-audit -r requirements.txt || true
+      # Gate 1: dependency vulnerabilities. pip-audit exits 1 when findings
+      # exist, so its exit code is captured and passed to the gate script
+      # (which always runs): codes 0/1 with valid JSON are classified against
+      # the reviewed, dated allowlist; codes >1 (incl. network errors) and
+      # malformed/empty output fail the step via SCANNER-FAILURE/
+      # MALFORMED-INPUT. No bypass path.
+      - name: pip-audit (enforced)
+        run: |-
+          pip-audit -r requirements.txt --format json > "$RUNNER_TEMP/pip_audit.json"
+          code=$?
+          echo "pip-audit exit code: $code"
+          python scripts/security_gate.py pip-audit "$RUNNER_TEMP/pip_audit.json" \
+            --allowlist security/pip-audit-allowlist.toml \
+            --scanner-code "$code"
 
-      - name: Detect secrets
+      # Gate 2: new secrets. The exclude set here must stay identical to the
+      # one used to generate/update .secrets.baseline (its filters_used carry
+      # the same patterns). The pre-commit hook scans only staged files and
+      # does not use these excludes, so CI is the authoritative full-tree
+      # gate. A nonzero detect-secrets exit fails the step; the script then
+      # rejects findings that are not in the baseline. Raw secret values are
+      # never printed by the gate script.
+      - name: Detect secrets (enforced)
         run: >-
           detect-secrets scan
+          --exclude-files '\.git/.*'
+          --exclude-files '\.secrets\.baseline'
           --exclude-files 'venv311/.*'
           --exclude-files 'archive/.*'
           --exclude-files 'data/.*'
           --exclude-files 'trade/.*\.log'
-          && echo "No new secrets detected"
+          --exclude-files 'tests/fixtures/security/.*\.json'
+          > "$RUNNER_TEMP/live_scan.json"
+          && python scripts/security_gate.py secrets-check "$RUNNER_TEMP/live_scan.json"
+          --baseline .secrets.baseline
 
   test:
     name: Tests
