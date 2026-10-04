@@ -368,21 +368,30 @@ def calculate_above_ma(stock_data, window=200):
     return above_ma
 
 
-def compute_breadth_coverage(above_ma):
+def compute_breadth_coverage(above_ma, constituent_count=None):
     """Compute per-day coverage metrics from an MA-eligible ``above_ma`` frame.
 
     Distinguishes the constituent count, the number of MA-eligible stocks, and the number
     of missing/ineligible observations. ``above_ma`` is the float frame returned by
     ``calculate_above_ma`` (1.0 above, 0.0 computable-below, NaN ineligible).
 
+    ``constituent_count`` is the expected total number of constituents for the index being
+    measured (e.g. the S&P 500 ticker list). When omitted it falls back to the number of
+    columns present in ``above_ma``, but callers that measure coverage against a known
+    constituent list MUST pass it; otherwise a constituent that failed to fetch or has too
+    little history is dropped from ``above_ma`` entirely and would be invisible to the
+    denominator, letting coverage be inflated toward 100%.
+
     Returns a DataFrame indexed like ``above_ma`` with columns:
     ``constituent_count``, ``eligible_count``, ``missing_count``, ``above_count``, ``coverage``
-    (coverage = eligible_count / constituent_count). 200-day and 50-day breadth call this
-    independently, so their eligibility is recorded separately.
+    (coverage = eligible_count / constituent_count; missing = constituent_count - eligible_count,
+    so both fetch-failures and warmup/IPO/ineligible stocks count against the gate).
+    200-day and 50-day breadth call this independently, so their eligibility is recorded separately.
     """
     eligible = above_ma.notna()
-    constituent_count = above_ma.shape[1]
     eligible_count = eligible.sum(axis=1)
+    if constituent_count is None:
+        constituent_count = above_ma.shape[1]
     if constituent_count > 0:
         missing_count = constituent_count - eligible_count
         coverage = eligible_count / constituent_count
@@ -1211,20 +1220,6 @@ def export_chart_data_to_csv(chart_data, short_ma_period, filename=None):
         f'Is_Trough_{short_ma_period}MA_Below_04',
     ]
 
-    # Add 200-day coverage columns when present (backward-compatible append)
-    coverage_200 = chart_data.get('coverage_200')
-    if coverage_200 is not None:
-        df['Eligible_Count_200'] = coverage_200['eligible_count']
-        df['Missing_Count_200'] = coverage_200['missing_count']
-        df['Above_Count_200'] = coverage_200['above_count']
-        df['Coverage_200'] = coverage_200['coverage']
-        column_order += [
-            'Eligible_Count_200',
-            'Missing_Count_200',
-            'Above_Count_200',
-            'Coverage_200',
-        ]
-
     # Add 50-day columns if chart_data_50 is present
     chart_data_50 = chart_data.get('chart_data_50')
     if chart_data_50 is not None:
@@ -1252,18 +1247,34 @@ def export_chart_data_to_csv(chart_data, short_ma_period, filename=None):
             'Is_Trough_50',
         ]
 
-        coverage_50 = chart_data.get('coverage_50')
-        if coverage_50 is not None:
-            df['Eligible_Count_50'] = coverage_50['eligible_count']
-            df['Missing_Count_50'] = coverage_50['missing_count']
-            df['Above_Count_50'] = coverage_50['above_count']
-            df['Coverage_50'] = coverage_50['coverage']
-            column_order += [
-                'Eligible_Count_50',
-                'Missing_Count_50',
-                'Above_Count_50',
-                'Coverage_50',
-            ]
+    # Append coverage columns at the very END, after ALL existing columns (including any
+    # 50-day columns), so the pre-existing column order and position are preserved and the
+    # new columns are purely additive (backward compatibility).
+    coverage_200 = chart_data.get('coverage_200')
+    if coverage_200 is not None:
+        df['Eligible_Count_200'] = coverage_200['eligible_count']
+        df['Missing_Count_200'] = coverage_200['missing_count']
+        df['Above_Count_200'] = coverage_200['above_count']
+        df['Coverage_200'] = coverage_200['coverage']
+        column_order += [
+            'Eligible_Count_200',
+            'Missing_Count_200',
+            'Above_Count_200',
+            'Coverage_200',
+        ]
+
+    coverage_50 = chart_data.get('coverage_50')
+    if coverage_50 is not None:
+        df['Eligible_Count_50'] = coverage_50['eligible_count']
+        df['Missing_Count_50'] = coverage_50['missing_count']
+        df['Above_Count_50'] = coverage_50['above_count']
+        df['Coverage_50'] = coverage_50['coverage']
+        column_order += [
+            'Eligible_Count_50',
+            'Missing_Count_50',
+            'Above_Count_50',
+            'Coverage_50',
+        ]
 
     df = df[column_order]
 
@@ -1457,10 +1468,10 @@ def main():
                 ed = pd.to_datetime(end_date)
                 plot_mask = plot_mask[(plot_mask >= sd) & (plot_mask <= ed)]
             market_date = plot_mask.max()
-            coverage_200 = compute_breadth_coverage(above_ma_200)
+            coverage_200 = compute_breadth_coverage(above_ma_200, constituent_count=len(ticker_list))
             enforce_coverage_threshold(coverage_200, args.min_coverage, '200-day breadth', market_date)
             if above_ma_50 is not None:
-                coverage_50 = compute_breadth_coverage(above_ma_50)
+                coverage_50 = compute_breadth_coverage(above_ma_50, constituent_count=len(ticker_list))
                 enforce_coverage_threshold(coverage_50, args.min_coverage, '50-day breadth', market_date)
 
             # Visualize Breadth Index and S&P 500 price with specified date range

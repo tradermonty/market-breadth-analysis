@@ -140,6 +140,21 @@ class TestComputeBreadthCoverage(unittest.TestCase):
         self.assertEqual(coverage['coverage'].iloc[2], 0.5)
         self.assertEqual(int(coverage['missing_count'].iloc[2]), 1)
 
+    def test_12_fetch_failure_counts_against_expected_constituents(self):
+        # P1 regression: a constituent that failed to fetch is dropped from above_ma entirely.
+        # Coverage must be measured against the EXPECTED constituent list (len(ticker_list)),
+        # otherwise the failed stock vanishes from the denominator and coverage inflates to 100%.
+        dates = _make_dates(210)
+        # Only stock A present; stock B failed to fetch (its column is absent).
+        above_ma = pd.DataFrame({'A': np.linspace(100, 300, 210)}, index=dates)
+        coverage = compute_breadth_coverage(above_ma, constituent_count=2)
+        last_date = dates[-1]
+        self.assertEqual(int(coverage['eligible_count'].loc[last_date]), 1)
+        self.assertEqual(int(coverage['missing_count'].loc[last_date]), 1)
+        self.assertEqual(coverage['coverage'].loc[last_date], 0.5)
+        with self.assertRaises(mb.CoverageThresholdError):
+            enforce_coverage_threshold(coverage, 0.9, '200-day breadth', last_date)
+
 
 class TestEnforceCoverageThreshold(unittest.TestCase):
     def test_07_accepted_when_at_or_above_threshold(self):
@@ -204,6 +219,31 @@ class TestMainPublicationGate(unittest.TestCase):
             plot_mock.assert_not_called()
             export_mock.assert_not_called()
 
+    def test_14_dropped_constituent_inflates_coverage(self):
+        # P1 regress: a constituent that fails to fetch is dropped from stock_data entirely
+        # (get_multiple_stock_data only returns successful tickers). The coverage gate must still
+        # count that stock as missing against len(ticker_list), so a 1-of-2 fetch does NOT pass.
+        dates = _make_dates(210)
+        start = dates[0].strftime('%Y-%m-%d')
+        end = dates[-1].strftime('%Y-%m-%d')
+        # Only stock A returned; B failed to fetch (column absent).
+        stock = pd.DataFrame({'A': np.linspace(100, 300, 210)}, index=dates)
+        sp500 = pd.Series(np.linspace(4000, 5000, 210), index=dates)
+
+        with (
+            mock.patch.object(mb, 'get_sp500_tickers_from_fmp', return_value=['A', 'B']),
+            mock.patch.object(mb, 'get_sp500_price_data', return_value=sp500),
+            mock.patch.object(mb, 'get_multiple_stock_data', return_value=stock),
+            mock.patch.object(mb, 'plot_breadth_and_sp500_with_peaks') as plot_mock,
+            mock.patch.object(mb, 'export_chart_data_to_csv') as export_mock,
+            mock.patch('sys.argv', ['market_breadth.py', '--use_saved_data', '--start_date', start, '--end_date', end]),
+        ):
+            with self.assertRaises(mb.CoverageThresholdError):
+                mb.main()
+            # Even when the coverage gate fails on a dropped constituent, nothing is published.
+            plot_mock.assert_not_called()
+            export_mock.assert_not_called()
+
 
 class TestExportCoverageColumns(unittest.TestCase):
     def test_10_preserves_existing_column_order(self):
@@ -242,6 +282,77 @@ class TestExportCoverageColumns(unittest.TestCase):
         # Base columns appear first in order; coverage columns appended after.
         self.assertEqual(header[: len(base_cols)], base_cols)
         self.assertEqual(header[-4:], ['Eligible_Count_200', 'Missing_Count_200', 'Above_Count_200', 'Coverage_200'])
+
+    def test_13_50day_coverage_appended_after_all_existing_columns(self):
+        # P2 regression: with 50-day columns present, the new coverage columns must be appended
+        # at the very END (after the base AND the 50-day columns), not inserted mid-stream.
+        dates = _make_dates(210)
+        stock = pd.DataFrame(
+            {'A': np.linspace(100, 300, 210), 'B': np.linspace(90, 280, 210)},
+            index=dates,
+        )
+        sp500 = pd.Series(np.linspace(4000, 5000, 210), index=dates)
+        above_200 = calculate_above_ma(stock, window=200)
+        above_50 = calculate_above_ma(stock, window=50)
+        breadth_50 = above_50.mean(axis=1)
+        chart_data = extract_chart_data(above_200, sp500, short_ma_period=10)
+        chart_data['chart_data_50'] = {
+            'breadth_index_50': breadth_50,
+            'breadth_ma_50_long': breadth_50.rolling(50).mean(),
+            'breadth_ma_50_short': breadth_50.rolling(10).mean(),
+            'breadth_ma_50_trend': breadth_50.rolling(50).mean().diff(),
+            'peaks_50': [],
+            'troughs_50': [],
+            'peaks_avg_50': 0.0,
+            'troughs_avg_50': 0.0,
+        }
+        chart_data['coverage_200'] = compute_breadth_coverage(above_200)
+        chart_data['coverage_50'] = compute_breadth_coverage(above_50)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            original = mb.reports_dir
+            mb.reports_dir = pathlib.Path(tmp)
+            try:
+                mb.export_chart_data_to_csv(chart_data, 10, filename='out.csv')
+                with open(pathlib.Path(tmp) / 'out.csv') as f:
+                    header = f.readline().strip().split(',')
+            finally:
+                mb.reports_dir = original
+
+        base_cols = [
+            'Date',
+            'S&P500_Price',
+            'Breadth_Index_Raw',
+            'Breadth_Index_200MA',
+            'Breadth_Index_10MA',
+            'Breadth_200MA_Trend',
+            'Bearish_Signal',
+            'Is_Peak',
+            'Is_Trough',
+            'Is_Trough_10MA_Below_04',
+        ]
+        existing_50 = [
+            'Breadth_50_Index_Raw',
+            'Breadth_50_Index_50MA',
+            'Breadth_50_Index_10MA',
+            'Breadth_50_MA_Trend',
+            'Bearish_Signal_50',
+            'Is_Peak_50',
+            'Is_Trough_50',
+        ]
+        tail_coverage = [
+            'Eligible_Count_200',
+            'Missing_Count_200',
+            'Above_Count_200',
+            'Coverage_200',
+            'Eligible_Count_50',
+            'Missing_Count_50',
+            'Above_Count_50',
+            'Coverage_50',
+        ]
+        # Existing base + 50-day columns keep their order; coverage columns appended at the end.
+        self.assertEqual(header[: len(base_cols) + len(existing_50)], base_cols + existing_50)
+        self.assertEqual(header[-len(tail_coverage) :], tail_coverage)
 
 
 if __name__ == '__main__':
