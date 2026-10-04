@@ -1436,6 +1436,17 @@ def main():
             if stock_data.empty:
                 raise ValueError('Failed to retrieve stock data')
 
+            # Reconcile the returned/cached frame against the expected ticker identities before
+            # calculating either MA, so a missing current constituent becomes an all-NaN column
+            # (counted against coverage) and any obsolete cached column not in the current ticker
+            # list is excluded from both the breadth calculation and the coverage denominator.
+            # This keeps the breadth universe, the coverage universe, and len(ticker_universe)
+            # consistent even when the cache lags the latest S&P 500 constituent list.
+            ticker_universe = list(dict.fromkeys(ticker_list))
+            stock_data = stock_data.reindex(columns=ticker_universe)
+            if stock_data.empty:
+                raise ValueError('Failed to retrieve stock data')
+
             # Calculate 200-day moving average
             above_ma_200 = calculate_above_ma(stock_data, window=200)
 
@@ -1473,10 +1484,10 @@ def main():
                 ed = pd.to_datetime(end_date)
                 plot_mask = plot_mask[(plot_mask >= sd) & (plot_mask <= ed)]
             market_date = plot_mask.max()
-            coverage_200 = compute_breadth_coverage(above_ma_200, constituent_count=len(ticker_list))
+            coverage_200 = compute_breadth_coverage(above_ma_200, constituent_count=len(ticker_universe))
             enforce_coverage_threshold(coverage_200, args.min_coverage, '200-day breadth', market_date)
             if above_ma_50 is not None:
-                coverage_50 = compute_breadth_coverage(above_ma_50, constituent_count=len(ticker_list))
+                coverage_50 = compute_breadth_coverage(above_ma_50, constituent_count=len(ticker_universe))
                 enforce_coverage_threshold(coverage_50, args.min_coverage, '50-day breadth', market_date)
 
             # Visualize Breadth Index and S&P 500 price with specified date range
