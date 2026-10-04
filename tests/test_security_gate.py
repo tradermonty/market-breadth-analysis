@@ -295,12 +295,12 @@ class TestSecurityGate(unittest.TestCase):
         self.assertNotIn('FAIL', out)
 
     def test_15_secrets_fails_on_new_finding(self):
-        rc, out, _ = self._run_secrets('test_15', {'.env.sample': [self._entry('new-real-secret')]}, {})
+        rc, out, _ = self._run_secrets('test_15', {'.env.sample': [self._entry('new-real-secret') # pragma: allowlist secret]}, {})
         self.assertEqual(rc, 1)
         self.assertIn('NEW', out)
 
     def test_16_secrets_report_contains_no_raw_secret_value(self):
-        raw_secret = 'sup3r-s3cr3t-l1v3-v4lu3'
+        raw_secret = 'sup3r-s3cr3t-l1v3-v4lu3' # pragma: allowlist secret
         rc, out, err = self._run_secrets(
             'test_16',
             {'.env.sample': [self._entry(raw_secret)]},
@@ -349,7 +349,7 @@ class TestSecurityGate(unittest.TestCase):
     def test_20_secrets_fails_on_mix_of_stale_and_new_findings(self):
         rc, out, _ = self._run_secrets(
             'test_20',
-            {'other.py': [self._entry('tokento', filename='other.py')]},
+            {'other.py': [self._entry('tokento', filename='other.py') # pragma: allowlist secret]},
             {'.env.sample': [self._entry('placeholder')]},
         )
         self.assertEqual(rc, 1)
@@ -358,7 +358,7 @@ class TestSecurityGate(unittest.TestCase):
 
     def test_21_secrets_hash_drift_fails_with_review_guidance(self):
         baseline_entry = self._entry('placeholder', line=1)
-        live_entry = self._entry('placeholder-changed', line=3)
+        live_entry = self._entry('placeholder-changed', line=3) # pragma: allowlist secret
         rc, out, _ = self._run_secrets('test_21', {'.env.sample': [live_entry]}, {'.env.sample': [baseline_entry]})
         self.assertEqual(rc, 1)
         self.assertIn('COMMENT', out)
