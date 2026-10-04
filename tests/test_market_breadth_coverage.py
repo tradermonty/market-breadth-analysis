@@ -245,6 +245,30 @@ class TestMainPublicationGate(unittest.TestCase):
             export_mock.assert_not_called()
 
 
+class TestShortIpoRetention(unittest.TestCase):
+    def test_15_short_ipo_history_is_retained_for_50day_breadth(self):
+        # R1 regress: get_multiple_stock_data must not discard a valid short IPO history
+        # (shorter than the 200-day warmup). Such a ticker can still contribute to the 50-day
+        # breadth, so it has to remain in the frame; only then does the coverage gate count it
+        # as eligible (50-day) / missing (200-day) rather than silently dropping it.
+        def fake_fetch(ticker, start, end):
+            n = 60 if ticker == 'IPO' else 260
+            idx = pd.bdate_range('2023-01-02', periods=n)
+            return pd.Series(np.linspace(100, 200, n), index=idx)
+
+        with mock.patch.object(mb, 'fetch_price_data_fmp', side_effect=fake_fetch):
+            combined = mb.get_multiple_stock_data(['A', 'IPO'], '2024-01-01', '2024-12-31', use_saved_data=False)
+
+        self.assertIn('A', combined.columns)
+        self.assertIn('IPO', combined.columns)
+        # 200-day: the short history never reaches the warmup -> all ineligible (missing).
+        above_200 = calculate_above_ma(combined, window=200)
+        self.assertTrue(above_200['IPO'].isna().all())
+        # 50-day: the short history is long enough -> contributes eligible observations.
+        above_50 = calculate_above_ma(combined, window=50)
+        self.assertTrue(above_50['IPO'].notna().any())
+
+
 class TestExportCoverageColumns(unittest.TestCase):
     def test_10_preserves_existing_column_order(self):
         dates = _make_dates(210)
