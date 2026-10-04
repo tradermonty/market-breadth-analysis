@@ -70,8 +70,8 @@ jobs:
       # MALFORMED-INPUT. No bypass path.
       - name: pip-audit (enforced)
         run: |-
-          pip-audit -r requirements.txt --format json > "$RUNNER_TEMP/pip_audit.json"
-          code=$?
+          code=0
+          pip-audit -r requirements.txt --format json > "$RUNNER_TEMP/pip_audit.json" || code=$?
           echo "pip-audit exit code: $code"
           python scripts/security_gate.py pip-audit "$RUNNER_TEMP/pip_audit.json" \
             --allowlist security/pip-audit-allowlist.toml \
