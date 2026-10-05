@@ -10,6 +10,11 @@ on:
       - 'pyproject.toml'
       - '.pre-commit-config.yaml'
       - 'requirements.txt'
+      - 'requirements-lint-tools.txt'
+      - 'requirements-security-tools.txt'
+      - 'scripts/**'
+      - 'security/**'
+      - '.secrets.baseline'
 
 jobs:
   lint:
@@ -24,10 +29,13 @@ jobs:
           python-version: '3.11'
 
       - name: Install tools
-        # Pin ruff: newer versions reformat Markdown code blocks in README/CLAUDE/docs,
-        # which the repository has not been formatted against. Keeping the version fixed
-        # keeps the format check deterministic without unrelated doc churn.
-        run: pip install ruff==0.9.6 codespell tomli mypy pandas-stubs types-requests types-tqdm
+        # Pinned, version-parity-gated tool set (see requirements-lint-tools.txt
+        # header for the source-of-truth + update procedure; ruff rationale:
+        # repo is formatted under 0.9.6; newer versions disagree).
+        run: pip install -r requirements-lint-tools.txt
+
+      - name: Tool parity checks
+        run: python -m pytest tests/test_ci_tool_versions.py -q
 
       - name: Ruff lint
         run: ruff check .
@@ -44,6 +52,7 @@ jobs:
   security:
     name: Security Scan
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -53,22 +62,51 @@ jobs:
           python-version: '3.11'
 
       - name: Install tools
-        run: pip install bandit pip-audit detect-secrets
+        # Pinned, version-parity-gated tool set (see requirements-security-tools.txt
+        # header for the source-of-truth + update procedure).
+        run: pip install -r requirements-security-tools.txt
+
+      - name: Tool parity checks
+        run: python -m pytest tests/test_ci_tool_versions.py -q
 
       - name: Bandit (SAST)
         run: bandit -c pyproject.toml -r . --exclude archive,venv311,tests
 
-      - name: pip-audit
-        run: pip-audit -r requirements.txt || true
+      # Gate 1: dependency vulnerabilities. pip-audit exits 1 when findings
+      # exist, so its exit code is captured and passed to the gate script
+      # (which always runs): codes 0/1 with valid JSON are classified against
+      # the reviewed, dated allowlist; codes >1 (incl. network errors) and
+      # malformed/empty output fail the step via SCANNER-FAILURE/
+      # MALFORMED-INPUT. No bypass path.
+      - name: pip-audit (enforced)
+        run: |-
+          code=0
+          pip-audit -r requirements.txt --format json > "$RUNNER_TEMP/pip_audit.json" || code=$?
+          echo "pip-audit exit code: $code"
+          python scripts/security_gate.py pip-audit "$RUNNER_TEMP/pip_audit.json" \
+            --allowlist security/pip-audit-allowlist.toml \
+            --scanner-code "$code"
 
-      - name: Detect secrets
+      # Gate 2: new secrets. The exclude set here must stay identical to the
+      # one used to generate/update .secrets.baseline (its filters_used carry
+      # the same patterns). The pre-commit hook scans only staged files and
+      # does not use these excludes, so CI is the authoritative full-tree
+      # gate. A nonzero detect-secrets exit fails the step; the script then
+      # rejects findings that are not in the baseline. Raw secret values are
+      # never printed by the gate script.
+      - name: Detect secrets (enforced)
         run: >-
           detect-secrets scan
+          --exclude-files '\.git/.*'
+          --exclude-files '\.secrets\.baseline'
           --exclude-files 'venv311/.*'
           --exclude-files 'archive/.*'
           --exclude-files 'data/.*'
           --exclude-files 'trade/.*\.log'
-          && echo "No new secrets detected"
+          --exclude-files 'tests/fixtures/security/.*\.json'
+          > "$RUNNER_TEMP/live_scan.json"
+          && python scripts/security_gate.py secrets-check "$RUNNER_TEMP/live_scan.json"
+          --baseline .secrets.baseline
 
   test:
     name: Tests
