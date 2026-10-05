@@ -1,0 +1,16 @@
+# CI security tools — source of truth for the security-job tool versions.
+# Version parity with .pre-commit-config.yaml is enforced only where a
+# pre-commit rev exists (bandit, detect-secrets) via
+# tests/test_ci_tool_versions.py; pip-audit/pytest are CI-only pins.
+# Update procedure: bump the pre-commit rev AND the pin below in the same PR,
+# run tests/test_ci_tool_versions.py locally, then push.
+# CI/pre-commit parity is gated by tests/test_ci_tool_versions.py.
+#
+# NOTE: these pins and their transitive dependencies are OUTSIDE the pip-audit
+# Gate-1 audit surface (which scans requirements.txt only). A follow-up issue
+# extends Gate 1 to this file.
+bandit[toml]==1.8.3
+detect-secrets==1.5.0
+pip-audit==2.10.1
+# Test runner required by the "Tool parity checks" CI step in this job.
+pytest==9.0.2

@@ -10,6 +10,8 @@ on:
       - 'pyproject.toml'
       - '.pre-commit-config.yaml'
       - 'requirements.txt'
+      - 'requirements-lint-tools.txt'
+      - 'requirements-security-tools.txt'
       - 'scripts/**'
       - 'security/**'
       - '.secrets.baseline'
@@ -27,10 +29,13 @@ jobs:
           python-version: '3.11'
 
       - name: Install tools
-        # Pin ruff: newer versions reformat Markdown code blocks in README/CLAUDE/docs,
-        # which the repository has not been formatted against. Keeping the version fixed
-        # keeps the format check deterministic without unrelated doc churn.
-        run: pip install ruff==0.9.6 codespell tomli mypy pandas-stubs types-requests types-tqdm
+        # Pinned, version-parity-gated tool set (see requirements-lint-tools.txt
+        # header for the source-of-truth + update procedure; ruff rationale:
+        # repo is formatted under 0.9.6; newer versions disagree).
+        run: pip install -r requirements-lint-tools.txt
+
+      - name: Tool parity checks
+        run: python -m pytest tests/test_ci_tool_versions.py -q
 
       - name: Ruff lint
         run: ruff check .
@@ -57,7 +62,12 @@ jobs:
           python-version: '3.11'
 
       - name: Install tools
-        run: pip install bandit pip-audit detect-secrets
+        # Pinned, version-parity-gated tool set (see requirements-security-tools.txt
+        # header for the source-of-truth + update procedure).
+        run: pip install -r requirements-security-tools.txt
+
+      - name: Tool parity checks
+        run: python -m pytest tests/test_ci_tool_versions.py -q
 
       - name: Bandit (SAST)
         run: bandit -c pyproject.toml -r . --exclude archive,venv311,tests
