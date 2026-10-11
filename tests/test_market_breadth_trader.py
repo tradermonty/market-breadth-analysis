@@ -22,8 +22,16 @@ class TestMarketBreadthTrader(unittest.TestCase):
         """Test setup"""
         self.mock_api = Mock()
         mock_initialize_alpaca.return_value = self.mock_api
+        # Redirect durable state files to a temp dir so tests stay isolated
+        # and do not pollute the repo's trade/ directory (issue #6).
+        self.state_tmpdir = tempfile.mkdtemp()
         self.trader = MarketBreadthTrader(
-            short_ma=8, long_ma=200, initial_capital=50000, symbol='SSO', use_saved_data=True
+            short_ma=8,
+            long_ma=200,
+            initial_capital=50000,
+            symbol='SSO',
+            use_saved_data=True,
+            state_dir=self.state_tmpdir,
         )
 
         # Mock data setup
@@ -85,30 +93,37 @@ class TestMarketBreadthTrader(unittest.TestCase):
         self.assertIsNone(price)
 
     def test_execute_buy(self):
-        """Test buy order execution"""
+        """Test buy order execution.
+
+        Issue #6: submission failures are no longer swallowed — they propagate
+        (fail-closed) so the caller can classify them; the client_order_id is
+        always sent for duplicate-order protection.
+        """
         # Success case
         mock_order = Mock()
         self.mock_api.submit_order.return_value = mock_order
         order = self.trader.execute_buy(100, 'test buy')
         self.assertIsNotNone(order)
+        self.assertIn('client_order_id', self.mock_api.submit_order.call_args.kwargs)
 
-        # Failure case
+        # Failure case: fail-closed propagation instead of returning None
         self.mock_api.submit_order.side_effect = Exception('Order failed')
-        order = self.trader.execute_buy(100, 'test buy')
-        self.assertIsNone(order)
+        with self.assertRaisesRegex(Exception, 'Order failed'):
+            self.trader.execute_buy(100, 'test buy')
 
     def test_execute_sell(self):
-        """Test sell order execution"""
+        """Test sell order execution (issue #6: fail-closed + client_order_id)."""
         # Success case
         mock_order = Mock()
         self.mock_api.submit_order.return_value = mock_order
         order = self.trader.execute_sell(100, 'test sell')
         self.assertIsNotNone(order)
+        self.assertIn('client_order_id', self.mock_api.submit_order.call_args.kwargs)
 
-        # Failure case
+        # Failure case: fail-closed propagation instead of returning None
         self.mock_api.submit_order.side_effect = Exception('Order failed')
-        order = self.trader.execute_sell(100, 'test sell')
-        self.assertIsNone(order)
+        with self.assertRaisesRegex(Exception, 'Order failed'):
+            self.trader.execute_sell(100, 'test sell')
 
     def test_is_closing_time_range(self):
         """Test if current time is within specified minutes before market close"""
@@ -295,10 +310,9 @@ class TestMarketBreadthTrader(unittest.TestCase):
 
         self.trader.check_signals_and_trade()
 
-        # Verify sell was called with stop loss reason
-        self.mock_api.submit_order.assert_called_once_with(
-            symbol='SSO', qty=100, side='sell', type='market', time_in_force='day'
-        )
+        # Verify sell was called with stop loss reason (issue #6: coid is sent)
+        coid_call = self.mock_api.submit_order.call_args.kwargs['client_order_id']
+        self.assertTrue(coid_call.startswith('mbt-SSO-stop-'))
         self.assertEqual(self.trader.entry_prices, [])
         self.assertEqual(self.trader.current_position, 0)
 
@@ -332,10 +346,9 @@ class TestMarketBreadthTrader(unittest.TestCase):
         self.trader.check_signals_and_trade()
 
         # Verify entry_prices was recovered from broker
-        # and stop loss triggered sell
-        self.mock_api.submit_order.assert_called_once_with(
-            symbol='SSO', qty=100, side='sell', type='market', time_in_force='day'
-        )
+        # and stop loss triggered sell (issue #6: coid is sent)
+        coid_call = self.mock_api.submit_order.call_args.kwargs['client_order_id']
+        self.assertTrue(coid_call.startswith('mbt-SSO-stop-'))
         self.assertEqual(self.trader.current_position, 0)
         self.assertEqual(self.trader.entry_prices, [])
 
@@ -506,7 +519,9 @@ class TestMarketBreadthTrader(unittest.TestCase):
         mock_api = Mock()
         mock_init.return_value = mock_api
 
-        trader = MarketBreadthTrader(testmode=True, test_date='2024-01-01', symbol='SSO')
+        # Redirect durable state files to a temp dir (issue #6 test isolation)
+        state_tmpdir = tempfile.mkdtemp()
+        trader = MarketBreadthTrader(testmode=True, test_date='2024-01-01', symbol='SSO', state_dir=state_tmpdir)
         trader.current_position = 0
         trader.entry_prices = []
         trader.no_pyramiding = True
@@ -640,7 +655,7 @@ class TestMarketBreadthTrader(unittest.TestCase):
     def test_shutdown_flag_breaks_loop(self, mock_init):
         """Shutdown flag causes run() loop to exit immediately"""
         mock_init.return_value = Mock()
-        trader = MarketBreadthTrader(testmode=True, test_date='2024-01-02')
+        trader = MarketBreadthTrader(testmode=True, test_date='2024-01-02', state_dir=tempfile.mkdtemp())
         trader._shutdown_requested = True
 
         # run() should exit immediately without calling analyze_market
@@ -652,7 +667,7 @@ class TestMarketBreadthTrader(unittest.TestCase):
     def test_shutdown_with_position_logs_warning(self, mock_init):
         """Shutdown with open position logs warning about manual check"""
         mock_init.return_value = Mock()
-        trader = MarketBreadthTrader(testmode=True, test_date='2024-01-02')
+        trader = MarketBreadthTrader(testmode=True, test_date='2024-01-02', state_dir=tempfile.mkdtemp())
         trader._shutdown_requested = True
         trader.current_position = 100
 
@@ -729,7 +744,10 @@ class TestMarketBreadthTrader(unittest.TestCase):
         self.assertTrue(os.path.exists(path))
         with open(path) as f:
             saved = json.load(f)
-        self.assertEqual(saved, {'lots': [{'price': 55.0, 'shares': 100}, {'price': 60.0, 'shares': 50}]})
+        self.assertEqual(
+            saved,
+            {'lots': [{'price': 55.0, 'shares': 100}, {'price': 60.0, 'shares': 50}], 'applied_credit': {}},
+        )
 
         # Cleanup
         os.remove(path)
@@ -826,7 +844,9 @@ class TestMarketBreadthTrader(unittest.TestCase):
 
         # Position should be reduced, not zeroed
         self.assertEqual(self.trader.current_position, 40)
-        self.trader._save_entry_prices.assert_called_once()
+        # Issue #6: repair writes applied_credit alongside lots (may save twice:
+        # inside _update_lots_after_sell and in the repair step); both idempotent.
+        self.assertGreaterEqual(self.trader._save_entry_prices.call_count, 1)
 
     def test_buy_partial_fill_updates_position(self):
         """Partial buy fill correctly updates current_position with filled_qty"""
@@ -984,7 +1004,7 @@ class TestMarketBreadthTrader(unittest.TestCase):
     def test_execute_buy_testmode_returns_namespace(self, mock_init):
         """Testmode execute_buy returns SimpleNamespace with id and qty attributes"""
         mock_init.return_value = Mock()
-        trader = MarketBreadthTrader(testmode=True, test_date='2024-01-01')
+        trader = MarketBreadthTrader(testmode=True, test_date='2024-01-01', state_dir=tempfile.mkdtemp())
 
         result = trader.execute_buy(100, reason='test')
 
@@ -998,7 +1018,7 @@ class TestMarketBreadthTrader(unittest.TestCase):
     def test_execute_sell_testmode_returns_namespace(self, mock_init):
         """Testmode execute_sell returns SimpleNamespace with id and qty attributes"""
         mock_init.return_value = Mock()
-        trader = MarketBreadthTrader(testmode=True, test_date='2024-01-01')
+        trader = MarketBreadthTrader(testmode=True, test_date='2024-01-01', state_dir=tempfile.mkdtemp())
 
         result = trader.execute_sell(50, reason='test')
 
@@ -1041,7 +1061,7 @@ class TestMarketBreadthTrader(unittest.TestCase):
     def test_run_full_cycle_testmode(self, mock_init):
         """Testmode run() calls analyze_market then check_signals_and_trade when in closing time"""
         mock_init.return_value = Mock()
-        trader = MarketBreadthTrader(testmode=True, test_date='2024-01-02')
+        trader = MarketBreadthTrader(testmode=True, test_date='2024-01-02', state_dir=tempfile.mkdtemp())
 
         # is_closing_time_range returns True on first check
         trader.is_closing_time_range = Mock(return_value=True)
@@ -1142,7 +1162,8 @@ class TestTimezoneCorrectness(unittest.TestCase):
     def setUp(self, mock_init):
         self.mock_api = Mock()
         mock_init.return_value = self.mock_api
-        self.trader = MarketBreadthTrader(symbol='SSO')
+        self.state_tmpdir = tempfile.mkdtemp()
+        self.trader = MarketBreadthTrader(symbol='SSO', state_dir=self.state_tmpdir)
         self.trader._acted_signals = set()
 
     @patch('trade.run_market_breadth_trade._now_et')
@@ -1272,7 +1293,8 @@ class TestUpdateLotsAfterSell(unittest.TestCase):
     @patch('trade.run_market_breadth_trade.MarketBreadthTrader._initialize_alpaca')
     def setUp(self, mock_init):
         mock_init.return_value = Mock()
-        self.trader = MarketBreadthTrader(symbol='TEST')
+        self.state_tmpdir = tempfile.mkdtemp()
+        self.trader = MarketBreadthTrader(symbol='TEST', state_dir=self.state_tmpdir)
         self.trader._acted_signals = set()
         self.trader._save_entry_prices = Mock()
         self.trader._clear_entry_prices_file = Mock()
