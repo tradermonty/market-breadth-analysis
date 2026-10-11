@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 import requests
 from dotenv import load_dotenv
 
+from secret_redaction import redact, register_secret
+
 load_dotenv()
 
 BASE_URL = 'https://tradermonty.github.io/market-breadth-analysis'
@@ -36,6 +38,7 @@ def _get_github_token():
     token = os.getenv('GITHUB_TOKEN')
     if not token:
         raise OSError('GITHUB_TOKEN not set. Add it to .env or export it.')
+    register_secret(token)
     return token
 
 
@@ -122,7 +125,12 @@ def fetch_market_breadth(max_age_hours=12):
     try:
         last_modified = _parse_last_modified(DATA_CSV_URL)
     except requests.RequestException as e:
-        return {**base, 'status': 'error', 'last_modified': None, 'message': f'Failed to check data freshness: {e}'}
+        return {
+            **base,
+            'status': 'error',
+            'last_modified': None,
+            'message': f'Failed to check data freshness: {redact(str(e))}',
+        }
 
     age_hours = None
     if last_modified:
@@ -138,7 +146,7 @@ def fetch_market_breadth(max_age_hours=12):
                 **base,
                 'status': 'error',
                 'last_modified': last_modified,
-                'message': f'Data is fresh but download failed: {e}',
+                'message': f'Data is fresh but download failed: {redact(str(e))}',
             }
         return {
             **base,
@@ -153,13 +161,13 @@ def fetch_market_breadth(max_age_hours=12):
     try:
         trigger_result = trigger_workflow()
     except OSError as e:
-        return {**base, 'status': 'error', 'last_modified': last_modified, 'message': str(e)}
+        return {**base, 'status': 'error', 'last_modified': last_modified, 'message': redact(str(e))}
     except requests.RequestException as e:
         return {
             **base,
             'status': 'error',
             'last_modified': last_modified,
-            'message': f'Failed to trigger workflow: {e}',
+            'message': f'Failed to trigger workflow: {redact(str(e))}',
         }
 
     age_msg = f' (age: {age_hours:.1f}h)' if age_hours is not None else ''
@@ -187,13 +195,21 @@ def main():
         sys.exit(1)
 
     if args.trigger_only:
-        result = trigger_workflow()
+        try:
+            result = trigger_workflow()
+        except (OSError, requests.RequestException) as e:
+            print(f'Error: {redact(str(e))}', file=sys.stderr)
+            sys.exit(1)
         print(result['message'])
         print(f'Monitor: {result["runs_url"]}')
         return
 
     if args.fetch_only:
-        result = fetch_csv()
+        try:
+            result = fetch_csv()
+        except requests.RequestException as e:
+            print(f'Error: {redact(str(e))}', file=sys.stderr)
+            sys.exit(1)
         lm = result['last_modified']
         print(f'Last-Modified: {lm.isoformat() if lm else "unknown"}')
         print(f'Data rows: {result["csv_text"].count(chr(10)) - 1}')

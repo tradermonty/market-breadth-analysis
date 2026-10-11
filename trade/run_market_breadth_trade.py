@@ -7,6 +7,7 @@ import pathlib
 import signal
 import sys
 import time
+import traceback
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -23,6 +24,7 @@ from market_breadth import (
     get_multiple_stock_data,
     get_sp500_tickers_from_fmp,
 )
+from secret_redaction import redact, register_secret
 
 # Log settings
 logging.basicConfig(
@@ -151,6 +153,9 @@ class MarketBreadthTrader:
         if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
             raise OSError('ALPACA_API_KEY and ALPACA_SECRET_KEY must be set in .env or environment')
 
+        register_secret(ALPACA_API_KEY)
+        register_secret(ALPACA_SECRET_KEY)
+
         if 'paper' not in ALPACA_BASE_URL:
             if os.getenv('ALPACA_LIVE_CONFIRMED', '').lower() != 'true':
                 raise OSError(
@@ -205,7 +210,7 @@ class MarketBreadthTrader:
             position = self.api.get_position(self.symbol)
             return int(position.qty)
         except Exception as e:
-            logger.info(f'No position found for {self.symbol}: {e}')
+            logger.info(f'No position found for {self.symbol}: {redact(str(e))}')
             return 0
 
     def _sync_position_from_broker(self):
@@ -253,7 +258,7 @@ class MarketBreadthTrader:
                 self.entry_lots = []
                 self._clear_entry_prices_file()
             else:
-                logger.error(f'API error syncing position for {self.symbol}: {e}')
+                logger.error(f'API error syncing position for {self.symbol}: {redact(str(e))}')
                 raise
 
     def get_current_price(self):
@@ -270,8 +275,10 @@ class MarketBreadthTrader:
             else:
                 logger.error(f'Failed: Could not get current price for {self.symbol} (no valid bar data)')
                 return None
-        except Exception as e:
-            logger.error(f'Error: Error occurred while getting current price for {self.symbol}: {e}', exc_info=True)
+        except Exception:
+            logger.error(
+                f'Error: Error occurred while getting current price for {self.symbol}:\n{redact(traceback.format_exc())}'
+            )
             return None
 
     def execute_buy(self, shares, reason=''):
@@ -286,8 +293,8 @@ class MarketBreadthTrader:
             )
             logger.info(f'Buy order executed: {shares} shares of {self.symbol}, reason: {reason}')
             return order
-        except Exception as e:
-            logger.error(f'Error executing buy order: {e}', exc_info=True)
+        except Exception:
+            logger.error(f'Error executing buy order:\n{redact(traceback.format_exc())}')
             return None
 
     def execute_sell(self, shares, reason=''):
@@ -302,8 +309,8 @@ class MarketBreadthTrader:
             )
             logger.info(f'Sell order executed: {shares} shares of {self.symbol}, reason: {reason}')
             return order
-        except Exception as e:
-            logger.error(f'Error executing sell order: {e}', exc_info=True)
+        except Exception:
+            logger.error(f'Error executing sell order:\n{redact(traceback.format_exc())}')
             return None
 
     def _wait_for_fill(self, order, timeout_seconds=60):
@@ -342,8 +349,8 @@ class MarketBreadthTrader:
             if int(final.filled_qty or 0) > 0:
                 logger.warning(f'Order {order.id} partial fill after cancel: {final.filled_qty} shares')
                 return final
-        except Exception as e:
-            logger.error(f'Failed to cancel order {order.id}: {e}', exc_info=True)
+        except Exception:
+            logger.error(f'Failed to cancel order {order.id}:\n{redact(traceback.format_exc())}')
         return None
 
     def run(self):
@@ -402,8 +409,8 @@ class MarketBreadthTrader:
                     else:
                         logger.info('Trading completed for today.')
                     break
-                except Exception as e:
-                    logger.error(f'Error during trading: {e!s}', exc_info=True)
+                except Exception:
+                    logger.error(f'Error during trading:\n{redact(traceback.format_exc())}')
                     if self.current_position > 0:
                         logger.critical(
                             f'ALERT: Exception with open position ({self.current_position} shares). '
@@ -521,8 +528,8 @@ class MarketBreadthTrader:
 
             logger.info('Market data analysis completed')
 
-        except Exception as e:
-            logger.error(f'Error during market data analysis: {e!s}', exc_info=True)
+        except Exception:
+            logger.error(f'Error during market data analysis:\n{redact(traceback.format_exc())}')
             raise
 
     def _get_latest_prices_from_alpaca(self, tickers):
@@ -563,7 +570,7 @@ class MarketBreadthTrader:
                         logger.warning(f'Failed to get latest price for {ticker} (no valid bar data)')
                         failure_count += 1
                 except Exception as e:
-                    logger.warning(f'Error getting latest price for {ticker}: {e!s}')
+                    logger.warning(f'Error getting latest price for {ticker}: {redact(str(e))}')
                     failure_count += 1
 
             # Convert all price data to DataFrame at once
@@ -576,8 +583,8 @@ class MarketBreadthTrader:
 
             return latest_prices
 
-        except Exception as e:
-            logger.error(f'Error getting latest prices from Alpaca: {e!s}', exc_info=True)
+        except Exception:
+            logger.error(f'Error getting latest prices from Alpaca:\n{redact(traceback.format_exc())}')
             raise
 
     def _get_latest_price_from_alpaca(self, ticker):
@@ -595,8 +602,10 @@ class MarketBreadthTrader:
                 logger.warning(f'Failed: Could not get latest price for {ticker} (no valid bar data)')
                 return pd.Series()
 
-        except Exception as e:
-            logger.error(f'Error: Error occurred while getting latest price for {ticker}: {e!s}', exc_info=True)
+        except Exception:
+            logger.error(
+                f'Error: Error occurred while getting latest price for {ticker}:\n{redact(traceback.format_exc())}'
+            )
             return pd.Series()
 
     def _detect_signals(self):
