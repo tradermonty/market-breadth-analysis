@@ -27,6 +27,20 @@ The trader blocks (raises `ExecutionBlocked` → exits nonzero) on any of:
 
 ## Recovery procedures
 
+### 0. What reconciliation no longer does (post-review hardening)
+
+- A partial sell never clears shares still held at the broker: repairs are pure
+  FIFO lot bookkeeping, the broker position is read before/after repairs as a
+  check only. If a repair would sell beyond the lots on disk (ledger drift), the
+  trader BLOCKS instead of clearing (manual verification required).
+- Broker orders in any nonfinal status (including `pending_cancel`,
+  `pending_replace`, `held`, `suspended` and unknown statuses) stay ACTIVE:
+  reconciliation waits for a definitive broker outcome or blocks. Only
+  `filled/canceled/expired/rejected` are considered final.
+- A corrupt `entry_prices_{SYMBOL}.json` (the `applied_credit` ledger) BLOCKS
+  trading, preserves the original file in place, and writes a quarantine copy
+  (`*.corrupt-<epoch>`) for evidence. Do not hand-edit the original.
+
 ### 1. Reconciliation-only check (always try first)
 
 ```bash
@@ -48,7 +62,17 @@ python trade/run_market_breadth_trade.py --symbol SSO --reconcile_only
    client_order_ids and signals previously acted on are already in
    `acted_signals_*.json` (if intact), duplicates remain prevented.
 
-### 3. Corrupt `acted_signals_{SYMBOL}.json`
+### 3. Corrupt `entry_prices_{SYMBOL}.json`
+
+1. The run stays BLOCKED; a quarantine copy `entry_prices_{SYMBOL}.json.corrupt-*`
+   is made and the original is left untouched for the next runs.
+2. Decide with the broker paper dashboard: which fills were already credited?
+   The order-state file records `fill_watermark` per COID.
+3. When consensus is reached, an operator may reconstruct the file with
+   `{"lots": [...], "applied_credit": {...}}` (JSON, integer credit qty per COID)
+   OR restore from backup. Then run `--reconcile-only` to confirm clean.
+
+### 3b. Corrupt `acted_signals_{SYMBOL}.json`
 
 1. Quarantine it (`mv ... .corrupt.$(date +%s)`).
 2. Run `--reconcile_only`: fills recorded in order_state repair
@@ -87,8 +111,8 @@ python trade/run_market_breadth_trade.py --symbol SSO --reconcile_only
 
 - Broker-side dedupe (422 on an already-active client_order_id → adopt) was
   verified against the paper endpoint only.
-- Testmode shares the state file with live mode; a testmode run may mark real
-  pending records `resolved-unverified-testmode` — residual risk is bounded by
-  the deterministic client_order_id (a real resubmit then adopts via the 422
-  lookup path). Prefer reconciling real pending orders BEFORE running testmode.
+- Testmode writes to the same state directory, but records it creates carry
+  `testmode: true` and testmode reconciliation only resolves those; a real live
+  pending record is left untouched and stays recoverable by a live run.
+  Nevertheless prefer reconciling real pending orders BEFORE running testmode.
 - PID-liveness detection cannot detect a resurrected (recycled) PID.

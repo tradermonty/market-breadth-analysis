@@ -1427,36 +1427,54 @@ class TestMarketBreadthTrader(unittest.TestCase):
         self.mock_api.submit_order.assert_not_called()
 
     @patch('trade.run_market_breadth_trade.MarketBreadthTrader._initialize_alpaca')
-    def test_load_entry_prices_corrupt_file_returns_none(self, mock_init):
-        """Corrupt or non-list JSON in entry_prices file returns None"""
+    def test_load_entry_prices_corrupt_file_is_blocked(self, mock_init):
+        """Review R3: corrupt current-format entry_prices is a hard block.
+
+        The file carries the authoritative applied_credit watermark, so
+        unknown-structure / invalid JSON corruption raises StateCorruptionError,
+        keeps the original file in place (no destructive repair), and preserves
+        a quarantine copy for evidence. The legacy flat-list format still
+        falls back to None.
+        """
         mock_init.return_value = Mock()
         trader = MarketBreadthTrader(symbol='CORRUPT')
 
         tmp_dir = tempfile.mkdtemp()
         entry_path = os.path.join(tmp_dir, 'entry_prices_CORRUPT.json')
         trader._entry_prices_path = lambda: entry_path
+        from trade.order_state import StateCorruptionError
 
-        # Test with non-list JSON (dict)
+        # Legacy flat-list format: still None (fallback to broker avg)
         with open(entry_path, 'w') as f:
-            json.dump({'price': 50.0}, f)
+            json.dump([{'price': 50.0}], f)
         result = trader._load_entry_prices()
-        self.assertIsNone(result, 'Non-list JSON should return None')
+        self.assertIsNone(result, 'Legacy flat-list format should fall back to None')
 
-        # Test with invalid JSON
+        # Invalid JSON: blocked (StateCorruptionError), original preserved
         with open(entry_path, 'w') as f:
             f.write('not valid json{{{')
-        result = trader._load_entry_prices()
-        self.assertIsNone(result, 'Invalid JSON should return None')
+        with self.assertRaises(StateCorruptionError):
+            trader._load_entry_prices()
+        self.assertTrue(os.path.exists(entry_path), 'original file must stay in place')
+        quarantine = [f for f in os.listdir(tmp_dir) if f.endswith('.corrupt-') or '.corrupt-' in f]
+        self.assertTrue(quarantine, 'quarantine copy should exist')
 
-        # Test with list of non-numeric values
+        # Unknown structure (dict without lots): blocked
         with open(entry_path, 'w') as f:
-            json.dump(['not', 'numbers'], f)
-        result = trader._load_entry_prices()
-        self.assertIsNone(result, 'List of non-numeric values should return None')
+            json.dump({'price': 50.0}, f)
+        with self.assertRaises(StateCorruptionError):
+            trader._load_entry_prices()
+
+        # New-format corruption (bad credit mapping): blocked
+        with open(entry_path, 'w') as f:
+            json.dump({'lots': [{'price': 50.0, 'shares': 10}], 'applied_credit': {'x': 'bad'}}, f)
+        with self.assertRaises(StateCorruptionError):
+            trader._load_entry_prices()
 
         # Cleanup
-        os.remove(entry_path)
-        os.rmdir(tmp_dir)
+        import shutil as _shutil
+
+        _shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 class TestTimezoneCorrectness(unittest.TestCase):
