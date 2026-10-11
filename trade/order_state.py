@@ -51,6 +51,12 @@ SCHEMA_VERSION = 1
 COID_MAX_LEN = 48
 _COID_RE = re.compile(r'^[A-Za-z0-9_-]+$')
 
+# Alpaca order lifecycle: statuses that can NEVER fill again (review R2).
+# Anything unknown/nonfinal (pending_cancel, pending_replace, held, suspended,
+# done_for_day, ...) must stay active — fills can still occur before
+# cancellation completes.
+FINAL_ORDER_STATUSES = {'filled', 'canceled', 'expired', 'rejected'}
+
 
 def build_client_order_id(symbol, signal_type, signal_date, side, retry_count=0, stop_time=None, stop_seq=None):
     """Deterministic client_order_id. Raises ValueError on overflow (fail-closed)."""

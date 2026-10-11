@@ -101,6 +101,10 @@ class OrderReconciliationTestBase(unittest.TestCase):
         with open(self.trader._order_state_path()) as f:
             return json.load(f)
 
+    def _entry_prices_file(self):
+        with open(self.trader._entry_prices_path()) as f:
+            return json.load(f)
+
     def _seed_record(
         self,
         coid,
@@ -271,10 +275,6 @@ class TestReconciliation(OrderReconciliationTestBase):
         self.assertEqual(self.trader.entry_lots, [])
         self.assertNotIn(('stop', '2026-03-13'), self.trader._acted_signals)
 
-    def _entry_prices_file(self):
-        with open(self.trader._entry_prices_path()) as f:
-            return json.load(f)
-
     def test_19_partial_sell_fill_reconcile_keeps_remaining_lots(self):
         coid = 'mbt-SSO-peak-2026-03-14-S'
         self._seed_record(coid, signal_type='peak', signal_date='2026-03-14', side='S', qty=30)
@@ -438,6 +438,168 @@ class TestReconciliation(OrderReconciliationTestBase):
         self.assertTrue(payload['blocked'])
         self.assertTrue(payload['records'])  # partial report is preserved
         self.assertEqual(payload['records'][0]['outcome'], 'resolved-no-order')
+
+
+class TestPartialSellRecovery(OrderReconciliationTestBase):
+    """Review R1 regressions: partial-sell reconciliation must never wipe
+    shares still held at the broker."""
+
+    def _seed_sell(self, coid, filled_qty, price=50.0):
+        self._seed_record(coid, signal_type='peak', signal_date='2026-03-23', side='S', qty=10)
+        order = self._filled(coid, filled_qty=filled_qty, filled_avg_price=price)
+        order.status = 'canceled'
+        return order
+
+    def test_32_partial_sell_remaining_equals_broker_position(self):
+        # 10 shares, 6 sold and canceled, broker still holds 4
+        self._seed_sell('mbt-SSO-peak-2026-03-23-S', filled_qty=6)
+        self.trader.entry_lots = [{'price': 50.0, 'shares': 10}]
+        self.fake_api.get_position = lambda s: SimpleNamespace(qty='4')
+        self.trader.reconcile_pending_orders()
+        saved = self._entry_prices_file()
+        # exactly-once credit: 10-6=4 shares remain, credit watermark 6
+        self.assertEqual(saved['lots'], [{'price': 50.0, 'shares': 4}])
+        self.assertEqual(saved['applied_credit']['mbt-SSO-peak-2026-03-23-S'], 6)
+        self.assertEqual(self.trader.current_position, 4)
+        # re-run must be a no-op on lots
+        self.trader.reconcile_pending_orders()
+        self.assertEqual(self._entry_prices_file()['lots'], [{'price': 50.0, 'shares': 4}])
+
+    def test_33_half_sold_half_remaining(self):
+        self._seed_sell('mbt-SSO-peak-2026-03-24-S', filled_qty=5)
+        self.trader.entry_lots = [{'price': 50.0, 'shares': 10}]
+        self.fake_api.get_position = lambda s: SimpleNamespace(qty='5')
+        self.trader.reconcile_pending_orders()
+        self.assertEqual(self._entry_prices_file()['lots'], [{'price': 50.0, 'shares': 5}])
+        self.assertEqual(self.trader.current_position, 5)
+
+    def test_34_multi_lot_fifo_partial_sell(self):
+        self._seed_sell('mbt-SSO-peak-2026-03-25-S', filled_qty=6)
+        self.trader.entry_lots = [
+            {'price': 50.0, 'shares': 5},
+            {'price': 60.0, 'shares': 5},
+        ]
+        self.fake_api.get_position = lambda s: SimpleNamespace(qty='4')
+        self.trader.reconcile_pending_orders()
+        self.assertEqual(self._entry_prices_file()['lots'], [{'price': 60.0, 'shares': 4}])
+
+    def test_35_oversell_repair_blocks_instead_of_clearing(self):
+        # credit says 6 already sold (buffered), fill says 12 of 10 lots: drift
+        self._seed_record('mbt-SSO-peak-2026-03-26-S', signal_type='peak', signal_date='2026-03-26', side='S', qty=10)
+        order = self._filled('mbt-SSO-peak-2026-03-26-S', filled_qty=12, filled_avg_price=49.0)
+        order.status = 'canceled'
+        self.trader.entry_lots = [{'price': 50.0, 'shares': 10}]
+        with self.assertRaises(ExecutionBlocked):
+            self.trader.reconcile_pending_orders()
+        # nothing was wiped and the record stays untouched (blocked pre-repair)
+        self.assertEqual(self.trader.entry_lots, [{'price': 50.0, 'shares': 10}])
+        self.assertEqual(self._state()['records'][0]['status'], 'intent')
+
+
+class TestNonterminalOrderStatuses(OrderReconciliationTestBase):
+    """Review R2: nonfinal/unknown broker statuses must stay active."""
+
+    def _seed_open(self, status, filled_qty=0, price=None):
+        coid = 'mbt-SSO-long_trough-2026-03-27-B'
+        self._seed_record(coid, signal_date='2026-03-27')
+        self.fake_api.orders[coid] = SimpleNamespace(
+            id='broker-open',
+            client_order_id=coid,
+            symbol='SSO',
+            qty=5,
+            side='buy',
+            status=status,
+            filled_qty=filled_qty,
+            filled_avg_price=price,
+        )
+        return coid
+
+    def test_36_pending_cancel_zero_fill_resolves_after_cancel(self):
+        coid = self._seed_open('pending_cancel')
+        orig_get = self.fake_api.get_order
+        calls = []
+
+        def get_order(oid):
+            calls.append(oid)
+            if len(calls) >= 2:
+                self.fake_api.orders[coid].status = 'canceled'
+            return orig_get(oid)
+
+        self.fake_api.get_order = get_order
+        self.trader.reconcile_pending_orders()
+        rec = self._state()['records'][0]
+        self.assertEqual(rec['status'], STATUS_RESOLVED_CANCELED)
+        self.assertEqual(self.fake_api.submit_calls, [])
+
+    def test_37_pending_cancel_with_partial_fill_resolves_filled_once_final(self):
+        coid = self._seed_open('pending_cancel', filled_qty=4, price=50.0)
+        orig_get = self.fake_api.get_order
+        calls = []
+
+        def get_order(oid):
+            calls.append(oid)
+            if len(calls) >= 3:
+                self.fake_api.orders[coid].status = 'canceled'  # fills before cancel completes
+            return orig_get(oid)
+
+        self.fake_api.get_order = get_order
+        self.trader.reconcile_pending_orders()
+        rec = self._state()['records'][0]
+        self.assertEqual(rec['status'], STATUS_RESOLVED_FILLED)
+        saved = self._entry_prices_file()
+        self.assertEqual(saved['lots'], [{'price': 50.0, 'shares': 4}])
+        # a partial fill resolves as filled: it must NOT be retried with R1
+        self.assertEqual(self.fake_api.submit_calls, [])
+
+    def test_38_unknown_status_blocks_until_definitive_outcome(self):
+        self._seed_open('held')
+        # wait attempt returns None, refetch still 'held' -> blocked
+        self.trader._wait_for_fill = lambda order: None
+        with self.assertRaises(ExecutionBlocked):
+            self.trader.reconcile_pending_orders()
+        rec = self._state()['records'][0]
+        self.assertEqual(rec['status'], 'intent')
+
+
+class TestTestmodeIsolation(OrderReconciliationTestBase):
+    """Review R4: testmode must not rewrite real pending records."""
+
+    def test_39_testmode_leaves_live_pending_record_recoverable(self):
+        coid = 'mbt-SSO-long_trough-2026-03-28-B'
+        self._seed_record(coid, signal_date='2026-03-28')  # no testmode flag: a LIVE record
+        self._filled(coid, filled_qty=4, filled_avg_price=51.0)
+
+        with patch('trade.run_market_breadth_trade.MarketBreadthTrader._initialize_alpaca'):
+            t = MarketBreadthTrader(
+                alpaca_api=self.fake_api, symbol='SSO', testmode=True, test_date='2026-03-28', state_dir='trade'
+            )
+            t.prepare_test_dt()
+            t.reconcile_pending_orders()
+        rec = self._state()['records'][0]
+        self.assertEqual(rec['status'], 'intent')  # untouched by testmode
+
+        # later live run recovers the real fill
+        self.trader.reconcile_pending_orders()
+        rec = self._state()['records'][0]
+        self.assertEqual(rec['status'], STATUS_RESOLVED_FILLED)
+        self.assertEqual(self.trader.entry_lots, [{'price': 51.0, 'shares': 4}])
+        self.assertIn(('long_trough', '2026-03-28'), self.trader._acted_signals)
+
+    def test_40_testmode_resolves_only_its_own_records(self):
+        live_coid = 'mbt-SSO-long_trough-2026-03-29-B'
+        test_coid = 'mbt-SSO-long_trough-2026-03-29-T'
+        self._seed_record(live_coid, signal_date='2026-03-29')
+        self._seed_record(test_coid, signal_date='2026-03-29')
+        self.trader._update_order_record(test_coid, testmode=True)
+        t = MarketBreadthTrader(
+            alpaca_api=self.fake_api, symbol='SSO', testmode=True, test_date='2026-03-29', state_dir='trade'
+        )
+        t.reconcile_pending_orders()
+        state = self._state()
+        by_coid = {r['client_order_id']: r for r in state['records']}
+        self.assertEqual(by_coid[live_coid]['status'], 'intent')
+        self.assertEqual(by_coid[test_coid]['status'], STATUS_RESOLVED_TESTMODE)
+        self.assertEqual(self.fake_api.submit_calls, [])
 
 
 class TestCliParsing(unittest.TestCase):

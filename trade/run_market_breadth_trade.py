@@ -4,6 +4,7 @@ import logging
 import logging.handlers
 import os
 import pathlib
+import shutil
 import signal
 import sys
 import time
@@ -24,6 +25,7 @@ from market_breadth import (
     get_sp500_tickers_from_fmp,
 )
 from trade.order_state import (
+    FINAL_ORDER_STATUSES,
     STATUS_ACCEPTED,
     STATUS_INTENT,
     STATUS_RESOLVED_CANCELED,
@@ -487,6 +489,9 @@ class MarketBreadthTrader:
             'resolved_at': None,
             'fill_watermark': 0,
         }
+        # Review R4: tag testmode-created records so testmode reconciliation
+        # can never rewrite a real live pending record in the shared file.
+        record['testmode'] = bool(self.testmode)
         self._write_order_record(record)
 
     def _trade_date_str(self):
@@ -540,13 +545,20 @@ class MarketBreadthTrader:
         self._update_order_record(coid, status=STATUS_SUBMITTED_UNKNOWN, submitted_at=_iso_now())
         return None
 
-    def _apply_fill_repair(self, order, filled_qty, signal_type, signal_date, fill_price, coid=None):
+    def _apply_fill_repair(
+        self, order, filled_qty, signal_type, signal_date, fill_price, coid=None, update_position=False
+    ):
         """Exactly-once fill repair (crash-safe) shared by live path and reconcile.
 
         Order: 1) acted_signals upsert (skip for stop), 2) lots + applied_credit in
         one atomic write, 3) order-state resolution last.
         Reconcile paths pass `coid` explicitly (the persisted record's COID) so
         the credit key never depends on broker object attributes.
+
+        Historical FIFO repair is separated from live position arithmetic:
+        reconcile repairs (update_position=False) NEVER touch current_position,
+        so a partial sell cannot wipe shares still held at the broker
+        (review R1). Live fills pass update_position=True.
         """
         coid = coid or _order_client_order_id(order) or self._last_prepared_coid or 'unknown-coid'
         already = self.applied_credit.get(coid, 0)
@@ -568,7 +580,9 @@ class MarketBreadthTrader:
         self.applied_credit[coid] = int(filled_qty)
         if delta > 0:
             if signal_type in ('peak', 'stop'):
-                self._update_lots_after_sell(delta)
+                self._reduce_lots_fifo(delta, coid=coid)
+                if update_position and delta > 0:
+                    self.current_position = max(self.current_position - delta, 0)
             else:
                 self.entry_lots.append({'price': fill_price, 'shares': delta})
                 self.entry_prices = [lot['price'] for lot in self.entry_lots]
@@ -581,6 +595,39 @@ class MarketBreadthTrader:
             resolved_at=_iso_now(),
             fill_watermark=int(filled_qty),
         )
+
+    def _reduce_lots_fifo(self, qty_to_sell, coid='unknown-coid'):
+        """Pure FIFO reduction of entry lots (no position counter, no file clearing).
+
+        Used by fill repair; a partial sell must never touch the broker-derived
+        position counter nor clear still-held lots (review R1). Unexplained
+        overshoot (selling more than the lots on disk) is a state/ledger drift
+        and BLOCKS instead of force-clearing.
+        """
+        total_before = sum(lot['shares'] for lot in self.entry_lots)
+        if qty_to_sell > total_before:
+            logger.critical(
+                'CRITICAL: fill repair for %s would sell %d shares but only %d '
+                'lot shares exist on disk; possible ledger/state drift. '
+                'Trading is BLOCKED; verify the broker position and acted '
+                'signals manually before resuming (see trade/recovery_runbook.md).',
+                coid,
+                qty_to_sell,
+                total_before,
+            )
+            raise ExecutionBlocked(
+                f'unexplained lot drift for {coid}: selling {qty_to_sell} but lots cover {total_before}'
+            )
+        remaining_to_sell = qty_to_sell
+        while remaining_to_sell > 0 and self.entry_lots:
+            lot = self.entry_lots[0]
+            if lot['shares'] <= remaining_to_sell:
+                remaining_to_sell -= lot['shares']
+                self.entry_lots.pop(0)
+            else:
+                lot['shares'] -= remaining_to_sell
+                remaining_to_sell = 0
+        self.entry_prices = [lot['price'] for lot in self.entry_lots]
 
     def reconcile_pending_orders(self):
         """Startup reconciliation over injected API (issue #6).
@@ -607,13 +654,24 @@ class MarketBreadthTrader:
                 continue
             coid = rec['client_order_id']
             if self.testmode:
-                self._update_order_record(coid, status=STATUS_RESOLVED_TESTMODE, resolved_at=_iso_now())
-                report.append(
-                    {
-                        'client_order_id': coid,
-                        'outcome': 'unverified-testmode',
-                    }
-                )
+                # Review R4: testmode may only touch records it created itself.
+                # A real live pending record is left untouched so a later live
+                # run can still recover it.
+                if rec.get('testmode'):
+                    self._update_order_record(coid, status=STATUS_RESOLVED_TESTMODE, resolved_at=_iso_now())
+                    report.append(
+                        {
+                            'client_order_id': coid,
+                            'outcome': 'unverified-testmode',
+                        }
+                    )
+                else:
+                    logger.warning(
+                        'Testmode run is leaving LIVE pending record %s untouched; '
+                        'it stays recoverable by a live reconciliation.',
+                        coid,
+                    )
+                    report.append({'client_order_id': coid, 'outcome': 'skipped-live-record-testmode'})
                 continue
             try:
                 order = self.api.get_order_by_client_order_id(coid)
@@ -640,21 +698,30 @@ class MarketBreadthTrader:
                 continue
             status = _order_status(order)
             filled_qty = int(_order_filled_qty(order))
-            if status in ('new', 'accepted', 'pending_new', 'partially_filled'):
+            if status not in FINAL_ORDER_STATUSES:
+                # Review R2: every nonfinal/unknown status stays active; fills
+                # can still occur (e.g. pending_cancel). Adopt and wait for a
+                # definitive broker outcome.
                 adopted = self._wait_for_fill(order)
-                if adopted is None:
+                if adopted is not None:
+                    if _order_status(adopted) not in FINAL_ORDER_STATUSES:
+                        # Do not trust a truthy result: confirm finality.
+                        logger.critical(
+                            'CRITICAL: broker returned a non-final status for %s '
+                            'after the fill wait. Trading is BLOCKED; investigate '
+                            'the order manually.',
+                            coid,
+                        )
+                        raise ExecutionBlocked(f'non-final adopted order {coid}: {_order_status(adopted)}')
+                    order = adopted
+                else:
                     # Adopt attempt ended without a definitive outcome: re-fetch
-                    # once. Still open? Never proceed to submit anything else.
+                    # once. Still non-final? Never proceed to submit anything else.
                     try:
                         refetched = self.api.get_order_by_client_order_id(coid)
                     except Exception as exc:
                         raise ExecutionBlocked(f'reconcile post-adopt lookup failed for {coid}: {exc}') from exc
-                    if refetched is None or _order_status(refetched) in (
-                        'new',
-                        'accepted',
-                        'pending_new',
-                        'partially_filled',
-                    ):
+                    if refetched is None or _order_status(refetched) not in FINAL_ORDER_STATUSES:
                         logger.critical(
                             'CRITICAL: broker order %s remains open after '
                             'reconciliation attempt. Trading is BLOCKED; investigate '
@@ -663,8 +730,6 @@ class MarketBreadthTrader:
                         )
                         raise ExecutionBlocked(f'order {coid} still open after reconciliation attempt')
                     order = refetched
-                else:
-                    order = adopted
                 status = _order_status(order)
                 filled_qty = int(_order_filled_qty(order))
             if filled_qty > 0:
@@ -1117,7 +1182,9 @@ class MarketBreadthTrader:
                     if filled:
                         filled_qty = int(filled.filled_qty) if filled.filled_qty is not None else self.current_position
                         fill_price = float(filled.filled_avg_price) if filled.filled_avg_price else current_price
-                        self._apply_fill_repair(filled, filled_qty, 'stop', self._trade_date_str(), fill_price)
+                        self._apply_fill_repair(
+                            filled, filled_qty, 'stop', self._trade_date_str(), fill_price, update_position=True
+                        )
                         logger.info(f'Stop loss exit: {filled_qty} shares at ${current_price:.2f}')
                     else:
                         logger.error('Stop loss order not filled — position remains open')
@@ -1166,7 +1233,9 @@ class MarketBreadthTrader:
                     filled_qty = int(filled.filled_qty) if filled.filled_qty is not None else self.current_position
                     fill_price = float(filled.filled_avg_price) if filled.filled_avg_price else current_price
                     logger.info(f'Exit executed at long MA peak: {filled_qty} shares at ${current_price:.2f}')
-                    self._apply_fill_repair(filled, filled_qty, 'peak', peak_signal_date, fill_price)
+                    self._apply_fill_repair(
+                        filled, filled_qty, 'peak', peak_signal_date, fill_price, update_position=True
+                    )
                 else:
                     logger.error('Peak exit order not filled — position remains open')
             else:
@@ -1280,35 +1349,64 @@ class MarketBreadthTrader:
     def _load_entry_prices(self):
         """Load entry data from disk. Returns dict with 'lots' key, or None.
 
-        MJ-002: Supports new format {"lots": [...]}. Old flat-list format
-        returns None so the caller falls back to broker avg_entry_price.
+        MJ-002: Supports new format {"lots": [...], "applied_credit": {...}}.
+        Old flat-list format returns None so the caller falls back to broker
+        avg_entry_price. Review R3: this file now carries the authoritative
+        applied_credit watermark, so CURRENT-FORMAT corruption is a hard block
+        (StateCorruptionError, with a quarantine copy preserved for evidence),
+        not a silent fallback. A missing file is normal (legacy/first run).
+        """
+        path = self._entry_prices_path()
+        if not os.path.exists(path):
+            return None
+        try:
+            with open(path) as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            logger.error(f'Corrupt entry prices file {path}: {e}', exc_info=True)
+            self._quarantine_corrupt_state_file(path)
+            raise StateCorruptionError(f'corrupt entry prices file {path}: {e}') from e
+
+        if isinstance(data, list):
+            # Old format (flat list) — cannot infer per-lot quantities/credits.
+            logger.info('Old entry_prices format detected; falling back to broker data')
+            return None
+
+        if not isinstance(data, dict) or 'lots' not in data:
+            logger.error(f'Entry prices file {path} has an unknown structure; blocking (review R3)')
+            self._quarantine_corrupt_state_file(path)
+            raise StateCorruptionError(f'entry prices file {path} has unknown structure')
+
+        lots = data['lots']
+        credit = data.get('applied_credit', {})
+        lots_valid = isinstance(lots, list) and all(
+            isinstance(lot, dict)
+            and isinstance(lot.get('price'), int | float)
+            and isinstance(lot.get('shares'), int)
+            and lot['shares'] > 0
+            for lot in lots
+        )
+        credit_valid = isinstance(credit, dict) and all(
+            isinstance(k, str) and isinstance(v, int) and v >= 0 for k, v in credit.items()
+        )
+        if not lots_valid or not credit_valid:
+            logger.error(f'Corrupted lots/credit data in entry_prices file {path}; blocking (review R3)')
+            self._quarantine_corrupt_state_file(path)
+            raise StateCorruptionError(f'corrupted lots/credit data in entry prices file {path}')
+        return data  # Current format, validated
+
+    def _quarantine_corrupt_state_file(self, path):
+        """Copy a corrupt file aside for evidence (original stays in place).
+
+        Review R3: keep the original on disk so every subsequent run stays
+        blocked until an operator has intervened (runbook procedure).
         """
         try:
-            path = self._entry_prices_path()
-            if os.path.exists(path):
-                with open(path) as f:
-                    data = json.load(f)
-                if isinstance(data, dict) and 'lots' in data:
-                    lots = data['lots']
-                    self_entry = dict(data.get('applied_credit', {}) or {})
-                    # Validate lot schema: each lot must have numeric 'price' and int 'shares'
-                    if isinstance(lots, list) and all(
-                        isinstance(lot, dict)
-                        and isinstance(lot.get('price'), int | float)
-                        and isinstance(lot.get('shares'), int)
-                        and lot['shares'] > 0
-                        for lot in lots
-                    ):
-                        data['applied_credit'] = self_entry
-                        return data  # New format, validated
-                    logger.warning('Corrupted lots data in entry_prices file; falling back to broker data')
-                    return None
-                # Old format (flat list) — cannot infer per-lot quantities
-                logger.info('Old entry_prices format detected; falling back to broker data')
-                return None
-        except Exception as e:
-            logger.error(f'Failed to load entry prices: {e}', exc_info=True)
-        return None
+            dest = f'{path}.corrupt-{int(time.time())}'
+            shutil.copy2(path, dest)
+            logger.warning('Corrupt state file quarantined to %s (original kept in place)', dest)
+        except OSError as qe:
+            logger.error('Failed to quarantine corrupt state file %s: %s', path, qe)
 
     def _clear_entry_prices_file(self):
         """Remove persisted entry prices file."""
