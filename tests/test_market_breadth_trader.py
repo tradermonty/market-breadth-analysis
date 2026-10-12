@@ -484,6 +484,7 @@ class TestMarketBreadthTrader(unittest.TestCase):
 
         canceled = Mock()
         canceled.status = 'canceled'
+        canceled.filled_qty = '0'
         self.mock_api.get_order.return_value = canceled
 
         result = self.trader._wait_for_fill(mock_order)
@@ -591,6 +592,7 @@ class TestMarketBreadthTrader(unittest.TestCase):
         # Mock cancel_order and final get_order (canceled after cancel)
         canceled = Mock()
         canceled.status = 'canceled'
+        canceled.filled_qty = '0'
         self.mock_api.get_order.return_value = canceled
         self.mock_api.cancel_order = Mock()
 
@@ -598,6 +600,280 @@ class TestMarketBreadthTrader(unittest.TestCase):
 
         self.assertIsNone(result)
         self.mock_api.cancel_order.assert_called_once_with('order-timeout')
+
+    def test_wait_for_fill_canceled_with_partial_fill_returns_order(self):
+        """C-1/#5: canceled order with partial fill returns the order (not None)."""
+        mock_order = Mock()
+        mock_order.id = 'order-456'
+        canceled = Mock()
+        canceled.status = 'canceled'
+        canceled.filled_qty = '4'
+        canceled.filled_avg_price = '50.0'
+        self.mock_api.get_order.return_value = canceled
+
+        result = self.trader._wait_for_fill(mock_order)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.filled_qty, 4)
+
+    def test_wait_for_fill_expired_with_partial_fill_returns_order(self):
+        """#5: expired order with partial fill returns the order (not None)."""
+        mock_order = Mock()
+        mock_order.id = 'order-exp'
+        expired = Mock()
+        expired.status = 'expired'
+        expired.filled_qty = '4'
+        expired.filled_avg_price = '50.0'
+        self.mock_api.get_order.return_value = expired
+
+        result = self.trader._wait_for_fill(mock_order)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.filled_qty, 4)
+
+    def test_wait_for_fill_rejected_zero_fill_returns_none(self):
+        """#5: rejected order with zero fill returns None."""
+        mock_order = Mock()
+        mock_order.id = 'order-rej'
+        rejected = Mock()
+        rejected.status = 'rejected'
+        rejected.filled_qty = '0'
+        self.mock_api.get_order.return_value = rejected
+
+        result = self.trader._wait_for_fill(mock_order)
+        self.assertIsNone(result)
+
+    def test_wait_for_fill_suspended_none_fill_returns_none(self):
+        """#5: suspended order with no fill returns None."""
+        mock_order = Mock()
+        mock_order.id = 'order-susp'
+        suspended = Mock()
+        suspended.status = 'suspended'
+        suspended.filled_qty = None
+        self.mock_api.get_order.return_value = suspended
+
+        result = self.trader._wait_for_fill(mock_order)
+        self.assertIsNone(result)
+
+    def test_parse_filled_qty_coercion(self):
+        """_parse_filled_qty normalizes str/int/float/None, defaulting to 0 on garbage."""
+        order = Mock()
+        for raw, expected in [('4', 4), (4, 4), ('4.0', 4), ('4.5', 4), (None, 0), ('abc', 0)]:
+            order.filled_qty = raw
+            self.assertEqual(self.trader._parse_filled_qty(order), expected, f'raw={raw!r}')
+
+    def test_partial_cancel_end_to_end_long_ma_buy(self):
+        """#5 E2E: canceled ~199-share order with 4-share fill via real _wait_for_fill."""
+        self.trader.current_position = 0
+        self.trader.entry_prices = []
+        self.trader.entry_lots = []
+        self.trader.no_pyramiding = True
+        self.trader._sync_position_from_broker = Mock()
+        self.trader._save_entry_prices = Mock()
+        self.trader._save_acted_signals = Mock()
+        self.trader._clear_entry_prices_file = Mock()
+
+        self.mock_bar.c = 50.0
+        self.mock_api.get_latest_bar.return_value = self.mock_bar
+        today = pd.Timestamp(_now_et().strftime('%Y-%m-%d'))
+        self.trader.long_ma_bottoms = [today]
+        self.trader.short_ma_bottoms = []
+        self.trader.peaks = []
+
+        mock_account = Mock()
+        mock_account.cash = '10000.0'
+        self.mock_api.get_account.return_value = mock_account
+
+        mock_order = Mock()
+        mock_order.id = 'order-partial'
+        self.mock_api.submit_order.return_value = mock_order
+
+        canceled = Mock()
+        canceled.status = 'canceled'
+        canceled.filled_qty = '4'
+        canceled.filled_avg_price = '50.0'
+        self.mock_api.get_order.return_value = canceled
+
+        self.trader.check_signals_and_trade()
+
+        self.assertEqual(self.trader.current_position, 4)
+        self.assertEqual(len(self.trader.entry_lots), 1)
+        self.assertEqual(self.trader.entry_lots[0]['shares'], 4)
+        self.assertEqual(self.trader.entry_lots[0]['price'], 50.0)
+        self.assertEqual(sum(lot['shares'] for lot in self.trader.entry_lots), 4)
+        self.assertIn(('long_trough', today.strftime('%Y-%m-%d')), self.trader._acted_signals)
+
+    def test_partial_cancel_end_to_end_short_ma_buy(self):
+        """#5 E2E: canceled partial fill accounted on the short-MA entry path."""
+        self.trader.current_position = 0
+        self.trader.entry_prices = []
+        self.trader.entry_lots = []
+        self.trader.no_pyramiding = True
+        self.trader._sync_position_from_broker = Mock()
+        self.trader._save_entry_prices = Mock()
+        self.trader._save_acted_signals = Mock()
+        self.trader._clear_entry_prices_file = Mock()
+
+        self.mock_bar.c = 50.0
+        self.mock_api.get_latest_bar.return_value = self.mock_bar
+        today = pd.Timestamp(_now_et().strftime('%Y-%m-%d'))
+        self.trader.long_ma_bottoms = []
+        self.trader.short_ma_bottoms = [today]
+        self.trader.peaks = []
+
+        mock_account = Mock()
+        mock_account.cash = '10000.0'
+        self.mock_api.get_account.return_value = mock_account
+
+        mock_order = Mock()
+        mock_order.id = 'order-partial-short'
+        self.mock_api.submit_order.return_value = mock_order
+
+        canceled = Mock()
+        canceled.status = 'canceled'
+        canceled.filled_qty = '4'
+        canceled.filled_avg_price = '50.0'
+        self.mock_api.get_order.return_value = canceled
+
+        self.trader.check_signals_and_trade()
+
+        self.assertEqual(self.trader.current_position, 4)
+        self.assertEqual(len(self.trader.entry_lots), 1)
+        self.assertEqual(self.trader.entry_lots[0]['shares'], 4)
+        self.assertEqual(sum(lot['shares'] for lot in self.trader.entry_lots), 4)
+        self.assertIn(('short_trough', today.strftime('%Y-%m-%d')), self.trader._acted_signals)
+
+    def test_partial_buy_accounts_only_filled(self):
+        """#5: mocked partial buy (10 requested, 4 filled) never double-counts."""
+        self.trader.current_position = 0
+        self.trader.entry_prices = []
+        self.trader.entry_lots = []
+        self.trader.no_pyramiding = True
+        self.trader._sync_position_from_broker = Mock()
+        self.trader._save_entry_prices = Mock()
+        self.trader._save_acted_signals = Mock()
+        self.trader._clear_entry_prices_file = Mock()
+
+        self.mock_bar.c = 50.0
+        self.mock_api.get_latest_bar.return_value = self.mock_bar
+        today = pd.Timestamp(_now_et().strftime('%Y-%m-%d'))
+        self.trader.long_ma_bottoms = [today]
+        self.trader.short_ma_bottoms = []
+        self.trader.peaks = []
+
+        mock_account = Mock()
+        mock_account.cash = '10000.0'
+        self.mock_api.get_account.return_value = mock_account
+        mock_order = Mock()
+        mock_order.id = 'order-mocked-partial'
+        self.mock_api.submit_order.return_value = mock_order
+
+        partial = Mock()
+        partial.status = 'filled'
+        partial.filled_qty = 4
+        partial.filled_avg_price = '50.0'
+        self.trader._wait_for_fill = Mock(return_value=partial)
+
+        self.trader.check_signals_and_trade()
+
+        self.assertEqual(self.trader.current_position, 4)
+        self.assertEqual(len(self.trader.entry_lots), 1)
+        self.assertEqual(self.trader.entry_lots[0]['shares'], 4)
+        self.assertEqual(sum(lot['shares'] for lot in self.trader.entry_lots), 4)
+
+    def test_partial_sell_fifo_lots(self):
+        """#5: partial sell (10 held, 4 sold) reduces position and FIFO lots atomically."""
+        self.trader.current_position = 10
+        self.trader.entry_lots = [{'price': 50.0, 'shares': 10}]
+        self.trader.entry_prices = [50.0]
+        self.trader.no_pyramiding = True
+        self.trader._sync_position_from_broker = Mock()
+        self.trader._save_entry_prices = Mock()
+        self.trader._save_acted_signals = Mock()
+        self.trader._clear_entry_prices_file = Mock()
+
+        self.mock_bar.c = 55.0
+        self.mock_api.get_latest_bar.return_value = self.mock_bar
+        today = pd.Timestamp(_now_et().strftime('%Y-%m-%d'))
+        self.trader.long_ma_bottoms = []
+        self.trader.short_ma_bottoms = []
+        self.trader.peaks = [today]
+
+        mock_order = Mock()
+        mock_order.id = 'order-sell-partial'
+        self.mock_api.submit_order.return_value = mock_order
+
+        filled = Mock()
+        filled.status = 'filled'
+        filled.filled_qty = '4'
+        filled.filled_avg_price = '55.0'
+        self.mock_api.get_order.return_value = filled
+
+        self.trader.check_signals_and_trade()
+
+        self.assertEqual(self.trader.current_position, 6)
+        self.assertEqual(len(self.trader.entry_lots), 1)
+        self.assertEqual(self.trader.entry_lots[0]['shares'], 6)
+        self.assertEqual(self.trader.entry_lots[0]['price'], 50.0)
+        self.assertIn(('peak', today.strftime('%Y-%m-%d')), self.trader._acted_signals)
+
+    def test_sell_zero_fill_leaves_position_open(self):
+        """#5: zero-fill sell leaves position/lots unchanged and does not record the signal."""
+        self.trader.current_position = 10
+        self.trader.entry_lots = [{'price': 50.0, 'shares': 10}]
+        self.trader.entry_prices = [50.0]
+        self.trader.no_pyramiding = True
+        self.trader._sync_position_from_broker = Mock()
+        self.trader._save_entry_prices = Mock()
+        self.trader._save_acted_signals = Mock()
+        self.trader._clear_entry_prices_file = Mock()
+
+        self.mock_bar.c = 55.0
+        self.mock_api.get_latest_bar.return_value = self.mock_bar
+        today = pd.Timestamp(_now_et().strftime('%Y-%m-%d'))
+        self.trader.long_ma_bottoms = []
+        self.trader.short_ma_bottoms = []
+        self.trader.peaks = [today]
+
+        mock_order = Mock()
+        mock_order.id = 'order-sell-zero'
+        self.mock_api.submit_order.return_value = mock_order
+
+        canceled = Mock()
+        canceled.status = 'canceled'
+        canceled.filled_qty = '0'
+        canceled.filled_avg_price = '55.0'
+        self.mock_api.get_order.return_value = canceled
+
+        self.trader.check_signals_and_trade()
+
+        self.assertEqual(self.trader.current_position, 10)
+        self.assertEqual(len(self.trader.entry_lots), 1)
+        self.assertEqual(self.trader.entry_lots[0]['shares'], 10)
+        self.assertEqual(self.trader.entry_lots[0]['price'], 50.0)
+        self.assertNotIn(('peak', today.strftime('%Y-%m-%d')), self.trader._acted_signals)
+
+    def test_wait_for_fill_polling_error_continues(self):
+        """#5: a transient get_order error is retried and a later fill is returned."""
+        mock_order = Mock()
+        mock_order.id = 'order-poll'
+
+        filled = Mock()
+        filled.status = 'filled'
+        filled.filled_qty = '100'
+        filled.filled_avg_price = '55.0'
+
+        calls = {'n': 0}
+
+        def side_effect(order_id):
+            calls['n'] += 1
+            if calls['n'] == 1:
+                raise ConnectionError('network down')
+            return filled
+
+        self.mock_api.get_order.side_effect = side_effect
+
+        result = self.trader._wait_for_fill(mock_order)
+        self.assertEqual(result, filled)
+        self.assertEqual(calls['n'], 2)
 
     def test_buy_order_not_filled_skips_entry_price(self):
         """Buy order where _wait_for_fill returns None does not append entry_price"""
@@ -707,7 +983,7 @@ class TestMarketBreadthTrader(unittest.TestCase):
 
         result = self.trader._wait_for_fill(mock_order, timeout_seconds=60)
         self.assertIsNotNone(result)
-        self.assertEqual(result.filled_qty, '30')
+        self.assertEqual(result.filled_qty, 30)
         self.mock_api.cancel_order.assert_called_once_with('order-partial-timeout')
 
     @patch('trade.run_market_breadth_trade.MarketBreadthTrader._initialize_alpaca')
