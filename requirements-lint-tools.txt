@@ -1,0 +1,20 @@
+# CI lint tools — source of truth for the lint-job tool versions. Version
+# parity with .pre-commit-config.yaml is enforced only where a pre-commit rev
+# exists (ruff, codespell, bandit, detect-secrets, mypy) via
+# tests/test_ci_tool_versions.py; pytest/tomli/types-*/pandas-stubs are CI-only
+# pins without a pre-commit counterpart.
+# Update procedure: bump the pre-commit rev AND the pin below in the same PR,
+# run tests/test_ci_tool_versions.py locally, then push.
+#
+# Versions captured empirically from the previously-passing (unpinned) CI
+# resolution on 2026-10-04; ruff stays at the existing repo-wide pin the
+# repo is formatted under, mypy 1.14.1 verified against --config-file pyproject.toml.
+ruff==0.9.6
+codespell==2.3.0
+mypy==1.14.1
+pandas-stubs==3.0.0.260204
+types-requests==2.32.4.20260107
+types-tqdm==4.67.3.20260205
+tomli==2.4.1
+# Test runner required by the "Tool parity checks" CI step in this job.
+pytest==9.0.2
