@@ -1,0 +1,1 @@
+{"dependencies": [{"name": "different-pkg", "version": "1.0.0", "vulns": [{"id": "GHSA-2222-cccc-dddd", "fix_versions": [], "aliases": ["GHSA-1111-aaaa-bbbb"], "description": "test vuln"}]}], "fixes": []}

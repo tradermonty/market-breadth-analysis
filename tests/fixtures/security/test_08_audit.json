@@ -1,0 +1,1 @@
+{"dependencies": [{"name": "any-pkg", "version": "1.0.0", "vulns": [{"id": "GHSA-1111-aaaa-bbbb", "fix_versions": [], "aliases": [], "description": "test vuln"}]}], "fixes": []}
