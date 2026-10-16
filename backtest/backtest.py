@@ -141,7 +141,7 @@ class Backtest:
         self.use_background_color_signals = (
             use_background_color_signals  # Whether to use signals based on background color changes
         )
-        self.partial_exit = partial_exit  # Whether to sell only half of the position on exit
+        self.partial_exit = partial_exit  # Halve discretionary signal exits, never risk/final liquidation
         self.no_show_plot = no_show_plot  # Whether to not show the plot
 
         # TradingView alignment parameters
@@ -605,7 +605,7 @@ class Backtest:
             final_date = self.price_data.index[-1]
             final_price = self.price_data['adjusted_close'].iloc[-1]
             exit_reason = 'weekly trailing' if _pending_weekly_exit else 'backtest_end'
-            self._execute_exit(final_date, final_price, reason=exit_reason, force_full_exit=_pending_weekly_exit)
+            self._execute_exit(final_date, final_price, reason=exit_reason, force_full_exit=True)
             # Update final equity to reflect slippage/commission from forced close
             self.equity_curve[-1] = {
                 'date': final_date,
@@ -822,7 +822,7 @@ class Backtest:
                         f'\n[COMPAT] Stop loss at {date.strftime("%Y-%m-%d")}, '
                         f'fill=${fill_at:.2f}, stop=${stop_loss_price:.2f}'
                     )
-                self._execute_exit(date, fill_at, reason='stop loss')
+                self._execute_exit(date, fill_at, reason='stop loss', force_full_exit=True)
                 stop_loss_fired = True
                 self._pending_entry = None
                 self._pending_exit = None
@@ -908,7 +908,7 @@ class Backtest:
                 print(f'Current price: ${price:.2f}')
                 print(f'Stop loss price: ${stop_loss_price:.2f}')
                 print(f'Fill price: ${fill_at:.2f}')
-                self._execute_exit(date, fill_at, reason='stop loss')
+                self._execute_exit(date, fill_at, reason='stop loss', force_full_exit=True)
                 stop_loss_fired = True
 
         # Phase 2: Exit signal (peak / two-stage)
@@ -929,7 +929,7 @@ class Backtest:
                 elif self._half_exited and self._check_trend_break(i):
                     print('\n[TV] Stage 2 trend break exit:')
                     print(f'Date: {date.strftime("%Y-%m-%d")}, Price: ${price:.2f}')
-                    self._execute_exit(date, price, reason='trend break exit (stage 2)')
+                    self._execute_exit(date, price, reason='trend break exit (stage 2)', force_full_exit=True)
                     exit_fired = True
             else:
                 if date in self._tv_peak_signals:
@@ -1010,7 +1010,7 @@ class Backtest:
                 print(f'Shares: {self.current_position}')
                 proceeds = self.current_position * price * (1 - self.slippage) * (1 - self.commission)
                 print(f'Proceeds (after fees and slippage): ${proceeds:.2f}')
-                self._execute_exit(date, price, reason='stop loss')
+                self._execute_exit(date, price, reason='stop loss', force_full_exit=True)
                 print(f'Available capital: ${self.current_capital:.2f}')
                 stop_loss_fired = True
 
@@ -1242,7 +1242,11 @@ class Backtest:
         return True
 
     def _execute_exit(self, date, price, reason='', force_full_exit=False):
-        """Execute exit"""
+        """Execute a signal exit, optionally halved by ``partial_exit``.
+
+        Risk stops, stage-two exits and final liquidation must pass
+        ``force_full_exit=True`` to close the entire remaining position.
+        """
         exit_price = price * (1 - self.slippage)
 
         # Determine shares to sell FIRST (CR-002 fix)
