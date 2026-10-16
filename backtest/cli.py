@@ -42,7 +42,9 @@ def build_argument_parser():
         help='Use background color change signals for entry and exit',
     )
     parser.add_argument(
-        '--partial_exit', action='store_true', help='Exit with half of the position when exit signal is triggered'
+        '--partial_exit',
+        action='store_true',
+        help='Halve peak/background signal exits; stops, stage-two exits and final liquidation always close fully',
     )
     parser.add_argument(
         '--no_show_plot', action='store_true', help='Do not show plot after saving (default: show plot)'
