@@ -1,6 +1,9 @@
 import argparse
+import json
+import math
 import os
 import pathlib
+from dataclasses import asdict
 from datetime import datetime, timedelta
 
 import numpy as np
@@ -12,6 +15,7 @@ from scipy.signal import find_peaks
 from tqdm import tqdm
 
 from fmp_data_fetcher import FMPDataFetcher
+from market_dates import explicit_resolution, resolve_market_date
 
 # Load environment variables
 load_dotenv()
@@ -374,30 +378,39 @@ def get_last_trading_day(date):
     return last_day.strftime('%Y-%m-%d')
 
 
-def get_latest_market_date():
-    """Get the latest available market date using FMP data"""
-    try:
-        today_dt = datetime.today()
-        start_lookup = (today_dt - timedelta(days=7)).strftime('%Y-%m-%d')
-        end_lookup = today_dt.strftime('%Y-%m-%d')
-        data = _get_fmp_fetcher().get_historical_price_data('SPY', start_lookup, end_lookup)
-        if not data:
-            raise ValueError('No data retrieved from FMP')
+def resolve_market_end_date(use_saved_data=False, now=None, grace_minutes=30):
+    """Resolve an observed date with structured confidence, using FMP or the SPY cache."""
 
-        df = pd.DataFrame(data)
-        if df.empty or 'date' not in df.columns:
-            raise ValueError('Invalid data format from FMP')
+    def observations(start, end):
+        if not use_saved_data:
+            return _get_fmp_fetcher().get_historical_price_data('SPY', start, end)
+        saved = load_stock_data('sp500_price_data.csv')
+        if isinstance(saved, pd.Series):
+            saved = saved.to_frame()
+        if saved is None or saved.empty or saved.shape[1] != 1:
+            raise ValueError('SPY date cache missing or invalid')
+        if not isinstance(saved.index, pd.DatetimeIndex) or saved.index.tz is not None or saved.index.hasnans:
+            raise ValueError('SPY date cache requires valid timezone-naive dates')
+        if saved.index.has_duplicates or not saved.index.equals(saved.index.normalize()):
+            raise ValueError('SPY date cache requires unique daily dates')
+        return [{'date': day.date().isoformat(), 'close': value} for day, value in saved.iloc[:, 0].items()]
 
-        latest_date = pd.to_datetime(df['date'].iloc[0])  # FMP returns latest first
+    return resolve_market_date(
+        observations,
+        now=now,
+        source='saved_spy_daily' if use_saved_data else 'fmp_spy_daily',
+        grace_minutes=grace_minutes,
+    )
 
-        # Adjust for weekends
-        if latest_date.weekday() >= 5:
-            latest_date = pd.to_datetime(get_last_trading_day(latest_date))
 
-        return latest_date.strftime('%Y-%m-%d')
-    except Exception as e:
-        print(f'Error getting latest market date from FMP: {e}')
-        return datetime.today().strftime('%Y-%m-%d')
+def resolve_default_end_date(use_saved_data=False, now=None):
+    """String compatibility helper; use resolve_market_end_date for confidence metadata."""
+    return resolve_market_end_date(use_saved_data, now=now).selected_date
+
+
+def get_latest_market_date(now=None):
+    """Return an available date or unverified estimate; structured callers must inspect confidence."""
+    return resolve_default_end_date(False, now=now)
 
 
 def _extract_chart_data_generic(
@@ -1221,7 +1234,9 @@ def main():
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
     parser.add_argument('--start_date', type=str, help='Start date (YYYY-MM-DD format)')
     parser.add_argument(
-        '--end_date', type=str, help="End date (YYYY-MM-DD format). If not specified, today's date will be used."
+        '--end_date',
+        type=str,
+        help='Authoritative end date (YYYY-MM-DD); default: latest observed completed XNYS session',
     )
     parser.add_argument(
         '--short_ma',
@@ -1232,6 +1247,12 @@ def main():
     )
     parser.add_argument('--use_saved_data', action='store_true', help='Use saved data instead of fetching from FMP')
     parser.add_argument('--no_export_csv', action='store_true', help='Skip CSV data export')
+    parser.add_argument(
+        '--data-arrival-grace-minutes',
+        type=float,
+        default=30,
+        help='Delivery grace after session close for expected freshness (default: 30 minutes)',
+    )
     parser.add_argument(
         '--include_50ma',
         action='store_true',
@@ -1250,6 +1271,10 @@ def main():
         print(f'reports/ exists: {os.path.exists("reports")}')
         print(f'data/ exists: {os.path.exists("data")}')
 
+    # Validate grace even with an explicit end date, without provider/cache lookups.
+    if not math.isfinite(args.data_arrival_grace_minutes) or args.data_arrival_grace_minutes < 0:
+        parser.error('--data-arrival-grace-minutes must be finite and nonnegative')
+
     # Set start date
     if args.start_date:
         start_date = args.start_date
@@ -1259,10 +1284,14 @@ def main():
 
     # Set end date
     if args.end_date:
-        end_date = args.end_date
+        resolution = explicit_resolution(args.end_date)
     else:
-        # Default is today
-        end_date = get_last_trading_day(datetime.today())  # Use the previous business day from today
+        resolution = resolve_market_end_date(args.use_saved_data, grace_minutes=args.data_arrival_grace_minutes)
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    (reports_dir / 'market_date_resolution.json').write_text(json.dumps(asdict(resolution), indent=2) + '\n')
+    if not args.end_date and resolution.confidence != 'observed':
+        raise ValueError(f'Unverified default market date: {resolution.reason}; see market_date_resolution.json')
+    end_date = resolution.selected_date
 
     print(f'\nInitial start date: {start_date}')
     print(f'Initial end date: {end_date}')
@@ -1273,9 +1302,7 @@ def main():
 
     # Ensure end_date is not before start_date
     if end_date_dt < start_date_dt:
-        print(f'Warning: Latest market date ({end_date}) is before start date ({start_date})')
-        print('Using start date as end date')
-        end_date = start_date
+        raise ValueError(f'End date {end_date} is before start date {start_date}')
 
     print(f'Final analysis period: {start_date} to {end_date}')
     print(f'Short-term moving average period: {args.short_ma} days')
