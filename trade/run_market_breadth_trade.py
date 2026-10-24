@@ -963,7 +963,7 @@ class MarketBreadthTrader:
 
             # Get S&P500 ticker list
             logger.info('Getting S&P500 ticker list...')
-            sp500_tickers = get_sp500_tickers_from_fmp()
+            sp500_tickers = get_sp500_tickers_from_fmp(use_saved_data=self.use_saved_data)
             logger.info(f'Got S&P500 ticker list: {len(sp500_tickers)} tickers')
 
             # Get historical data from FMP - using data up to yesterday

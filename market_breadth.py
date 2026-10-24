@@ -143,8 +143,30 @@ def load_breadth_series_from_csv(csv_path, value_col='close'):
     return series
 
 
-def get_sp500_tickers_from_fmp():
-    """Get S&P500 ticker list from FMP API"""
+def get_sp500_tickers_from_fmp(use_saved_data=False):
+    """Get S&P500 ticker list from FMP API or cached data.
+
+    When *use_saved_data* is True the ticker universe is derived from the
+    columns of the cached ``sp500_all_stocks.csv`` file.  No network call is
+    made.  A missing or empty cache raises ``RuntimeError``.
+    """
+    if use_saved_data:
+        cache_path = data_dir / 'sp500_all_stocks.csv'
+        if not cache_path.exists() or cache_path.stat().st_size == 0:
+            raise RuntimeError(
+                f'Offline mode (--use_saved_data): cached constituent file '
+                f'{cache_path} not found or empty. Run without --use_saved_data first to populate the cache.'
+            )
+        try:
+            header = pd.read_csv(cache_path, nrows=0)
+        except Exception as e:
+            raise RuntimeError(f'Offline mode: failed to read {cache_path}: {e}') from e
+        tickers = [c for c in header.columns if c not in ('date', 'Date', 'Unnamed: 0')]
+        if not tickers:
+            raise RuntimeError(f'Offline mode: {cache_path} contains no ticker columns.')
+        print(f'Derived {len(tickers)} S&P500 tickers from cached data')
+        return tickers
+
     try:
         tickers = _get_fmp_fetcher().get_sp500_constituents()
         if tickers:
@@ -156,6 +178,9 @@ def get_sp500_tickers_from_fmp():
     except Exception as e:
         print(f'Error fetching S&P500 tickers from FMP: {e}')
         return []
+
+
+get_sp500_tickers = get_sp500_tickers_from_fmp
 
 
 def convert_ticker_symbol(ticker):
@@ -260,8 +285,24 @@ def get_stock_price_ohlc(symbol, start_date, end_date, use_saved_data=False):
                         saved.index <= pd.to_datetime(end_date)
                     )
                     return saved.loc[mask]
-        except Exception:  # nosec B110 — fall through to re-fetch from API
-            pass
+        except Exception as e:
+            if use_saved_data:
+                raise RuntimeError(f'Offline mode: failed to read OHLC cache {file_path}: {e}') from e
+
+    if use_saved_data:
+        cache_range = 'missing'
+        if file_path.exists():
+            try:
+                tmp = pd.read_csv(file_path, index_col=0, parse_dates=True)
+                if not tmp.empty:
+                    cache_range = f'{tmp.index.min().date()} to {tmp.index.max().date()}'
+            except Exception:
+                cache_range = 'unreadable'
+        raise RuntimeError(
+            f'Offline mode: OHLC cache for {symbol} does not cover '
+            f'{actual_start_date} to {end_date} (cache: {cache_range}). '
+            f'Run without --use_saved_data first to populate the cache.'
+        )
 
     ohlc = fetch_price_ohlc_fmp(symbol, actual_start_date, end_date)
     if not ohlc.empty:
@@ -288,6 +329,21 @@ def get_sp500_price_data(start_date, end_date, use_saved_data=False):
             ):
                 return saved_data
 
+    if use_saved_data:
+        cache_range = 'missing'
+        if file_path.exists():
+            try:
+                tmp = load_stock_data(filename)
+                if tmp is not None and not tmp.empty:
+                    cache_range = f'{tmp.index.min().date()} to {tmp.index.max().date()}'
+            except Exception:
+                cache_range = 'corrupt'
+        raise RuntimeError(
+            f'Offline mode: S&P500 price cache does not cover '
+            f'{actual_start_date} to {end_date} (cache: {cache_range}). '
+            f'Run without --use_saved_data first to populate the cache.'
+        )
+
     # Fetch fresh data from FMP
     price_series = fetch_price_data_fmp('SPY', actual_start_date, end_date)
     if not price_series.empty:
@@ -308,6 +364,15 @@ def get_multiple_stock_data(tickers, start_date, end_date, use_saved_data=False)
                 and pd.to_datetime(end_date) <= saved_data.index.max()
             ):
                 return saved_data
+
+        cache_range = 'missing'
+        if saved_data is not None and not saved_data.empty:
+            cache_range = f'{saved_data.index.min().date()} to {saved_data.index.max().date()}'
+        raise RuntimeError(
+            f'Offline mode: stock data cache does not cover '
+            f'{start_date} to {end_date} (cache: {cache_range}). '
+            f'Run without --use_saved_data first to populate the cache.'
+        )
 
     actual_start_date = (pd.to_datetime(start_date) - pd.DateOffset(years=1)).strftime('%Y-%m-%d')
 
@@ -1169,6 +1234,15 @@ def get_stock_price_data(symbol, start_date, end_date, use_saved_data=False):
                 )
                 return saved_data.loc[mask]
 
+        cache_range = 'missing'
+        if saved_data is not None and not saved_data.empty:
+            cache_range = f'{saved_data.index.min().date()} to {saved_data.index.max().date()}'
+        raise RuntimeError(
+            f'Offline mode: price cache for {symbol} does not cover '
+            f'{actual_start_date} to {end_date} (cache: {cache_range}). '
+            f'Run without --use_saved_data first to populate the cache.'
+        )
+
     # Fetch data from FMP
     series = fetch_price_data_fmp(symbol, actual_start_date, end_date)
     if not series.empty:
@@ -1374,7 +1448,12 @@ def main():
         choices=[5, 8, 10, 20],
         help='Short-term moving average period (5, 8, 10, or 20)',
     )
-    parser.add_argument('--use_saved_data', action='store_true', help='Use saved data instead of fetching from FMP')
+    parser.add_argument(
+        '--use_saved_data',
+        action='store_true',
+        help='Strict offline mode: use only cached CSV data, never call FMP API. '
+        'Fails with a clear error if cache is missing or insufficient.',
+    )
     parser.add_argument('--no_export_csv', action='store_true', help='Skip CSV data export')
     parser.add_argument(
         '--data-arrival-grace-minutes',
@@ -1448,7 +1527,7 @@ def main():
 
     try:
         # Get S&P500 list from FMP API
-        ticker_list = get_sp500_tickers_from_fmp()
+        ticker_list = get_sp500_tickers_from_fmp(use_saved_data=args.use_saved_data)
 
         if ticker_list:
             # Get S&P 500 price data
