@@ -22,11 +22,11 @@ from trigger_market_breadth import (
 # --- Fixtures ---
 
 VALID_DATA_CSV = """\
-Date,Breadth_Index_200,SP500_Close
-2026-10-20,0.65,5800.0
-2026-10-21,0.64,5810.0
-2026-10-22,0.63,5820.0
-2026-10-23,0.62,5830.0
+Date,S&P500_Price,Breadth_Index_Raw,Breadth_Index_200MA
+2026-10-20,5800.0,0.65,0.60
+2026-10-21,5810.0,0.64,0.61
+2026-10-22,5820.0,0.63,0.62
+2026-10-23,5830.0,0.62,0.63
 """
 
 VALID_SUMMARY_CSV = """\
@@ -38,9 +38,9 @@ Total Trading Days,200
 """
 
 OLD_DATA_CSV = """\
-Date,Breadth_Index_200,SP500_Close
-2020-01-02,0.65,3200.0
-2020-01-03,0.64,3210.0
+Date,S&P500_Price,Breadth_Index_Raw,Breadth_Index_200MA
+2020-01-02,3200.0,0.65,0.60
+2020-01-03,3210.0,0.64,0.61
 """
 
 OLD_SUMMARY_CSV = """\
@@ -55,13 +55,13 @@ Analysis Period End,2026-09-15
 
 HTML_RESPONSE = '<!DOCTYPE html><html><body>404 Not Found</body></html>'
 
-HEADER_ONLY_CSV = 'Date,Breadth_Index_200,SP500_Close\n'
+HEADER_ONLY_CSV = 'Date,S&P500_Price,Breadth_Index_Raw,Breadth_Index_200MA\n'
 
 
 def _make_friday_csv(friday_date):
     return f"""\
-Date,Breadth_Index_200,SP500_Close
-{friday_date},0.65,5800.0
+Date,S&P500_Price,Breadth_Index_Raw,Breadth_Index_200MA
+{friday_date},5800.0,0.65,0.60
 """
 
 
@@ -141,7 +141,7 @@ class TestDetermineFreshness:
         # Thursday 2026-10-22 at 22:00 UTC (after market close)
         # Data has 2026-10-22 → should be fresh
         now = datetime(2026, 10, 22, 22, 0, tzinfo=timezone.utc)
-        csv_text = 'Date,Breadth_Index_200\n2026-10-20,0.65\n2026-10-21,0.64\n2026-10-22,0.63\n'
+        csv_text = 'Date,S&P500_Price\n2026-10-20,5800\n2026-10-21,5810\n2026-10-22,5820\n'
         result = determine_freshness(csv_text, now=now)
         assert result.is_fresh
         assert result.latest_data_date == '2026-10-22'
@@ -169,8 +169,18 @@ class TestDetermineFreshness:
     def test_holiday_wednesday_fresh_on_thanksgiving(self):
         # Thanksgiving 2026 is Nov 26 (Thursday). Market closed.
         # Wednesday Nov 25 data should be fresh on Thursday Nov 26.
+        # At 20:00 UTC (15:00 ET, before close), weekday estimate = Nov 25
         now = datetime(2026, 11, 26, 20, 0, tzinfo=timezone.utc)
-        csv_text = 'Date,Breadth_Index_200\n2026-11-25,0.65\n2026-11-24,0.64\n'
+        csv_text = 'Date,S&P500_Price\n2026-11-25,5800\n2026-11-24,5790\n'
+        result = determine_freshness(csv_text, now=now)
+        assert result.is_fresh
+
+    def test_holiday_wednesday_fresh_on_thanksgiving_after_close(self):
+        # At 22:00 UTC (17:00 ET, after close), weekday estimate = Nov 26 (Thu).
+        # Without exchange_calendars, fallback thinks Thu is a trading day.
+        # The 1-day grace allows Nov 25 data to still be fresh.
+        now = datetime(2026, 11, 26, 22, 0, tzinfo=timezone.utc)
+        csv_text = 'Date,S&P500_Price\n2026-11-25,5800\n2026-11-24,5790\n'
         result = determine_freshness(csv_text, now=now)
         assert result.is_fresh
 
@@ -182,7 +192,7 @@ class TestDetermineFreshness:
 
     def test_exchange_calendars_unavailable_fallback(self):
         now = datetime(2026, 10, 22, 22, 0, tzinfo=timezone.utc)
-        csv_text = 'Date,Breadth_Index_200\n2026-10-22,0.63\n'
+        csv_text = 'Date,S&P500_Price\n2026-10-22,5820\n'
         with mock.patch('market_dates._get_calendar', side_effect=ImportError('no module')):
             result = determine_freshness(csv_text, now=now)
         # Should still produce a result (weekday fallback)
@@ -296,5 +306,18 @@ class TestCLIArguments:
             with pytest.raises(SystemExit) as exc_info:
                 from trigger_market_breadth import main
 
+                main()
+            assert exc_info.value.code == 1
+
+    @mock.patch('trigger_market_breadth.requests.get')
+    def test_auto_mode_error_exits_nonzero(self, mock_get):
+        mock_get.side_effect = [
+            _mock_response(HTML_RESPONSE),
+            _mock_response(VALID_SUMMARY_CSV),
+        ]
+        from trigger_market_breadth import main
+
+        with mock.patch('sys.argv', ['trigger_market_breadth.py']):
+            with pytest.raises(SystemExit) as exc_info:
                 main()
             assert exc_info.value.code == 1

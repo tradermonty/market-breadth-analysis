@@ -19,7 +19,7 @@ import io
 import os
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import requests
 from dotenv import load_dotenv
@@ -162,12 +162,13 @@ def determine_freshness(csv_text, *, now=None):
         observations = []
         for row in reader:
             date_val = row.get(DATE_COLUMN, '').strip()
-            close_val = row.get('Close') or row.get('close') or row.get('Breadth_Index_200')
-            if date_val and close_val:
-                try:
-                    observations.append({'date': date_val, 'close': float(close_val)})
-                except (ValueError, TypeError):
-                    continue
+            if not date_val:
+                continue
+            try:
+                datetime.strptime(date_val, '%Y-%m-%d')
+            except ValueError:
+                continue
+            observations.append({'date': date_val, 'close': 1.0})
     except Exception as e:
         return FreshnessResult(False, None, None, f'Failed to parse CSV for freshness: {e}')
 
@@ -186,7 +187,14 @@ def determine_freshness(csv_text, *, now=None):
         return FreshnessResult(False, latest_data_date, None, f'Market date resolution failed: {e}')
 
     if resolution.confidence == 'weekday_only':
-        is_fresh = latest_data_date >= resolution.selected_date
+        # Without exchange_calendars, the estimate ignores holidays: be
+        # conservative and allow data to lag the estimate by one business day.
+        expected = date.fromisoformat(resolution.selected_date)
+        latest = date.fromisoformat(latest_data_date)
+        prev_business = expected - timedelta(days=1)
+        while prev_business.weekday() >= 5:
+            prev_business -= timedelta(days=1)
+        is_fresh = latest >= prev_business
         return FreshnessResult(
             is_fresh=is_fresh,
             latest_data_date=latest_data_date,
@@ -415,6 +423,8 @@ def main():
         lines = result['csv_text'].strip().split('\n')
         print(f'Data rows: {len(lines) - 1}')
         print(f'Preview:\n{chr(10).join(lines[:3])}')
+    if result['status'] == 'error':
+        sys.exit(1)
 
 
 if __name__ == '__main__':
