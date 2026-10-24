@@ -330,6 +330,7 @@ def test_real_producer_contract_and_restored_paths(tmp_path, monkeypatch):
     )
     resolution = resolve_market_date(lambda *_: [{'date': DAY, 'close': 5000}], now=NOW, source='fmp_spy_daily')
     monkeypatch.setattr(engine, 'resolve_market_end_date', lambda *_, **__: resolution)
+    monkeypatch.setattr(pub, '_calendar_bounds', lambda *_: (DAY, DAY))
     monkeypatch.setattr(engine, 'get_sp500_tickers_from_fmp', lambda: ['A', 'B'])
     monkeypatch.setattr(engine, 'get_sp500_price_data', lambda *_: pd.Series(5000.0, index=dates))
     monkeypatch.setattr(engine, 'get_multiple_stock_data', lambda *_: stocks)
