@@ -1,0 +1,81 @@
+# pip-audit exception allowlist (reviewed, owned, dated).
+#
+# Fields (all required; empty/missing values fail CI):
+#   id          pip-audit vulnerability id or alias (GHSA/PSF). Matched
+#               against finding "id" and "aliases[]".
+#   package     exact package name that must also match. Use "" for an
+#               id-only match.
+#   fix_version informational upgrade target, shown in the wrapper message.
+#   reason      why the exception is accepted (what mitigates the risk).
+#   owner       accountable person/@handle.
+# expires     ISO date. expires == today is still allowed; the day
+#               after, the exception fails CI. Missing/invalid dates fail.
+#
+# Current exceptions: all pinned transitively by alpaca-trade-api==3.2.0,
+# which hard-pins urllib3 <2 and msgpack ==1.0.3, blocking the fixes.
+# Remove these entries when the alpaca dependency is upgraded or removed
+# (tracked against parent tracker #4).
+
+[[exceptions]]
+id = "PYSEC-2026-3625"
+package = "msgpack"
+fix_version = "1.2.1"
+reason = "Fix requires msgpack 1.2.1; alpaca-trade-api 3.2.0 pins msgpack ==1.0.3. Memory-safety issue in Unpacker reuse; no untrusted peers in use."
+owner = "@tradermonty"
+expires = "2027-01-31"
+
+[[exceptions]]
+id = "PYSEC-2026-1999"
+package = "urllib3"
+fix_version = "2.5.0"
+reason = "Fix requires urllib3 2.5.0+; alpaca-trade-api 3.2.0 pins urllib3 <2. Redirect/retry hardening only; no redirects in use."
+owner = "@tradermonty"
+expires = "2027-01-31"
+
+[[exceptions]]
+id = "PYSEC-2026-1998"
+package = "urllib3"
+fix_version = "2.6.0"
+reason = "Fix requires urllib3 2.6.0+; alpaca-trade-api 3.2.0 pins urllib3 <2. Chained content-encoding path unused by this repo."
+owner = "@tradermonty"
+expires = "2027-01-31"
+
+[[exceptions]]
+id = "PYSEC-2026-1994"
+package = "urllib3"
+fix_version = "2.6.0"
+reason = "Fix requires urllib3 2.6.0+; alpaca-trade-api 3.2.0 pins urllib3 <2. Streaming API edge case; repo uses simple requests calls."
+owner = "@tradermonty"
+expires = "2027-01-31"
+
+[[exceptions]]
+id = "PYSEC-2026-1996"
+package = "urllib3"
+fix_version = "2.6.3"
+reason = "Fix requires urllib3 2.6.3+; alpaca-trade-api 3.2.0 pins urllib3 <2. Streaming API edge case; repo uses simple requests calls."
+owner = "@tradermonty"
+expires = "2027-01-31"
+
+[[exceptions]]
+id = "PYSEC-2026-141"
+package = "urllib3"
+fix_version = "2.7.0"
+reason = "Fix requires urllib3 2.7.0+; alpaca-trade-api 3.2.0 pins urllib3 <2. Cross-origin redirects unused (redirects disabled)."
+owner = "@tradermonty"
+expires = "2027-01-31"
+
+[[exceptions]]
+id = "PYSEC-2026-4177"
+package = "urllib3"
+fix_version = "2.8.0"
+reason = "Fix requires urllib3 2.8.0+; alpaca-trade-api 3.2.0 pins urllib3 <2. Streaming usage limits edge case."
+owner = "@tradermonty"
+expires = "2027-01-31"
+
+[[exceptions]]
+id = "PYSEC-2026-4175"
+package = "urllib3"
+fix_version = "2.8.0"
+reason = "Fix requires urllib3 2.8.0+; alpaca-trade-api 3.2.0 pins urllib3 <2. HTTPS-proxy TLS config unused by this repo."
+owner = "@tradermonty"
+expires = "2027-01-31"
