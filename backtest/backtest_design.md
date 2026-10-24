@@ -236,8 +236,17 @@ Original non-TV signal detection logic:
 **Standard exit:**
 - When a peak is detected (exit reason: `"peak exit"`)
 - Stop loss (fixed percentage, default: 8%; exit reason: `"stop loss"`)
-- Trailing stop (optional, `--use_trailing_stop`; exit reason: `"trailing stop"`)
+- Trailing stop (optional, `--use_trailing_stop`; exit reason: `"stop loss"`)
 - Background color change exit (optional, `--use_background_color_signals`; exit reason: `"background color change"`)
+
+**Partial profit/signal exits** (`--partial_exit`):
+- Peak and background-color signal exits sell half the current quantity (rounded down); a one-share position closes fully.
+- Fixed, trailing and volatility stops always sell the entire remaining position, even when partial exits are enabled. There is no partial-stop option.
+- Period-end liquidation always closes all remaining lots at the final close (`"backtest_end"`), including costs in final cash/equity. If a weekly exit is pending on the final bar, it keeps the `"weekly trailing"` reason.
+- Two-stage peak exits still sell half at stage one; stage two closes the entire remainder regardless of `--partial_exit`.
+- Weekly trailing exits remain full liquidations at the next bar's open when available.
+- These rules change exit quantity only; existing signal timing, stop thresholds, fill prices, CSV columns and reason strings remain in use. Stops after partial profit taking use the existing cost basis of the remaining FIFO lots.
+- Pine-compatible mode disables `--partial_exit` and the two-stage/trailing/volatility extensions; its fixed stops and final liquidation remain full exits.
 
 **Two-stage exit** (`--two_stage_exit`):
 1. **Stage 1**: On peak detection, sell 50% of position (exit reason: `"peak exit (stage 1)"`)
