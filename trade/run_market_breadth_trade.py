@@ -350,7 +350,7 @@ class MarketBreadthTrader:
             try:
                 updated = self.api.get_order(order.id)
             except Exception as e:
-                logger.warning(f'Error polling order {order.id}: {e} — retrying')
+                logger.warning(f'Error polling order {order.id}: {redact(str(e))} — retrying')
                 time.sleep(2)
                 continue
             if updated.status == 'filled':

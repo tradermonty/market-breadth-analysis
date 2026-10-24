@@ -875,6 +875,40 @@ class TestMarketBreadthTrader(unittest.TestCase):
         self.assertEqual(result, filled)
         self.assertEqual(calls['n'], 2)
 
+    def test_wait_for_fill_polling_error_redacts_credentials(self):
+        """#25: polling exception messages must be scrubbed through the shared redaction helper."""
+        from secret_redaction import register_secret
+
+        dummy_credential = 'DUMMY_REVIEW_CREDENTIAL_20261016'
+        register_secret(dummy_credential)
+
+        mock_order = Mock()
+        mock_order.id = 'order-redact'
+
+        canceled = Mock()
+        canceled.status = 'canceled'
+        canceled.filled_qty = '0'
+
+        calls = {'n': 0}
+
+        def side_effect(order_id):
+            calls['n'] += 1
+            if calls['n'] == 1:
+                raise ConnectionError(dummy_credential)
+            return canceled
+
+        self.mock_api.get_order.side_effect = side_effect
+
+        with self.assertLogs('market_breadth_trade', level='WARNING') as cm:
+            result = self.trader._wait_for_fill(mock_order)
+
+        self.assertIsNone(result)
+        polling_logs = [line for line in cm.output if 'Error polling order' in line]
+        self.assertTrue(len(polling_logs) > 0, 'Expected a polling error log entry')
+        for log_line in polling_logs:
+            self.assertNotIn(dummy_credential, log_line, f'Credential leaked in polling log: {log_line}')
+            self.assertIn('***REDACTED***', log_line)
+
     def test_buy_order_not_filled_skips_entry_price(self):
         """Buy order where _wait_for_fill returns None does not append entry_price"""
         self.trader.current_position = 0
