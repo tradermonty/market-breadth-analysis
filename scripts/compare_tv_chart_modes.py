@@ -4,6 +4,7 @@ import os
 import sys
 import time
 from datetime import datetime
+from pathlib import Path
 
 import matplotlib
 import pandas as pd
@@ -12,6 +13,7 @@ matplotlib.use('Agg')
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from backtest.backtest import Backtest
+from secret_redaction import redact
 
 ETFS = [
     'SPY',
@@ -99,11 +101,14 @@ def run_single(symbol, mode):
             trough_level_short=overrides.get('trough_level_short', 0.20),
         )
     elif mode == 'chart':
-        params['chart_mode'] = True
+        params.update(tv_mode=False, chart_mode=True)
+    else:
+        raise ValueError(f'Unknown comparison mode: {mode}')
 
     bt = Backtest(**params)
     bt.run()
-    bt.visualize_results(show_plot=False)
+    if getattr(bt, 'price_data', pd.DataFrame()).empty or not bt.equity_curve:
+        raise ValueError(f'{symbol} {mode}: backtest produced no price/equity observations')
 
     return {
         'Total Return': bt.total_return,
@@ -136,6 +141,7 @@ def fmt_f2(v):
 def main():
     tv_results = []
     chart_results = []
+    failures = []
 
     for symbol in ETFS:
         print(f'\n{"=" * 60}')
@@ -147,22 +153,28 @@ def main():
             print('  [TV mode] running...')
             tv = run_single(symbol, 'tv')
             tv['Symbol'] = symbol
-            tv_results.append(tv)
+            tv['Status'] = 'PASS'
             print(f'  [TV mode] Return={tv["Total Return"] * 100:.1f}%, Sharpe={tv["Sharpe"]:.2f}')
+            tv_results.append(tv)
         except Exception as e:
-            print(f'  [TV mode] ERROR: {e}')
-            tv_results.append({'Symbol': symbol})
+            error = redact(str(e))
+            print(f'  [TV mode] ERROR: {error}')
+            failures.append(f'{symbol}/tv: {error}')
+            tv_results.append({'Symbol': symbol, 'Status': 'FAIL', 'Error': error})
 
         # Chart mode
         try:
             print('  [Chart mode] running...')
             ch = run_single(symbol, 'chart')
             ch['Symbol'] = symbol
-            chart_results.append(ch)
+            ch['Status'] = 'PASS'
             print(f'  [Chart mode] Return={ch["Total Return"] * 100:.1f}%, Sharpe={ch["Sharpe"]:.2f}')
+            chart_results.append(ch)
         except Exception as e:
-            print(f'  [Chart mode] ERROR: {e}')
-            chart_results.append({'Symbol': symbol})
+            error = redact(str(e))
+            print(f'  [Chart mode] ERROR: {error}')
+            failures.append(f'{symbol}/chart: {error}')
+            chart_results.append({'Symbol': symbol, 'Status': 'FAIL', 'Error': error})
 
         time.sleep(1)
 
@@ -175,6 +187,11 @@ def main():
     lines.append('')
     lines.append(f'Date: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
     lines.append(f'Period: {COMMON_PARAMS["start_date"]} to {COMMON_PARAMS["end_date"]}')
+    lines.append(f'Status: {"FAIL" if failures or not ETFS else "PASS"}')
+    lines.append('Status reports execution completeness, not numerical strategy equivalence.')
+    if failures:
+        lines.append('Failed modes:')
+        lines.extend(f'- {failure}' for failure in failures)
     lines.append('')
     lines.append('Common Parameters:')
     lines.append(f'- Short MA: {COMMON_PARAMS["short_ma"]}, Long MA: {COMMON_PARAMS["long_ma"]}')
@@ -184,7 +201,7 @@ def main():
     lines.append(f'- Initial Capital: ${COMMON_PARAMS["initial_capital"]:,.0f}')
     lines.append('')
     lines.append('TV Mode: tv_mode=True, no_pyramiding=True, pivot-based detection')
-    lines.append('Chart Mode: chart_mode=True, chart-style find_peaks (distance=50, no level filters)')
+    lines.append('Chart Mode: tv_mode=False, chart_mode=True, chart-style find_peaks (distance=50, no level filters)')
     lines.append('')
 
     # Summary table
@@ -293,6 +310,7 @@ def main():
 
     # Save report
     report_path = 'reports/tv_vs_chart_mode_comparison.md'
+    Path('reports').mkdir(parents=True, exist_ok=True)
     with open(report_path, 'w') as f:
         f.write(report)
     print(f'\nReport saved to {report_path}')
@@ -303,7 +321,8 @@ def main():
     print('Raw data saved to reports/tv_mode_results.csv and reports/chart_mode_results.csv')
 
     print('\n' + report)
+    return 1 if failures or not ETFS else 0
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
