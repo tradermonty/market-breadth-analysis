@@ -510,7 +510,7 @@ class Backtest:
                     return saved_data.loc[mask]
 
         # Get S&P500 ticker list
-        tickers = get_sp500_tickers_from_fmp()
+        tickers = get_sp500_tickers_from_fmp(use_saved_data=self.use_saved_data)
         print(f'Number of tickers retrieved: {len(tickers)}')
 
         # Get data for all stocks (from calculation start date)
