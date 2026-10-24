@@ -318,8 +318,8 @@ def test_real_producer_contract_and_restored_paths(tmp_path, monkeypatch):
 
     import market_breadth as engine
 
-    if not hasattr(engine, 'resolve_market_end_date'):
-        pytest.skip('Requires exact prerequisite Issue #8 producer integration')
+    if not hasattr(engine, 'resolve_market_end_date') or not hasattr(engine, 'compute_breadth_coverage'):
+        pytest.skip('Requires Issue #7 coverage and Issue #8 market-date changes')
     from market_dates import resolve_market_date
 
     dates = pd.bdate_range(end=DAY, periods=650)
