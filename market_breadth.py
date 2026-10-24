@@ -1503,18 +1503,21 @@ def main():
 
             # Issue #7: enforce publication-quality coverage thresholds BEFORE plotting so a
             # below-threshold run produces no chart/CSV artifacts (nothing gets published).
-            # Determine the latest plotted date by applying the same date mask the plot uses,
-            # then fail if 200-day (and 50-day, when enabled) coverage is below --min_coverage.
-            plot_mask = above_ma_200.index
-            if start_date and end_date:
-                sd = pd.to_datetime(start_date)
-                ed = pd.to_datetime(end_date)
-                plot_mask = plot_mask[(plot_mask >= sd) & (plot_mask <= ed)]
-            market_date = plot_mask.max()
-            coverage_200 = compute_breadth_coverage(above_ma_200, constituent_count=len(ticker_universe))
+            # The required market date is derived from the resolved end_date (the latest
+            # completed index session), NOT from the stock/index date intersection. If every
+            # constituent misses that session, the intersection excludes it, but the coverage
+            # gate must still test it — otherwise a below-threshold run silently falls back to
+            # the previous session and publishes stale data.
+            market_date = end_date_dt
+            # Ensure the coverage frame includes the required market date even when no
+            # constituent has data for it (all-NaN row → 0% coverage → gate blocks).
+            required_index = above_ma_200.index.union(pd.DatetimeIndex([market_date]))
+            coverage_frame_200 = above_ma_200.reindex(required_index)
+            coverage_200 = compute_breadth_coverage(coverage_frame_200, constituent_count=len(ticker_universe))
             enforce_coverage_threshold(coverage_200, args.min_coverage, '200-day breadth', market_date)
             if above_ma_50 is not None:
-                coverage_50 = compute_breadth_coverage(above_ma_50, constituent_count=len(ticker_universe))
+                coverage_frame_50 = above_ma_50.reindex(required_index)
+                coverage_50 = compute_breadth_coverage(coverage_frame_50, constituent_count=len(ticker_universe))
                 enforce_coverage_threshold(coverage_50, args.min_coverage, '50-day breadth', market_date)
 
             # Visualize Breadth Index and S&P 500 price with specified date range

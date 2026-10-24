@@ -347,6 +347,107 @@ class TestCachedUniverseReconciliation(unittest.TestCase):
         self.assertTrue((cov['missing_count'] >= 0).all())
 
 
+class TestLatestSessionMissing(unittest.TestCase):
+    def test_18_all_constituents_missing_latest_index_session_blocks(self):
+        # P1 regression: when ALL constituents lack the latest index session, common_dates
+        # excludes it. The coverage gate must still test that session (0% coverage) and block
+        # publication, not silently fall back to the previous session (100% coverage).
+        n_stock = 259  # ends 2025-12-30
+        n_index = 260  # ends 2025-12-31
+        dates_stock = pd.bdate_range('2025-01-01', periods=n_stock)
+        dates_index = pd.bdate_range('2025-01-01', periods=n_index)
+        stock = pd.DataFrame({'A': np.linspace(100, 300, n_stock)}, index=dates_stock)
+        sp500 = pd.Series(np.linspace(4000, 5000, n_index), index=dates_index)
+        start = dates_stock[0].strftime('%Y-%m-%d')
+        end = dates_index[-1].strftime('%Y-%m-%d')  # 2025-12-31 — the latest index session
+
+        with (
+            mock.patch.object(mb, 'get_sp500_tickers_from_fmp', return_value=['A']),
+            mock.patch.object(mb, 'get_sp500_price_data', return_value=sp500),
+            mock.patch.object(mb, 'get_multiple_stock_data', return_value=stock),
+            mock.patch.object(mb, 'plot_breadth_and_sp500_with_peaks') as plot_mock,
+            mock.patch.object(mb, 'export_chart_data_to_csv') as export_mock,
+            mock.patch(
+                'sys.argv',
+                [
+                    'market_breadth.py',
+                    '--use_saved_data',
+                    '--start_date',
+                    start,
+                    '--end_date',
+                    end,
+                    '--min_coverage',
+                    '0.9',
+                ],
+            ),
+        ):
+            with self.assertRaises(mb.CoverageThresholdError):
+                mb.main()
+            plot_mock.assert_not_called()
+            export_mock.assert_not_called()
+
+    def test_19_all_constituents_missing_latest_session_50day_blocks(self):
+        # Same as test_18 but also verifying the 50-day path blocks.
+        n_stock = 259
+        n_index = 260
+        dates_stock = pd.bdate_range('2025-01-01', periods=n_stock)
+        dates_index = pd.bdate_range('2025-01-01', periods=n_index)
+        stock = pd.DataFrame({'A': np.linspace(100, 300, n_stock)}, index=dates_stock)
+        sp500 = pd.Series(np.linspace(4000, 5000, n_index), index=dates_index)
+        start = dates_stock[0].strftime('%Y-%m-%d')
+        end = dates_index[-1].strftime('%Y-%m-%d')
+
+        with (
+            mock.patch.object(mb, 'get_sp500_tickers_from_fmp', return_value=['A']),
+            mock.patch.object(mb, 'get_sp500_price_data', return_value=sp500),
+            mock.patch.object(mb, 'get_multiple_stock_data', return_value=stock),
+            mock.patch.object(mb, 'plot_breadth_and_sp500_with_peaks') as plot_mock,
+            mock.patch.object(mb, 'export_chart_data_to_csv') as export_mock,
+            mock.patch(
+                'sys.argv',
+                [
+                    'market_breadth.py',
+                    '--use_saved_data',
+                    '--start_date',
+                    start,
+                    '--end_date',
+                    end,
+                    '--min_coverage',
+                    '0.9',
+                    '--include_50ma',
+                ],
+            ),
+        ):
+            with self.assertRaises(mb.CoverageThresholdError):
+                mb.main()
+            plot_mock.assert_not_called()
+            export_mock.assert_not_called()
+
+    def test_20_explicit_historical_end_date_retains_behavior(self):
+        # An explicit end_date that falls within the stock data range should still work normally.
+        dates = _make_dates(210)
+        start = dates[0].strftime('%Y-%m-%d')
+        end = dates[-1].strftime('%Y-%m-%d')
+        stock = pd.DataFrame({'A': np.linspace(100, 300, 210)}, index=dates)
+        sp500 = pd.Series(np.linspace(4000, 5000, 210), index=dates)
+
+        def fake_plot(above_ma_200, *args, **kwargs):
+            chart = {'breadth_index_200': above_ma_200.mean(axis=1)}
+            return None, chart
+
+        with (
+            mock.patch.object(mb, 'get_sp500_tickers_from_fmp', return_value=['A']),
+            mock.patch.object(mb, 'get_sp500_price_data', return_value=sp500),
+            mock.patch.object(mb, 'get_multiple_stock_data', return_value=stock),
+            mock.patch.object(mb, 'plot_breadth_and_sp500_with_peaks', side_effect=fake_plot),
+            mock.patch(
+                'sys.argv',
+                ['market_breadth.py', '--use_saved_data', '--start_date', start, '--end_date', end, '--no_export_csv'],
+            ),
+        ):
+            mb.main()
+
+
 class TestExportCoverageColumns(unittest.TestCase):
     def test_10_preserves_existing_column_order(self):
         dates = _make_dates(210)
