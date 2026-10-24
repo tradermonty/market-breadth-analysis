@@ -57,26 +57,21 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt --ignore-installed PyQt5
 
-    - name: Create necessary directories
-      run: mkdir -p reports data
-
-    - name: Run market breadth analysis
+    - name: Generate and validate fresh publication
       env:
         FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
-      run: python market_breadth.py --include_50ma
+      run: >-
+        python scripts/publish_market_breadth.py
+        --output-dir "$RUNNER_TEMP/market-breadth-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
 
-    - name: Verify outputs
-      run: |
-        echo "=== Generated files in reports/ ==="
-        ls -lh reports/
-        test -f reports/market_breadth.html && echo "OK: HTML chart exists" || echo "WARN: HTML chart missing"
-        test -f reports/market_breadth.png && echo "OK: PNG fallback exists" || echo "WARN: PNG fallback missing (kaleido issue)"
-        test -f reports/index.html && echo "OK: index.html exists" || echo "ERROR: index.html missing"
-        test -f reports/market_breadth_data.csv && echo "OK: CSV data exists" || echo "WARN: CSV data missing"
-        test -f reports/market_breadth_summary.csv && echo "OK: CSV summary exists" || echo "WARN: CSV summary missing"
-
-    - name: Create .nojekyll file
-      run: touch reports/.nojekyll
+    - name: Upload validation diagnostic
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: publication-validation
+        path: ${{ runner.temp }}/market-breadth-${{ github.run_id }}-${{ github.run_attempt }}/validation.json
+        if-no-files-found: warn
+        retention-days: 7
 
     - name: Setup Pages
       uses: actions/configure-pages@v4
@@ -84,7 +79,7 @@ jobs:
     - name: Upload artifact
       uses: actions/upload-pages-artifact@v3
       with:
-        path: reports
+        path: ${{ runner.temp }}/market-breadth-${{ github.run_id }}-${{ github.run_attempt }}
         retention-days: 1
 
   deploy:
