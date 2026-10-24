@@ -221,6 +221,8 @@ def test_14_explicit_end_date_is_authoritative_without_default_lookup(monkeypatc
     _, index, stocks, _ = setup_main(monkeypatch, tmp_path)
     default = Mock(side_effect=AssertionError('default lookup must not run'))
     monkeypatch.setattr(mb, 'resolve_market_end_date', default)
+    if hasattr(mb, 'enforce_coverage_threshold'):
+        monkeypatch.setattr(mb, 'enforce_coverage_threshold', lambda *a, **kw: None)
     monkeypatch.setattr('sys.argv', ['market_breadth.py', '--start_date', '2025-01-02', '--end_date', requested])
     mb.main()
     assert index.call_args.args[1] == stocks.call_args.args[2] == requested
