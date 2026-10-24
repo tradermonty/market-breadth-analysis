@@ -2,24 +2,29 @@
 """
 Market Breadth data fetcher and workflow trigger.
 
-Checks freshness of GitHub Pages CSV data. If stale, triggers the
-daily-market-breadth workflow via GitHub API.
+Checks freshness of GitHub Pages CSV data by parsing the actual market
+dates in the content (not just HTTP Last-Modified). If stale, triggers
+the daily-market-breadth workflow via GitHub API.
 
 Usage:
     python trigger_market_breadth.py                  # Auto: fetch if fresh, trigger if stale
     python trigger_market_breadth.py --trigger-only   # Force trigger workflow
     python trigger_market_breadth.py --fetch-only     # Fetch CSV only (no trigger)
-    python trigger_market_breadth.py --max-age 6      # Staleness threshold in hours
+    python trigger_market_breadth.py --max-age 6      # Last-Modified ceiling in hours
 """
 
 import argparse
+import csv
+import io
 import os
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import requests
 from dotenv import load_dotenv
 
+from market_dates import resolve_market_date
 from secret_redaction import redact, register_secret
 
 load_dotenv()
@@ -33,6 +38,27 @@ GITHUB_API_URL = (
     '/actions/workflows/daily-market-breadth.yml/dispatches'
 )
 
+DATE_COLUMN = 'Date'
+SUMMARY_END_DATE_KEY = 'Analysis Period End'
+
+
+@dataclass(frozen=True)
+class ContentValidation:
+    is_valid: bool
+    latest_data_date: str | None
+    summary_end_date: str | None
+    row_count: int
+    error: str | None
+
+
+@dataclass(frozen=True)
+class FreshnessResult:
+    is_fresh: bool
+    latest_data_date: str | None
+    expected_date: str | None
+    reason: str
+    resolution: object = None
+
 
 def _get_github_token():
     token = os.getenv('GITHUB_TOKEN')
@@ -42,16 +68,140 @@ def _get_github_token():
     return token
 
 
-def _parse_last_modified(url):
-    """Send HEAD request and return Last-Modified as aware datetime, or None."""
-    resp = requests.head(url, timeout=10, allow_redirects=True)
-    resp.raise_for_status()
+def _parse_last_modified(resp):
+    """Extract Last-Modified from a response as aware datetime, or None."""
     lm = resp.headers.get('Last-Modified')
     if not lm:
         return None
     from email.utils import parsedate_to_datetime
 
     return parsedate_to_datetime(lm)
+
+
+def validate_csv_content(csv_text, summary_text):
+    """Validate CSV content and extract the latest data date.
+
+    Checks for HTML error responses, empty content, missing date columns,
+    and consistency between data CSV and summary CSV.
+    """
+    if not csv_text or not csv_text.strip():
+        return ContentValidation(False, None, None, 0, 'Empty CSV content')
+
+    stripped = csv_text.strip()
+    if stripped.startswith(('<!DOCTYPE', '<html', '<HTML')):
+        return ContentValidation(False, None, None, 0, 'Response is HTML, not CSV')
+
+    if not summary_text or not summary_text.strip():
+        return ContentValidation(False, None, None, 0, 'Empty summary CSV content')
+
+    summary_stripped = summary_text.strip()
+    if summary_stripped.startswith(('<!DOCTYPE', '<html')):
+        return ContentValidation(False, None, None, 0, 'Summary response is HTML, not CSV')
+
+    try:
+        reader = csv.DictReader(io.StringIO(csv_text))
+        if DATE_COLUMN not in (reader.fieldnames or []):
+            return ContentValidation(False, None, None, 0, f'Missing {DATE_COLUMN!r} column in data CSV')
+
+        dates = []
+        row_count = 0
+        for row in reader:
+            row_count += 1
+            date_val = row.get(DATE_COLUMN, '').strip()
+            if date_val:
+                dates.append(date_val)
+    except Exception as e:
+        return ContentValidation(False, None, None, 0, f'Failed to parse data CSV: {e}')
+
+    if not dates:
+        return ContentValidation(False, None, None, row_count, 'No date values found in data CSV')
+
+    dates.sort()
+    latest_data_date = dates[-1]
+
+    try:
+        datetime.strptime(latest_data_date, '%Y-%m-%d')
+    except ValueError:
+        return ContentValidation(False, None, None, row_count, f'Invalid date format in data CSV: {latest_data_date!r}')
+
+    summary_end_date = None
+    try:
+        summary_reader = csv.DictReader(io.StringIO(summary_text))
+        for srow in summary_reader:
+            metric = srow.get('Metric', '').strip()
+            if metric == SUMMARY_END_DATE_KEY:
+                summary_end_date = srow.get('Value', '').strip()
+                break
+    except Exception:
+        return ContentValidation(False, latest_data_date, None, row_count, 'Failed to parse summary CSV')
+
+    if not summary_end_date:
+        return ContentValidation(
+            False, latest_data_date, None, row_count, f'Missing {SUMMARY_END_DATE_KEY!r} in summary CSV'
+        )
+
+    if summary_end_date != latest_data_date:
+        return ContentValidation(
+            False,
+            latest_data_date,
+            summary_end_date,
+            row_count,
+            f'Data/summary date mismatch: data ends {latest_data_date}, summary says {summary_end_date}',
+        )
+
+    return ContentValidation(True, latest_data_date, summary_end_date, row_count, None)
+
+
+def determine_freshness(csv_text, *, now=None):
+    """Determine feed freshness by comparing CSV data dates to expected market sessions.
+
+    Uses ``market_dates.resolve_market_date()`` with CSV rows as observations.
+    """
+    try:
+        reader = csv.DictReader(io.StringIO(csv_text))
+        observations = []
+        for row in reader:
+            date_val = row.get(DATE_COLUMN, '').strip()
+            close_val = row.get('Close') or row.get('close') or row.get('Breadth_Index_200')
+            if date_val and close_val:
+                try:
+                    observations.append({'date': date_val, 'close': float(close_val)})
+                except (ValueError, TypeError):
+                    continue
+    except Exception as e:
+        return FreshnessResult(False, None, None, f'Failed to parse CSV for freshness: {e}')
+
+    if not observations:
+        return FreshnessResult(False, None, None, 'No valid observations in CSV')
+
+    observations.sort(key=lambda r: r['date'])
+    latest_data_date = observations[-1]['date']
+
+    def fetch_observations(start, end):
+        return [o for o in observations if start <= o['date'] <= end]
+
+    try:
+        resolution = resolve_market_date(fetch_observations, now=now, source='published_csv', grace_minutes=30)
+    except Exception as e:
+        return FreshnessResult(False, latest_data_date, None, f'Market date resolution failed: {e}')
+
+    if resolution.confidence == 'weekday_only':
+        is_fresh = latest_data_date >= resolution.selected_date
+        return FreshnessResult(
+            is_fresh=is_fresh,
+            latest_data_date=latest_data_date,
+            expected_date=resolution.selected_date,
+            reason=f'weekday_estimate (data={latest_data_date}, expected={resolution.selected_date})',
+            resolution=resolution,
+        )
+
+    return FreshnessResult(
+        is_fresh=resolution.publication_eligible,
+        latest_data_date=latest_data_date,
+        expected_date=resolution.expected_date,
+        reason=resolution.reason,
+        resolution=resolution,
+    )
 
 
 def fetch_csv():
@@ -66,7 +216,7 @@ def fetch_csv():
     summary_resp = requests.get(SUMMARY_CSV_URL, timeout=30)
     summary_resp.raise_for_status()
 
-    lm = _parse_last_modified(DATA_CSV_URL)
+    lm = _parse_last_modified(data_resp)
 
     return {
         'csv_text': data_resp.text,
@@ -102,11 +252,15 @@ def trigger_workflow():
     }
 
 
-def fetch_market_breadth(max_age_hours=12):
-    """Fetch market breadth data. Trigger workflow if data is stale.
+def fetch_market_breadth(max_age_hours=12, *, now=None):
+    """Fetch market breadth data. Trigger workflow if content is stale.
 
-    Args:
-        max_age_hours: Maximum acceptable age of data in hours.
+    Primary freshness check is content-based: the latest market date in the
+    CSV is compared to the expected completed session via exchange_calendars.
+
+    ``max_age_hours`` is a secondary Last-Modified ceiling kept for backward
+    compatibility: if Last-Modified age exceeds it, a warning is emitted even
+    when content appears fresh.
 
     Returns:
         dict with keys:
@@ -116,6 +270,8 @@ def fetch_market_breadth(max_age_hours=12):
           - csv_text: CSV content (only when status=="fresh")
           - summary_text: Summary CSV content (only when status=="fresh")
           - message: Human-readable status description
+          - freshness: FreshnessResult (when content was checked)
+          - validation: ContentValidation (when content was checked)
     """
     base = {
         'data_url': DATA_CSV_URL,
@@ -123,59 +279,82 @@ def fetch_market_breadth(max_age_hours=12):
     }
 
     try:
-        last_modified = _parse_last_modified(DATA_CSV_URL)
+        result = fetch_csv()
     except requests.RequestException as e:
         return {
             **base,
             'status': 'error',
             'last_modified': None,
-            'message': f'Failed to check data freshness: {redact(str(e))}',
+            'message': f'Failed to download CSV data: {redact(str(e))}',
         }
 
-    age_hours = None
-    if last_modified:
-        age = datetime.now(timezone.utc) - last_modified
-        age_hours = age.total_seconds() / 3600
+    csv_text = result['csv_text']
+    summary_text = result['summary_text']
+    last_modified = result['last_modified']
 
-    if age_hours is not None and age_hours <= max_age_hours:
-        # Data is fresh — download it
-        try:
-            result = fetch_csv()
-        except requests.RequestException as e:
-            return {
-                **base,
-                'status': 'error',
-                'last_modified': last_modified,
-                'message': f'Data is fresh but download failed: {redact(str(e))}',
-            }
+    validation = validate_csv_content(csv_text, summary_text)
+    if not validation.is_valid:
+        return {
+            **base,
+            'status': 'error',
+            'last_modified': last_modified,
+            'validation': validation,
+            'message': f'Invalid CSV content: {validation.error}',
+        }
+
+    freshness = determine_freshness(csv_text, now=now)
+
+    if freshness.is_fresh:
+        age_warning = ''
+        if last_modified and max_age_hours is not None:
+            check_now = now or datetime.now(timezone.utc)
+            age_hours = (check_now - last_modified).total_seconds() / 3600
+            if age_hours > max_age_hours:
+                age_warning = f' (warning: Last-Modified age {age_hours:.1f}h exceeds {max_age_hours}h ceiling)'
+
         return {
             **base,
             'status': 'fresh',
             'last_modified': last_modified,
-            'csv_text': result['csv_text'],
-            'summary_text': result['summary_text'],
-            'message': f'Data is fresh (age: {age_hours:.1f}h).',
+            'csv_text': csv_text,
+            'summary_text': summary_text,
+            'validation': validation,
+            'freshness': freshness,
+            'message': f'Data is fresh (latest: {freshness.latest_data_date}).{age_warning}',
         }
 
-    # Data is stale or age unknown — trigger workflow
+    # Content is stale — trigger workflow
     try:
         trigger_result = trigger_workflow()
     except OSError as e:
-        return {**base, 'status': 'error', 'last_modified': last_modified, 'message': redact(str(e))}
+        return {
+            **base,
+            'status': 'error',
+            'last_modified': last_modified,
+            'freshness': freshness,
+            'validation': validation,
+            'message': redact(str(e)),
+        }
     except requests.RequestException as e:
         return {
             **base,
             'status': 'error',
             'last_modified': last_modified,
+            'freshness': freshness,
+            'validation': validation,
             'message': f'Failed to trigger workflow: {redact(str(e))}',
         }
 
-    age_msg = f' (age: {age_hours:.1f}h)' if age_hours is not None else ''
     return {
         **base,
         **trigger_result,
         'last_modified': last_modified,
-        'message': f'Data is stale{age_msg}. {trigger_result["message"]}',
+        'freshness': freshness,
+        'validation': validation,
+        'message': (
+            f'Data is stale (latest: {freshness.latest_data_date}, '
+            f'expected: {freshness.expected_date}). {trigger_result["message"]}'
+        ),
     }
 
 
@@ -186,7 +365,11 @@ def main():
     )
     parser.add_argument('--fetch-only', action='store_true', help='Fetch CSV data only (no workflow trigger)')
     parser.add_argument(
-        '--max-age', type=float, default=12, help='Max data age in hours before triggering (default: 12)'
+        '--max-age',
+        type=float,
+        default=12,
+        help='Last-Modified age ceiling in hours (secondary check; default: 12). '
+        'Primary freshness is determined from CSV content market dates.',
     )
     args = parser.parse_args()
 
@@ -212,7 +395,13 @@ def main():
             sys.exit(1)
         lm = result['last_modified']
         print(f'Last-Modified: {lm.isoformat() if lm else "unknown"}')
-        print(f'Data rows: {result["csv_text"].count(chr(10)) - 1}')
+
+        validation = validate_csv_content(result['csv_text'], result['summary_text'])
+        if not validation.is_valid:
+            print(f'Validation error: {validation.error}', file=sys.stderr)
+            sys.exit(1)
+        print(f'Latest data date: {validation.latest_data_date}')
+        print(f'Data rows: {validation.row_count}')
         print(result['csv_text'][:500])
         return
 
