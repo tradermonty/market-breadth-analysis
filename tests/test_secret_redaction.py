@@ -159,7 +159,7 @@ class TestAlpacaRedaction:
 
         trader.api.submit_order = _submit_order
         caplog.set_level(logging.ERROR, logger='market_breadth_trade')
-        result = trader.execute_buy(10, reason='test')
-        assert result is None
+        with pytest.raises(RuntimeError):
+            trader.execute_buy(10, reason='test')
         assert ALPACA_DUMMY not in caplog.text
         assert REDACTED in caplog.text
