@@ -120,7 +120,7 @@ python backtest/run_multi_etf_backtest.py
 GitHub Pages から最新データを取得、またはデータが古い場合にワークフローをトリガー:
 
 ```bash
-# 自動モード: 新鮮ならフェッチ、古ければワークフロー起動（デフォルト: 12時間閾値）
+# 自動モード: CSV 内の市場日付が新しければフェッチ、古ければワークフロー起動
 python trigger_market_breadth.py
 
 # CSVデータのフェッチのみ（トリガーなし）
@@ -129,9 +129,11 @@ python trigger_market_breadth.py --fetch-only
 # GitHub Actions ワークフローを強制トリガー
 python trigger_market_breadth.py --trigger-only
 
-# 鮮度閾値を6時間に変更
+# Last-Modified が6時間より古ければ警告（鮮度判定とトリガーには影響しません）
 python trigger_market_breadth.py --max-age 6
 ```
+
+鮮度は、CSV の最新日付と、休場日や週末を考慮した NYSE の想定セッションを比較して判定します。データが古い場合でも、未完了の実行があるときや、60分以内に作成された実行があるときはワークフローを起動しません。status が `error` のとき、コマンドは終了コード 1 で終了します。
 
 Python から利用（LLM連携など）:
 ```python
@@ -142,6 +144,10 @@ if result["status"] == "fresh":
     csv_data = result["csv_text"]  # そのまま分析に使用
 elif result["status"] == "triggered":
     print(result["message"])  # "Workflow triggered. Data will be ready in ~5 minutes."
+elif result["status"] == "pending":
+    print(result["message"])  # データは古いが、最近の実行または未完了の実行がある
+elif result["status"] == "error":
+    print(result["message"])  # フィードの不正やリクエスト失敗。ワークフローは起動しない
 ```
 
 ### コマンドライン引数

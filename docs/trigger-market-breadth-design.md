@@ -32,24 +32,27 @@ LLM / スクリプト
     ▼
 trigger_market_breadth.py
     │
-    ├─ HEAD リクエスト ──▶ GitHub Pages (Last-Modified 取得)
+    ├─ GET リクエスト ──▶ GitHub Pages (データCSVとサマリーCSVをダウンロード)
     │
-    ├─ [鮮度OK] GET リクエスト ──▶ GitHub Pages (CSV ダウンロード)
-    │   └─ return: status="fresh", csv_text=...
+    ├─ [内容が不正] return: status="error", message=...
     │
-    └─ [古い] POST リクエスト ──▶ GitHub API (workflow_dispatch)
-        └─ return: status="triggered", message=...
+    ├─ [鮮度OK] return: status="fresh", csv_text=...
+    │
+    └─ [古い] GET リクエスト ──▶ GitHub API (ワークフロー実行一覧)
+        ├─ [未完了または60分以内の実行あり] return: status="pending", message=...
+        └─ [なし] POST リクエスト ──▶ GitHub API (workflow_dispatch)
+            └─ return: status="triggered", message=...
 ```
 
 ### 2.2 鮮度判定ロジック
 
 ```
-1. GitHub Pages の market_breadth_data.csv に HEAD リクエスト
-2. Last-Modified ヘッダーを取得
-3. 現在時刻との差分を計算
-4. 差分 ≤ max_age_hours (デフォルト12時間) → "fresh" → CSV をダウンロード
-5. 差分 > max_age_hours → "stale" → ワークフローをトリガー
-6. Last-Modified が取得できない場合 → "stale" として扱う
+1. データCSVとサマリーCSVをダウンロード
+2. HTML、スキーマ、全行の日付、最新行の値、未来日、サマリーとの一致を検証 → 不正なら "error"（トリガーしない）
+3. CSV の最新日付と、market_dates.resolve_market_date() の想定セッションを比較 → 達していれば "fresh"
+4. 古い場合、未完了の実行または60分以内に作成された実行があれば "pending"（トリガーしない）
+5. それ以外は "triggered" としてワークフローをトリガー
+6. Last-Modified は補助情報。max_age_hours を超えると "fresh" のメッセージに警告を付けるだけで、判定には使わない
 ```
 
 ---
@@ -70,12 +73,12 @@ trigger_market_breadth.py
 メイン関数。鮮度チェック → フェッチ or トリガーを自動判定。
 
 **引数:**
-- `max_age_hours` (float): データの最大許容年齢（時間単位、デフォルト12）
+- `max_age_hours` (float): Last-Modified の警告閾値（時間単位、デフォルト12）。有限の0以上の値のみ
 
 **戻り値:** dict
 | キー | 型 | 説明 |
 |---|---|---|
-| `status` | str | `"fresh"` / `"triggered"` / `"error"` |
+| `status` | str | `"fresh"` / `"triggered"` / `"pending"` / `"error"` |
 | `data_url` | str | データCSVの URL |
 | `summary_url` | str | サマリーCSVの URL |
 | `last_modified` | datetime / None | データの最終更新日時 |
@@ -103,7 +106,7 @@ GitHub Pages から CSV をダウンロード。
 python trigger_market_breadth.py                  # 自動判定: フェッチ or トリガー
 python trigger_market_breadth.py --trigger-only   # 強制トリガー (鮮度チェックなし)
 python trigger_market_breadth.py --fetch-only     # フェッチのみ (トリガーなし)
-python trigger_market_breadth.py --max-age 6      # 鮮度閾値を6時間に変更
+python trigger_market_breadth.py --max-age 6      # Last-Modified の警告閾値を6時間に変更
 ```
 
 ### 3.4 URL 定数
@@ -120,7 +123,9 @@ python trigger_market_breadth.py --max-age 6      # 鮮度閾値を6時間に変
 |---|---|
 | `GITHUB_TOKEN` 未設定 | `EnvironmentError` を raise、status="error" を返す |
 | GitHub Pages への接続失敗 | status="error"、メッセージにエラー詳細を含める |
-| Last-Modified ヘッダーなし | データを "stale" として扱い、トリガーを試行 |
+| CSV の形式やスキーマが不正 | status="error"、トリガーしない |
+| 実行状況の確認に失敗 | status="error"、トリガーしない |
+| Last-Modified ヘッダーなし | 鮮度は CSV の内容で判定し、警告は出さない |
 | ワークフロートリガー失敗 (非204応答) | `raise_for_status()` でHTTPエラーを伝播 |
 
 ---
@@ -184,7 +189,7 @@ csv_data = result["csv_text"]
 |---|---|---|---|
 | 1 | フェッチのみ | `python trigger_market_breadth.py --fetch-only` | CSV データが表示される |
 | 2 | 自動判定 (新鮮) | `python trigger_market_breadth.py` | status="fresh"、CSV プレビューが表示 |
-| 3 | 自動判定 (古い) | `python trigger_market_breadth.py --max-age 0` | status="triggered"、ワークフロー起動 |
+| 3 | 自動判定 (古い) | 想定セッションより古いフィードで `python trigger_market_breadth.py` | status="triggered"。最近の実行があれば status="pending" |
 | 4 | 強制トリガー | `python trigger_market_breadth.py --trigger-only` | ワークフロー起動メッセージ |
 | 5 | GitHub Actions 確認 | GitHub UI でワークフロー実行を確認 | ワークフローが実行中/完了 |
 | 6 | 排他オプション | `python trigger_market_breadth.py --trigger-only --fetch-only` | エラーメッセージ |

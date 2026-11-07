@@ -82,7 +82,7 @@ python trigger_market_breadth.py --fetch-only
 # Force trigger GitHub Actions workflow
 python trigger_market_breadth.py --trigger-only
 
-# Custom staleness threshold (6 hours)
+# Warn if Last-Modified is older than 6 hours (freshness itself comes from CSV market dates)
 python trigger_market_breadth.py --max-age 6
 ```
 

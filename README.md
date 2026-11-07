@@ -120,7 +120,7 @@ python backtest/run_multi_etf_backtest.py
 Fetch the latest market breadth data from GitHub Pages, or trigger a workflow update if data is stale:
 
 ```bash
-# Auto mode: fetch if fresh, trigger workflow if stale (default: 12h threshold)
+# Auto mode: fetch if fresh, trigger workflow if the market dates in the CSV are stale
 python trigger_market_breadth.py
 
 # Fetch CSV data only (no workflow trigger)
@@ -129,9 +129,11 @@ python trigger_market_breadth.py --fetch-only
 # Force trigger the GitHub Actions workflow
 python trigger_market_breadth.py --trigger-only
 
-# Custom staleness threshold (6 hours)
+# Warn if Last-Modified is older than 6 hours (does not affect freshness or triggering)
 python trigger_market_breadth.py --max-age 6
 ```
+
+Freshness is decided by comparing the latest date in the CSV with the expected NYSE session, including holidays and weekends. Stale content triggers the workflow only if no run is unfinished or was created in the last 60 minutes. The command exits with code 1 when the status is `error`.
 
 Use from Python (e.g., LLM integration):
 ```python
@@ -142,6 +144,10 @@ if result["status"] == "fresh":
     csv_data = result["csv_text"]  # Ready to analyze
 elif result["status"] == "triggered":
     print(result["message"])  # "Workflow triggered. Data will be ready in ~5 minutes."
+elif result["status"] == "pending":
+    print(result["message"])  # Stale, but a recent or unfinished run already exists
+elif result["status"] == "error":
+    print(result["message"])  # Malformed feed or failed request; nothing was dispatched
 ```
 
 ### Analyzing Trade Logs
