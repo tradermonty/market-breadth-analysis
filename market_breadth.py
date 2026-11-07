@@ -1,8 +1,11 @@
 import argparse
+import functools
 import json
 import math
 import os
 import pathlib
+import re
+import warnings
 from dataclasses import asdict
 from datetime import datetime, timedelta
 
@@ -32,8 +35,19 @@ data_dir.mkdir(exist_ok=True)
 DEFAULT_MIN_COVERAGE = 0.9
 
 
+TICKER_PATTERN = re.compile(r'[A-Z0-9][A-Z0-9.\-]*')
+
+
 class CoverageThresholdError(ValueError):
     """Raised when eligible coverage at the latest date is below the publication threshold."""
+
+
+class OfflineCacheError(RuntimeError):
+    """A --use_saved_data cache exists but cannot be used."""
+
+
+class OfflineCacheMissError(OfflineCacheError):
+    """A --use_saved_data cache is missing or does not cover the requested period."""
 
 
 # Lazy-initialized FMP data fetcher (CR-004: avoid import-time instantiation)
@@ -93,6 +107,113 @@ def load_stock_data(filename):
         return None
 
 
+def load_offline_cache(filename, squeeze=True):
+    """Read a cache for --use_saved_data; return None if it is missing or has no rows.
+
+    Unreadable files and invalid date indexes raise ``OfflineCacheError``. With
+    *squeeze*, a single-column cache is returned as a Series like ``load_stock_data``.
+    """
+    path = data_dir / filename
+    if not path.exists() or path.stat().st_size == 0:
+        return None
+    try:
+        data = pd.read_csv(path, index_col=0, parse_dates=True)
+    except Exception as e:
+        raise OfflineCacheError(f'Offline mode: failed to read {path}: {e}') from e
+    if data.empty:
+        return None
+    if not isinstance(data.index, pd.DatetimeIndex) or data.index.hasnans:
+        raise OfflineCacheError(f'Offline mode: {path} does not have a valid date index.')
+    if squeeze and len(data.columns) == 1:
+        return data.iloc[:, 0]
+    return data
+
+
+@functools.lru_cache(maxsize=1)
+def _session_calendar():
+    """XNYS calendar reaching further back than the library's default of about 20 years."""
+    import exchange_calendars
+
+    return exchange_calendars.get_calendar('XNYS', start='1990-01-01')
+
+
+def _roll_to_session(day, direction):
+    """Return *day* or the nearest session in *direction* ('next' or 'previous').
+
+    Without a usable calendar this falls back to skipping weekends only.
+    """
+    day = pd.Timestamp(day).normalize()
+    try:
+        return pd.Timestamp(_session_calendar().date_to_session(day, direction=direction)).tz_localize(None)
+    except Exception:
+        step = pd.Timedelta(days=1 if direction == 'next' else -1)
+        while day.weekday() >= 5:
+            day += step
+        return day
+
+
+def _cache_range(index):
+    return f'{index.min().date()} to {index.max().date()}'
+
+
+def _offline_miss(label, start, end, cache_range='missing'):
+    return OfflineCacheMissError(
+        f'Offline mode: {label} does not cover {start} to {end} (cache: {cache_range}). '
+        f'Run without --use_saved_data first to populate the cache.'
+    )
+
+
+def _require_offline_coverage(index, label, start, end, lookback_start=None, first_available=None):
+    """Require a cache to contain every session from *start* to *end*.
+
+    Dates are compared as market sessions because a provider can never return a
+    weekend or holiday. A cache that begins after *start* is accepted only when
+    *first_available* shows that no earlier data exists. Missing warm-up history
+    before *start* only warns, because it cannot exist before a symbol's inception.
+    """
+    first_needed = _roll_to_session(start, 'next')
+    last_needed = _roll_to_session(end, 'previous')
+    cache_start = index.min()
+    start_covered = cache_start <= first_needed or (first_available is not None and cache_start <= first_available)
+    if not start_covered or index.max() < last_needed:
+        raise _offline_miss(label, start, end, _cache_range(index))
+    if cache_start > first_needed:
+        warnings.warn(
+            f'{label}: first available data is {cache_start.date()}, after the requested start {start}.', stacklevel=3
+        )
+    elif lookback_start is not None and cache_start > _roll_to_session(lookback_start, 'next'):
+        warnings.warn(
+            f'{label}: warm-up history starts {cache_start.date()}, after the desired {lookback_start}.', stacklevel=3
+        )
+
+
+def _first_available_path(symbol):
+    return data_dir / f'{symbol}_first_available.json'
+
+
+def _read_first_available(symbol):
+    """Return the recorded first data date for *symbol*, or None."""
+    path = _first_available_path(symbol)
+    try:
+        return pd.Timestamp(json.loads(path.read_text())['first_available'])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _record_first_available(symbol, requested_start, index):
+    """After a fetch, record when the provider had no data as early as requested."""
+    path = _first_available_path(symbol)
+    if index.min() > _roll_to_session(requested_start, 'next'):
+        # A fetch from a later start says nothing about an earlier recorded date.
+        recorded = _read_first_available(symbol)
+        if recorded is None or index.min() < recorded:
+            path.write_text(json.dumps({'first_available': index.min().date().isoformat()}) + '\n')
+        return
+    recorded = _read_first_available(symbol)
+    if recorded is not None and index.min() < recorded:
+        path.unlink()
+
+
 def load_breadth_series_from_csv(csv_path, value_col='close'):
     """Load a breadth time series from CSV.
 
@@ -143,8 +264,34 @@ def load_breadth_series_from_csv(csv_path, value_col='close'):
     return series
 
 
-def get_sp500_tickers_from_fmp():
-    """Get S&P500 ticker list from FMP API"""
+def get_sp500_tickers_from_fmp(use_saved_data=False):
+    """Get S&P500 ticker list from FMP API or cached data.
+
+    When *use_saved_data* is True the ticker universe is derived from the
+    columns of the cached ``sp500_all_stocks.csv`` file.  No network call is
+    made.  A missing or invalid cache raises ``OfflineCacheError``.
+    """
+    if use_saved_data:
+        cache_path = data_dir / 'sp500_all_stocks.csv'
+        if not cache_path.exists() or cache_path.stat().st_size == 0:
+            raise OfflineCacheMissError(
+                f'Offline mode (--use_saved_data): cached constituent file '
+                f'{cache_path} not found or empty. Run without --use_saved_data first to populate the cache.'
+            )
+        try:
+            header = pd.read_csv(cache_path, nrows=0)
+        except Exception as e:
+            raise OfflineCacheError(f'Offline mode: failed to read {cache_path}: {e}') from e
+        # The first column is always the date index, whatever it is named.
+        tickers = list(header.columns[1:])
+        if not tickers:
+            raise OfflineCacheError(f'Offline mode: {cache_path} contains no ticker columns.')
+        invalid = [t for t in tickers if not TICKER_PATTERN.fullmatch(t)]
+        if invalid:
+            raise OfflineCacheError(f'Offline mode: {cache_path} has invalid ticker columns: {invalid[:5]}')
+        print(f'Derived {len(tickers)} S&P500 tickers from cached data')
+        return tickers
+
     try:
         tickers = _get_fmp_fetcher().get_sp500_constituents()
         if tickers:
@@ -247,46 +394,47 @@ def get_stock_price_ohlc(symbol, start_date, end_date, use_saved_data=False):
     actual_start_date = (pd.to_datetime(start_date) - pd.DateOffset(years=2)).strftime('%Y-%m-%d')
     filename = f'{symbol}_ohlc_data.csv'
     file_path = data_dir / filename
+    label = f'OHLC cache for {symbol}'
 
-    if use_saved_data and file_path.exists() and file_path.stat().st_size > 0:
-        try:
-            saved = pd.read_csv(file_path, index_col=0, parse_dates=True)
-            if not saved.empty and 'adjusted_close' in saved.columns:
-                if (
-                    pd.to_datetime(actual_start_date) >= saved.index.min()
-                    and pd.to_datetime(end_date) <= saved.index.max()
-                ):
-                    mask = (saved.index >= pd.to_datetime(actual_start_date)) & (
-                        saved.index <= pd.to_datetime(end_date)
-                    )
-                    return saved.loc[mask]
-        except Exception:  # nosec B110 — fall through to re-fetch from API
-            pass
+    if use_saved_data:
+        saved = load_offline_cache(filename, squeeze=False)
+        if saved is None:
+            raise _offline_miss(label, start_date, end_date)
+        if 'adjusted_close' not in saved.columns:
+            raise OfflineCacheError(f'Offline mode: {file_path} has no adjusted_close column.')
+        _require_offline_coverage(
+            saved.index,
+            label,
+            start_date,
+            end_date,
+            lookback_start=actual_start_date,
+            first_available=_read_first_available(symbol),
+        )
+        mask = (saved.index >= pd.to_datetime(actual_start_date)) & (saved.index <= pd.to_datetime(end_date))
+        return saved.loc[mask]
 
     ohlc = fetch_price_ohlc_fmp(symbol, actual_start_date, end_date)
     if not ohlc.empty:
         ohlc.to_csv(file_path)
         print(f'Saved OHLC data to {file_path}')
+        _record_first_available(symbol, actual_start_date, ohlc.index)
     return ohlc
 
 
 def get_sp500_price_data(start_date, end_date, use_saved_data=False):
     """Get S&P 500 price data using FMP or saved data"""
     filename = 'sp500_price_data.csv'
-    file_path = data_dir / filename
+    label = 'S&P500 price cache'
 
     # Calculate the actual start date (1 year before the specified start date)
     actual_start_date = (pd.to_datetime(start_date) - pd.DateOffset(years=1)).strftime('%Y-%m-%d')
 
-    # Optionally use cached data if it fully covers the required period
-    if use_saved_data and file_path.exists() and file_path.stat().st_size > 0:
-        saved_data = load_stock_data(filename)
-        if saved_data is not None and not saved_data.empty:
-            if (
-                pd.to_datetime(actual_start_date) >= saved_data.index.min()
-                and pd.to_datetime(end_date) <= saved_data.index.max()
-            ):
-                return saved_data
+    if use_saved_data:
+        saved_data = load_offline_cache(filename)
+        if saved_data is None:
+            raise _offline_miss(label, start_date, end_date)
+        _require_offline_coverage(saved_data.index, label, start_date, end_date, lookback_start=actual_start_date)
+        return saved_data
 
     # Fetch fresh data from FMP
     price_series = fetch_price_data_fmp('SPY', actual_start_date, end_date)
@@ -298,16 +446,14 @@ def get_sp500_price_data(start_date, end_date, use_saved_data=False):
 def get_multiple_stock_data(tickers, start_date, end_date, use_saved_data=False):
     """Get data for multiple stocks using FMP or saved data"""
     filename = 'sp500_all_stocks.csv'
+    label = 'stock data cache'
 
-    # Attempt to load cached data if requested
     if use_saved_data:
-        saved_data = load_stock_data(filename)
-        if saved_data is not None and not saved_data.empty:
-            if (
-                pd.to_datetime(start_date) >= saved_data.index.min()
-                and pd.to_datetime(end_date) <= saved_data.index.max()
-            ):
-                return saved_data
+        saved_data = load_offline_cache(filename, squeeze=False)
+        if saved_data is None:
+            raise _offline_miss(label, start_date, end_date)
+        _require_offline_coverage(saved_data.index, label, start_date, end_date)
+        return saved_data
 
     actual_start_date = (pd.to_datetime(start_date) - pd.DateOffset(years=1)).strftime('%Y-%m-%d')
 
@@ -1155,24 +1301,28 @@ def get_stock_price_data(symbol, start_date, end_date, use_saved_data=False):
     # Actual start date (get data from 2 years before the specified start date)
     actual_start_date = (pd.to_datetime(start_date) - pd.DateOffset(years=2)).strftime('%Y-%m-%d')
     filename = f'{symbol}_price_data.csv'
+    label = f'price cache for {symbol}'
 
-    # Use cached data if fully covers period
     if use_saved_data:
-        saved_data = load_stock_data(filename)
-        if saved_data is not None and not saved_data.empty:
-            if (
-                pd.to_datetime(actual_start_date) >= saved_data.index.min()
-                and pd.to_datetime(end_date) <= saved_data.index.max()
-            ):
-                mask = (saved_data.index >= pd.to_datetime(actual_start_date)) & (
-                    saved_data.index <= pd.to_datetime(end_date)
-                )
-                return saved_data.loc[mask]
+        saved_data = load_offline_cache(filename)
+        if saved_data is None:
+            raise _offline_miss(label, start_date, end_date)
+        _require_offline_coverage(
+            saved_data.index,
+            label,
+            start_date,
+            end_date,
+            lookback_start=actual_start_date,
+            first_available=_read_first_available(symbol),
+        )
+        mask = (saved_data.index >= pd.to_datetime(actual_start_date)) & (saved_data.index <= pd.to_datetime(end_date))
+        return saved_data.loc[mask]
 
     # Fetch data from FMP
     series = fetch_price_data_fmp(symbol, actual_start_date, end_date)
     if not series.empty:
         save_stock_data(series, filename)
+        _record_first_available(symbol, actual_start_date, series.index)
     return series
 
 
@@ -1374,7 +1524,12 @@ def main():
         choices=[5, 8, 10, 20],
         help='Short-term moving average period (5, 8, 10, or 20)',
     )
-    parser.add_argument('--use_saved_data', action='store_true', help='Use saved data instead of fetching from FMP')
+    parser.add_argument(
+        '--use_saved_data',
+        action='store_true',
+        help='Strict offline mode: use only cached CSV data, never call FMP API. '
+        'Fails with a clear error if cache is missing or insufficient.',
+    )
     parser.add_argument('--no_export_csv', action='store_true', help='Skip CSV data export')
     parser.add_argument(
         '--data-arrival-grace-minutes',
@@ -1448,7 +1603,7 @@ def main():
 
     try:
         # Get S&P500 list from FMP API
-        ticker_list = get_sp500_tickers_from_fmp()
+        ticker_list = get_sp500_tickers_from_fmp(use_saved_data=args.use_saved_data)
 
         if ticker_list:
             # Get S&P 500 price data
@@ -1547,6 +1702,9 @@ def main():
         # NOT be swallowed as a generic data-fetch error (which returns exit 0).
         raise
     except ValueError as e:
+        # A failed --use_saved_data run must not look successful (issue #14).
+        if args.use_saved_data:
+            raise
         print(f'Error: {e}')
         print('Use --use_saved_data option to use previously saved data.')
 

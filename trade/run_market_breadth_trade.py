@@ -963,7 +963,7 @@ class MarketBreadthTrader:
 
             # Get S&P500 ticker list
             logger.info('Getting S&P500 ticker list...')
-            sp500_tickers = get_sp500_tickers_from_fmp()
+            sp500_tickers = get_sp500_tickers_from_fmp(use_saved_data=self.use_saved_data)
             logger.info(f'Got S&P500 ticker list: {len(sp500_tickers)} tickers')
 
             # Get historical data from FMP - using data up to yesterday
@@ -1527,7 +1527,12 @@ def main():
     )
     parser.add_argument('--slippage', type=float, default=0.0005, help='Slippage (default: 0.05%)')
     parser.add_argument('--commission', type=float, default=0.0001, help='Transaction fee (default: 0.01%)')
-    parser.add_argument('--use_saved_data', action='store_true', help='Whether to use saved data')
+    parser.add_argument(
+        '--use_saved_data',
+        action='store_true',
+        help='Strict offline mode: use only cached CSV data, never call FMP API. '
+        'Fails with a clear error if cache is missing or insufficient.',
+    )
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
     parser.add_argument('--ma_type', type=str, default='ema', help='Moving average type (default: ema)')
     parser.add_argument('--symbol', type=str, default='SSO', help='Stock symbol (default: SSO)')

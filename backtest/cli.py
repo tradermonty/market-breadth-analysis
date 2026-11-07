@@ -24,7 +24,12 @@ def build_argument_parser():
     )
     parser.add_argument('--slippage', type=float, default=0.0005, help='Slippage (default: 0.05%%)')
     parser.add_argument('--commission', type=float, default=0.0001, help='Transaction fee (default: 0.01%%)')
-    parser.add_argument('--use_saved_data', action='store_true', help='Whether to use saved data')
+    parser.add_argument(
+        '--use_saved_data',
+        action='store_true',
+        help='Strict offline mode: use only cached CSV data, never call FMP API. '
+        'Fails with a clear error if cache is missing or insufficient.',
+    )
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
     parser.add_argument('--threshold', type=float, default=0.5, help='Threshold for bottom detection (default: 0.5)')
     parser.add_argument('--ma_type', type=str, default='ema', help='Moving average type (default: ema)')

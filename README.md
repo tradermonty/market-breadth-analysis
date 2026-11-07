@@ -176,7 +176,7 @@ print(df.groupby('entry_reason')['pnl_dollar'].agg(['count', 'mean', 'sum']))
 - `--start_date`: Start date for analysis (YYYY-MM-DD format)
   - Default: 10 years ago from today
 - `--short_ma`: Short-term moving average period (10 or 20)
-- `--use_saved_data`: Use previously saved data instead of fetching from FMP
+- `--use_saved_data`: Strict offline mode: use only cached data and never call the FMP API. Fails with a clear error if the cache is missing, unreadable or insufficient
 - `--include_50ma`: Add 50-day MA breadth panel (third panel in chart, additional columns in CSV)
 
 #### Backtesting
@@ -214,6 +214,11 @@ Workflow:
    - Run with `--use_saved_data` to use previously saved data
    - No API key required
    - Faster execution as no API calls are made
+   - A missing, unreadable or insufficient cache stops the run with a nonzero exit code; there is no API fallback
+   - Coverage is checked in NYSE sessions, so a weekend or holiday start or end date does not count as missing
+   - Warm-up history before the requested start only produces a warning, because it may predate a symbol's inception
+   - A start date before a symbol's first data is accepted only after a run without `--use_saved_data` has recorded that first date
+   - `python backtest/run_multi_etf_backtest.py` continues past a failed symbol and exits with code 1. If every symbol fails, it keeps the previous summary
 
 Note: To update the saved data with fresh market data, run without `--use_saved_data` (requires API key).
 

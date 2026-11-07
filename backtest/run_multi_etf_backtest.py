@@ -244,6 +244,11 @@ def run_multi_etf_backtest(
     # Convert results to DataFrame
     results_df = pd.DataFrame(results)
 
+    # Do not replace the previous summary when nothing succeeded.
+    failed = failed_symbols(results_df)
+    if failed and len(failed) == len(results_df):
+        raise RuntimeError(f'All backtests failed: {failed}')
+
     # Display results
     print('\n' + '=' * 100)
     print('BACKTEST RESULTS SUMMARY')
@@ -315,6 +320,11 @@ def run_multi_etf_backtest(
     return results_df
 
 
+def failed_symbols(results_df):
+    """Return the symbols whose backtest failed and left no results."""
+    return results_df.loc[results_df['Total Return'].isna(), 'Symbol'].tolist()
+
+
 if __name__ == '__main__':
     # List of ETFs to backtest (organized by category)
     etfs = [
@@ -356,7 +366,7 @@ if __name__ == '__main__':
     ]
 
     # Run backtest
-    run_multi_etf_backtest(
+    results = run_multi_etf_backtest(
         etfs=etfs,
         start_date='2008-01-01',
         end_date='2026-02-26',
@@ -377,3 +387,7 @@ if __name__ == '__main__':
         use_volatility_stop=False,
         bullish_regime_suppression=False,
     )
+    failed = failed_symbols(results)
+    if failed:
+        print(f'Backtests failed for: {failed}', file=sys.stderr)
+        sys.exit(1)
