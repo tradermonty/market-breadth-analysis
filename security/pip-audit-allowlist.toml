@@ -25,6 +25,14 @@ owner = "@tradermonty"
 expires = "2027-01-31"
 
 [[exceptions]]
+id = "CVE-2026-114613"
+package = "msgpack"
+fix_version = "1.2.3"
+reason = "Fix requires msgpack 1.2.3; alpaca-trade-api 3.2.0 pins msgpack ==1.0.3. Memory leak on attacker-controlled MessagePack; this repo does not decode msgpack or use the Alpaca streaming API."
+owner = "@tradermonty"
+expires = "2027-01-31"
+
+[[exceptions]]
 id = "PYSEC-2026-1999"
 package = "urllib3"
 fix_version = "2.5.0"
