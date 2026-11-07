@@ -10,6 +10,7 @@ from scipy.signal import find_peaks
 # Add parent directory to path to import market_breadth
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from market_breadth import (
+    OfflineCacheMissError,
     calculate_above_ma,
     calculate_trend_with_hysteresis,
     get_multiple_stock_data,
@@ -17,7 +18,6 @@ from market_breadth import (
     get_stock_price_data,
     get_stock_price_ohlc,
     load_breadth_series_from_csv,
-    load_stock_data,
     save_stock_data,
 )
 
@@ -366,16 +366,21 @@ class Backtest:
         if getattr(self, 'tv_price_csv', None):
             self.price_data = self._load_tv_price_data()
         elif self.tv_pine_compat or self.tv_mode or self.enable_weekly_trailing:
-            ohlc = get_stock_price_ohlc(
-                self.symbol,
-                self.start_date,
-                self.end_date,
-                use_saved_data=self.use_saved_data,
-            )
+            try:
+                ohlc = get_stock_price_ohlc(
+                    self.symbol,
+                    self.start_date,
+                    self.end_date,
+                    use_saved_data=self.use_saved_data,
+                )
+            except OfflineCacheMissError as e:
+                # Other local sources below may still cover this symbol; they raise if not.
+                print(f'{e} Trying other local price sources.')
+                ohlc = pd.DataFrame()
             if not ohlc.empty and 'adjusted_close' in ohlc.columns:
                 self.price_data = ohlc
             elif self.symbol in self.sp500_data.columns:
-                self.price_data = pd.DataFrame(self.sp500_data[self.symbol], columns=['adjusted_close'])
+                self.price_data = self.sp500_data[self.symbol].to_frame('adjusted_close')
             else:
                 self.price_data = get_stock_price_data(
                     self.symbol,
@@ -386,7 +391,7 @@ class Backtest:
                 if isinstance(self.price_data, pd.Series):
                     self.price_data = pd.DataFrame(self.price_data, columns=['adjusted_close'])
         elif self.symbol in self.sp500_data.columns:
-            self.price_data = pd.DataFrame(self.sp500_data[self.symbol], columns=['adjusted_close'])
+            self.price_data = self.sp500_data[self.symbol].to_frame('adjusted_close')
         else:
             self.price_data = get_stock_price_data(
                 self.symbol,
@@ -494,23 +499,21 @@ class Backtest:
         # Set calculation start date (2 years before the specified start date)
         calculation_start_date = (pd.to_datetime(self.start_date) - pd.DateOffset(years=2)).strftime('%Y-%m-%d')
 
-        # Try to load saved data
+        # Offline runs read the cache only; it raises if it cannot cover the period.
         if self.use_saved_data:
-            saved_data = load_stock_data(filename)
-            if saved_data is not None and not saved_data.empty:
-                # Check date range (from calculation start date to end date)
-                if (
-                    pd.to_datetime(calculation_start_date) >= saved_data.index.min()
-                    and pd.to_datetime(self.end_date) <= saved_data.index.max()
-                ):
-                    # Extract data for the calculation period
-                    mask = (saved_data.index >= pd.to_datetime(calculation_start_date)) & (
-                        saved_data.index <= pd.to_datetime(self.end_date)
-                    )
-                    return saved_data.loc[mask]
+            saved_data = get_multiple_stock_data(
+                get_sp500_tickers_from_fmp(use_saved_data=True),
+                calculation_start_date,
+                self.end_date,
+                use_saved_data=True,
+            )
+            mask = (saved_data.index >= pd.to_datetime(calculation_start_date)) & (
+                saved_data.index <= pd.to_datetime(self.end_date)
+            )
+            return saved_data.loc[mask]
 
         # Get S&P500 ticker list
-        tickers = get_sp500_tickers_from_fmp(use_saved_data=self.use_saved_data)
+        tickers = get_sp500_tickers_from_fmp()
         print(f'Number of tickers retrieved: {len(tickers)}')
 
         # Get data for all stocks (from calculation start date)
@@ -518,7 +521,6 @@ class Backtest:
             tickers,
             calculation_start_date,  # Use calculation start date
             self.end_date,
-            use_saved_data=self.use_saved_data,
         )
 
         if not all_data.empty:
