@@ -32,13 +32,16 @@ LLM / スクリプト
     ▼
 trigger_market_breadth.py
     │
-    ├─ HEAD リクエスト ──▶ GitHub Pages (Last-Modified 取得)
+    ├─ GET リクエスト ──▶ GitHub Pages (データCSVとサマリーCSVをダウンロード)
     │
-    ├─ [鮮度OK] GET リクエスト ──▶ GitHub Pages (CSV ダウンロード)
-    │   └─ return: status="fresh", csv_text=...
+    ├─ [内容が不正] return: status="error", message=...
     │
-    └─ [古い] POST リクエスト ──▶ GitHub API (workflow_dispatch)
-        └─ return: status="triggered", message=...
+    ├─ [鮮度OK] return: status="fresh", csv_text=...
+    │
+    └─ [古い] GET リクエスト ──▶ GitHub API (ワークフロー実行一覧)
+        ├─ [未完了または60分以内の実行あり] return: status="pending", message=...
+        └─ [なし] POST リクエスト ──▶ GitHub API (workflow_dispatch)
+            └─ return: status="triggered", message=...
 ```
 
 ### 2.2 鮮度判定ロジック

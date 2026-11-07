@@ -492,6 +492,29 @@ class TestFindBlockingRun:
 
 
 class TestCLIArguments:
+    @mock.patch('trigger_market_breadth.trigger_workflow')
+    @mock.patch('trigger_market_breadth.requests.get')
+    def test_fetch_only_exits_nonzero_on_invalid_content(self, mock_get, mock_trigger):
+        from trigger_market_breadth import main
+
+        mock_get.side_effect = [_mock_response(HTML_RESPONSE), _mock_response(VALID_SUMMARY_CSV)]
+        with mock.patch('sys.argv', ['trigger_market_breadth.py', '--fetch-only']), pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 1
+        mock_trigger.assert_not_called()
+
+    @mock.patch('trigger_market_breadth.trigger_workflow')
+    @mock.patch('trigger_market_breadth.find_blocking_run', return_value={'html_url': 'https://example.com/run/1'})
+    @mock.patch('trigger_market_breadth.requests.get')
+    def test_auto_mode_pending_exits_zero_without_dispatch(self, mock_get, _mock_blocking, mock_trigger, capsys):
+        from trigger_market_breadth import main
+
+        mock_get.side_effect = [_mock_response(OLD_DATA_CSV), _mock_response(OLD_SUMMARY_CSV)]
+        with mock.patch('sys.argv', ['trigger_market_breadth.py']):
+            main()
+        assert 'Status: pending' in capsys.readouterr().out
+        mock_trigger.assert_not_called()
+
     @pytest.mark.parametrize('value', ['-1', 'nan', 'inf', 'abc'])
     def test_invalid_max_age_is_rejected_by_cli(self, value):
         from trigger_market_breadth import main
