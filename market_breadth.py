@@ -204,9 +204,14 @@ def _record_first_available(symbol, requested_start, index):
     """After a fetch, record when the provider had no data as early as requested."""
     path = _first_available_path(symbol)
     if index.min() > _roll_to_session(requested_start, 'next'):
-        path.write_text(json.dumps({'first_available': index.min().date().isoformat()}) + '\n')
-    else:
-        path.unlink(missing_ok=True)
+        # A fetch from a later start says nothing about an earlier recorded date.
+        recorded = _read_first_available(symbol)
+        if recorded is None or index.min() < recorded:
+            path.write_text(json.dumps({'first_available': index.min().date().isoformat()}) + '\n')
+        return
+    recorded = _read_first_available(symbol)
+    if recorded is not None and index.min() < recorded:
+        path.unlink()
 
 
 def load_breadth_series_from_csv(csv_path, value_col='close'):

@@ -361,6 +361,19 @@ class TestInception:
             mb.get_stock_price_ohlc('MTUM', '2008-01-02', '2025-12-31', use_saved_data=False)
         assert not list(tmp_data_dir.glob('MTUM_*.json'))
 
+    def test_later_start_refresh_keeps_the_inception_record(self, tmp_data_dir):
+        def ohlc(_symbol, _from, to_date):
+            return pd.DataFrame({'close': 1.0, 'adjusted_close': 1.0}, index=pd.bdate_range('2013-04-18', to_date))
+
+        def series(_symbol, from_date, to_date):
+            return pd.Series(1.0, index=pd.bdate_range(from_date, to_date), name='adjusted_close')
+
+        with mock.patch.object(mb, 'fetch_price_ohlc_fmp', ohlc), mock.patch.object(mb, 'fetch_price_data_fmp', series):
+            mb.get_stock_price_ohlc('MTUM', '2008-01-02', '2025-12-31', use_saved_data=False)
+            mb.get_stock_price_data('MTUM', '2022-01-03', '2025-12-31', use_saved_data=False)
+        with pytest.warns(UserWarning, match='first available'):
+            assert not mb.get_stock_price_ohlc('MTUM', '2008-01-02', '2025-12-31', use_saved_data=True).empty
+
 
 # ---- End to end with every socket blocked ----
 
