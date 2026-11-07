@@ -124,7 +124,7 @@ class TestFmpRedaction:
 
 
 class TestGithubRedaction:
-    def test_request_exception_message_redacted(self):
+    def test_request_exception_message_redacted(self, monkeypatch):
         from trigger_market_breadth import fetch_market_breadth
 
         register_secret(TOKEN_DUMMY)
@@ -132,13 +132,31 @@ class TestGithubRedaction:
         def _boom(*args, **kwargs):
             raise requests.exceptions.RequestException(f'Connection aborted: {URL}&token={TOKEN_DUMMY}')
 
-        import trigger_market_breadth
-
-        trigger_market_breadth.requests.head = _boom
+        monkeypatch.setattr('trigger_market_breadth.requests.get', _boom)
         result = fetch_market_breadth()
         assert result['status'] == 'error'
+        assert 'Connection aborted' in result['message']
         assert TOKEN_DUMMY not in result['message']
         assert FMP_DUMMY not in result['message']
+
+    def test_run_check_exception_message_redacted(self, monkeypatch):
+        import trigger_market_breadth as trigger
+
+        register_secret(TOKEN_DUMMY)
+        old_csv = 'Date,S&P500_Price,Breadth_Index_Raw,Breadth_Index_200MA\n2020-01-03,1,0.6,0.6\n'
+        old_summary = 'Metric,Value\nAnalysis Period End,2020-01-03\n'
+
+        def _boom(*args, **kwargs):
+            raise requests.exceptions.RequestException(f'Connection aborted: {URL}&token={TOKEN_DUMMY}')
+
+        monkeypatch.setattr(
+            trigger, 'fetch_csv', lambda: {'csv_text': old_csv, 'summary_text': old_summary, 'last_modified': None}
+        )
+        monkeypatch.setattr(trigger, 'find_blocking_run', _boom)
+        monkeypatch.setattr(trigger, 'trigger_workflow', _boom)
+        result = trigger.fetch_market_breadth()
+        assert result['status'] == 'error'
+        assert TOKEN_DUMMY not in result['message']
 
 
 class TestAlpacaRedaction:
