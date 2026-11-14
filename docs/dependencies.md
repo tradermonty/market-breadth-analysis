@@ -3,7 +3,7 @@
 ## Supported environments
 
 The supported interpreter is CPython **3.11** (`>=3.11,<3.12`), pinned by
-`.python-version`. CI targets Ubuntu 24.04 x86_64 and macOS 14; the local
+`.python-version`. CI targets Ubuntu 24.04 x86_64 and macOS 15; the local
 validation is macOS Apple Silicon. CI results must be checked on each PR;
 adding a matrix does not establish that those jobs have passed. Python
 3.8–3.10 and 3.12+ are not supported by this lock. Windows and Intel macOS

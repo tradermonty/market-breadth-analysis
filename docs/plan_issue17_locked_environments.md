@@ -46,3 +46,5 @@ Round 2: no remaining actionable findings. Plan revision 2 is FINAL.
 - Round 1: P1 workflow-level runner context was unavailable; moved environment setup into a runner step and added regression. P2 production core urllib3 fork was outside the all-extras audit export; added a checked core-only export and an independent fail-closed audit with no accepted exceptions.
 - Round 2: independent reviewer confirmed no remaining actionable findings. Native lock/export checks and focused tests passed.
 - Final local full suite: 738 passed, 9 skipped. See `validation_issue17_locked_environments.md` for evidence boundaries.
+
+- Code round 3: confirmed the hosted macOS runner-label correction (macos-14 retired; macos-15 supported); no remaining actionable findings.

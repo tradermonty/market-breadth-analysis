@@ -39,7 +39,7 @@ The implementation PR records the final source commit and hosted CI state.
 ## Independent reviews and remaining evidence
 
 Plan review: two rounds, two P2 findings resolved, final round no actionable
-findings. Code review: two rounds, P1/P2 findings resolved, final round no
+findings. Code review: three rounds, P1/P2 findings and retired runner label resolved, final round no
 remaining actionable findings. Details are retained in the plan's review log.
 
 Ubuntu and macOS hosted matrix results must be verified on the PR. Local macOS
@@ -50,3 +50,10 @@ reproducibility, live broker behavior and current provider data remain
 unvalidated. No producer workflow was dispatched and no Pages deployment or
 trade was performed as part of this work. Lint/security tool transitives are
 locked but remain outside Gate 1, as documented in the dependency runbook.
+
+## Hosted runner correction
+
+The initial PR run rejected the retired macos-14 label before executing any
+steps (`macos-14-arm64-us-default is not supported`). Changed the matrix to
+macos-15, the supported Apple Silicon label in the [official image table](https://github.com/actions/runner-images#available-images). This does not change the
+Python lock or runtime profiles. Final hosted results are recorded on the PR.
