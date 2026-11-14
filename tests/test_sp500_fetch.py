@@ -15,7 +15,10 @@ from fmp_data_fetcher import FMPDataFetcher
 load_dotenv()
 
 
-@pytest.mark.skipif(not os.getenv('FMP_API_KEY'), reason='FMP_API_KEY not set')
+@pytest.mark.skipif(
+    os.getenv('SKIP_API_TESTS', '').lower() == 'true' or not os.getenv('FMP_API_KEY'),
+    reason='SKIP_API_TESTS=true or FMP_API_KEY not set',
+)
 def test_sp500_fetch():
     """Fetch S&P500 tickers from FMP API and verify basic expectations."""
     api_key = os.getenv('FMP_API_KEY')

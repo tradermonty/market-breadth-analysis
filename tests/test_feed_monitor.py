@@ -722,19 +722,12 @@ class TestWorkflow:
         for step in job['steps']:
             assert '${{' not in step.get('run', '')
 
-    def test_19e_dependencies_match_requirements(self, workflow):
+    def test_19e_dependencies_use_shared_lock(self, workflow):
         text, _ = workflow
-        reqs = {}
-        for line in (ROOT / 'requirements.txt').read_text().splitlines():
-            spec = line.split('#')[0].strip()
-            if spec:
-                name = re.split(r'[<>=!~]', spec)[0].strip().lower()
-                reqs[name] = spec
-        installed = re.findall(r"'([A-Za-z0-9_.-]+[<>=!~][^']*)'", text)
-        assert installed, 'workflow must quote pinned specifiers'
-        for spec in installed:
-            name = re.split(r'[<>=!~]', spec)[0].strip().lower()
-            assert reqs[name] == spec
+        assert 'uv sync --locked --no-default-groups' in text
+        assert 'python-version-file:' in text
+        assert 'GITHUB_PATH' in text
+        assert 'pip install' not in text
 
     def test_19f_independent_of_producer_jobs(self, workflow):
         text, wf = workflow

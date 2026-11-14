@@ -37,7 +37,7 @@ The daily workflow checks the default branch and pushes an empty keepalive commi
 
 ## Prerequisites
 
-- Python 3.8 or higher
+- CPython 3.11 (supported; see [locked environments](docs/dependencies.md))
 - Required Python packages (listed in requirements.txt)
 - API Keys (Optional):
   - FMP API Key (Financial Modeling Prep)
@@ -57,8 +57,16 @@ cd market_breadth
 
 2. Install required packages:
 ```bash
-pip install -r requirements.txt
+uv sync --locked
+source .venv/bin/activate
 ```
+
+Use uv 0.12.17. The default profile supports headless analysis/HTML/CSV; PNG,
+trading and tests are optional. Install/refresh commands, Python/OS support,
+Chrome/Qt requirements and the hash-pinned pip compatibility export are documented
+in [Locked environments](docs/dependencies.md). Saved-data execution needs existing
+caches; `python scripts/smoke_headless.py` provides a synthetic API-free example.
+
 
 3. Set up environment variables (Optional):
 Copy the `.env.sample` file to `.env` and edit it:

@@ -123,8 +123,8 @@ class TestPinFiles(unittest.TestCase):
         lint = ci.split('lint:')[1].split('security:')[0]
         security = ci.split('security:')[1].split('test:')[0]
         test_job = ci.split('test:')[1]
-        self.assertIn('pip install -r requirements-lint-tools.txt', lint)
-        self.assertIn('pip install -r requirements-security-tools.txt', security)
+        self.assertIn('uv sync --locked --only-group lint', lint)
+        self.assertIn('uv sync --locked --only-group security', security)
         for name in ('requirements-lint-tools.txt', 'requirements-security-tools.txt'):
             self.assertNotIn(name, test_job, f'test job must not install {name}')
             self.assertIn(f"'{name}'", ci, f'{name} missing from push.paths')
