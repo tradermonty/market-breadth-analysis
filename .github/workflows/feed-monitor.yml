@@ -1,0 +1,68 @@
+name: Feed Monitor
+
+# Independent of the producer workflow (daily-market-breadth.yml): checks the
+# public feed and the producer's state. Recovery runbook: docs/feed_monitoring.md.
+on:
+  schedule:
+    # Daily 23:30 UTC, after both producer crons including typical start delays.
+    - cron: '30 23 * * *'
+  workflow_dispatch:
+    inputs:
+      notify:
+        description: 'Open/update/close incident issues (default branch only)'
+        type: boolean
+        default: false
+      min_coverage:
+        description: 'Minimum latest coverage (set above 1 to force a smoke-test incident)'
+        type: string
+        default: '0.9'
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+concurrency:
+  group: feed-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    # Room for one wait of up to 630 s while a Pages deploy propagates, plus two
+    # fetch rounds with retries (each GET up to 3 x 30 s) and the API reads.
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install monitor dependencies
+        # Same specifiers as requirements.txt (enforced by tests/test_feed_monitor.py).
+        run: >-
+          pip install
+          'requests>=2.28.0'
+          'python-dotenv>=0.19.0'
+          'pandas>=1.5.0'
+          'exchange-calendars>=4.5,<5'
+
+      - name: Check feed and producer
+        env:
+          FEED_MONITOR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FEED_MONITOR_ASSIGNEE: ${{ vars.FEED_MONITOR_ASSIGNEE }}
+          MIN_COVERAGE: ${{ inputs.min_coverage || '0.9' }}
+          NOTIFY: >-
+            ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+            && (github.event_name == 'schedule' || inputs.notify == true) }}
+        run: |
+          if [ "$NOTIFY" = "true" ]; then
+            python scripts/monitor_feed.py --notify github-issue --min-coverage "$MIN_COVERAGE"
+          else
+            python scripts/monitor_feed.py --min-coverage "$MIN_COVERAGE"
+          fi

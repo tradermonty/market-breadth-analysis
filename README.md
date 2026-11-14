@@ -150,6 +150,17 @@ elif result["status"] == "error":
     print(result["message"])  # Malformed feed or failed request; nothing was dispatched
 ```
 
+### Monitoring the Feed
+
+The Feed Monitor workflow checks the producer workflow and the public feed every day, independently of the producer's own runs. It looks for a disabled or failing producer, stale market dates, low coverage, and invalid content or provenance. It opens one GitHub issue per incident and closes it on recovery. Locally it is read-only:
+
+```bash
+# Dry run: exit 0 healthy, 1 incident, 2 unknown
+python scripts/monitor_feed.py
+```
+
+See [docs/feed_monitoring.md](docs/feed_monitoring.md) for thresholds, notification settings, running it outside GitHub, and the recovery runbook.
+
 ### Analyzing Trade Logs
 
 After running a backtest, trade logs are saved to `reports/trade_log_{SYMBOL}_{START}_{END}.csv`. You can analyze them with:
