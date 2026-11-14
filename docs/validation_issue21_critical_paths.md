@@ -62,3 +62,20 @@ evidence for this code; live provider data, broker behavior, GUI/browser outputs
 all vendor endpoint variants and complete static validation of dynamic SDK/JSON
 records remain unverified. No workflow dispatch, live trade or deployment was
 performed.
+
+## Combined-base PR inventory review
+
+After #38 merged as `eb5c661b29e20cebeba7f29039676dcc56b2922d`, the
+critical workflow needed the same pinned uv for shared lock regression tests.
+A restricted-PATH probe reproduced the missing-tool failure. The workflow now
+installs uv 0.12.17 and syncs the locked trading/test profile before adding the
+supplementary validation tools. The source fingerprint additionally includes
+`uv.lock` and `.python-version`; two new fault probes failed before this fix
+and passed afterward. Focused combined-base regressions: 24 passed.
+Final combined validation and hosted CI are recorded on the PR review comment.
+
+Combined-base local result: 777 passed, 9 skipped; all mandatory critical
+selectors, input identity, branch floors and empty-network-log gates passed.
+Existing and critical mypy, Ruff/format, codespell, Bandit and diff checks
+passed. The initial default-cache permission failures were local sandbox
+setup failures; the verified run used an explicit writable UV_CACHE_DIR.

@@ -23,11 +23,18 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-      - name: Install existing runtime and validation tools
+          python-version-file: '.python-version'
+      - name: Set up pinned uv for shared lock regressions
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.17"
+      - name: Install locked runtime and validation tools
+        env:
+          UV_PROJECT_ENVIRONMENT: ${{ runner.temp }}/critical-validation-env
         run: |
-          python -m pip install -r requirements.txt --ignore-installed PyQt5
-          python -m pip install -r requirements-validation-tools.txt
+          uv sync --locked --extra trading --group test
+          uv pip install --python "$UV_PROJECT_ENVIRONMENT/bin/python" -r requirements-validation-tools.txt
+          echo "$UV_PROJECT_ENVIRONMENT/bin" >> "$GITHUB_PATH"
       - name: Check incremental data and order contracts
         run: python -m mypy --config-file mypy-critical.ini
       - name: Measure and enforce critical API-free paths

@@ -27,6 +27,8 @@ def source_fingerprint(root):
             '.coveragerc-critical',
             'validation/critical_policy.json',
             'pyproject.toml',
+            'uv.lock',
+            '.python-version',
             '.pre-commit-config.yaml',
             'mypy-critical.ini',
             'requirements-validation-tools.txt',

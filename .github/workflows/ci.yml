@@ -8,8 +8,12 @@ on:
     paths:
       - '**.py'
       - 'pyproject.toml'
+      - 'uv.lock'
+      - '.github/workflows/**'
+      - '.python-version'
       - '.pre-commit-config.yaml'
       - 'requirements.txt'
+      - 'requirements-analysis.txt'
       - 'requirements-lint-tools.txt'
       - 'requirements-security-tools.txt'
       - 'scripts/**'
@@ -23,16 +27,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Configure isolated environment
+        run: echo "UV_PROJECT_ENVIRONMENT=$RUNNER_TEMP/market-breadth-env" >> "$GITHUB_ENV"
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version-file: '.python-version'
+
+      - name: Set up pinned uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.17"
 
       - name: Install tools
         # Pinned, version-parity-gated tool set (see requirements-lint-tools.txt
         # header for the source-of-truth + update procedure; ruff rationale:
         # repo is formatted under 0.9.6; newer versions disagree).
-        run: pip install -r requirements-lint-tools.txt
+        run: |
+          uv sync --locked --only-group lint
+          echo "$UV_PROJECT_ENVIRONMENT/bin" >> "$GITHUB_PATH"
 
       - name: Tool parity checks
         run: python -m pytest tests/test_ci_tool_versions.py -q
@@ -56,15 +70,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Configure isolated environment
+        run: echo "UV_PROJECT_ENVIRONMENT=$RUNNER_TEMP/market-breadth-env" >> "$GITHUB_ENV"
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version-file: '.python-version'
+
+      - name: Set up pinned uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.17"
 
       - name: Install tools
         # Pinned, version-parity-gated tool set (see requirements-security-tools.txt
         # header for the source-of-truth + update procedure).
-        run: pip install -r requirements-security-tools.txt
+        run: |
+          uv sync --locked --only-group security
+          echo "$UV_PROJECT_ENVIRONMENT/bin" >> "$GITHUB_PATH"
 
       - name: Tool parity checks
         run: python -m pytest tests/test_ci_tool_versions.py -q
@@ -85,6 +109,15 @@ jobs:
           echo "pip-audit exit code: $code"
           python scripts/security_gate.py pip-audit "$RUNNER_TEMP/pip_audit.json" \
             --allowlist security/pip-audit-allowlist.toml \
+            --scanner-code "$code"
+
+      - name: Audit locked production analysis profile (enforced)
+        run: |-
+          python scripts/check_dependencies.py
+          code=0
+          pip-audit -r requirements-analysis.txt --format json > "$RUNNER_TEMP/pip_audit_analysis.json" || code=$?
+          python scripts/security_gate.py pip-audit "$RUNNER_TEMP/pip_audit_analysis.json" \
+            --allowlist security/pip-audit-analysis-allowlist.toml \
             --scanner-code "$code"
 
       # Gate 2: new secrets. The exclude set here must stay identical to the
@@ -109,22 +142,53 @@ jobs:
           --baseline .secrets.baseline
 
   test:
-    name: Tests
-    runs-on: ubuntu-latest
+    name: Tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
     env:
       SKIP_API_TESTS: 'true'
     steps:
       - uses: actions/checkout@v4
 
+      - name: Configure isolated environment
+        run: echo "UV_PROJECT_ENVIRONMENT=$RUNNER_TEMP/market-breadth-env" >> "$GITHUB_ENV"
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version-file: '.python-version'
 
-      - name: Install dependencies
+      - name: Set up pinned uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.17"
+
+      - name: Check dependency lock and export
+        run: python scripts/check_dependencies.py
+
+      - name: Verify clean core analysis without optional packages
         run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt --ignore-installed PyQt5
+          uv sync --locked --no-default-groups
+          "$UV_PROJECT_ENVIRONMENT/bin/python" scripts/smoke_headless.py
+          rm -rf "$UV_PROJECT_ENVIRONMENT"
+
+      - name: Install dependencies reproducibly
+        run: |
+          uv sync --locked --extra trading --group test
+          uv pip freeze --python "$UV_PROJECT_ENVIRONMENT/bin/python" > "$RUNNER_TEMP/environment-first.txt"
+          UV_PROJECT_ENVIRONMENT="$RUNNER_TEMP/market-breadth-second" uv sync --locked --extra trading --group test
+          uv pip freeze --python "$RUNNER_TEMP/market-breadth-second/bin/python" > "$RUNNER_TEMP/environment-second.txt"
+          diff -u "$RUNNER_TEMP/environment-first.txt" "$RUNNER_TEMP/environment-second.txt"
+          echo "$UV_PROJECT_ENVIRONMENT/bin" >> "$GITHUB_PATH"
+
+      - name: Upload resolved environment evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: installed-packages-${{ matrix.os }}
+          path: ${{ runner.temp }}/environment-*.txt
 
       - name: Run tests
         run: python -m pytest tests/ -v --tb=short

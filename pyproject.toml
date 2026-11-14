@@ -1,3 +1,53 @@
+[project]
+name = "market-breadth-analysis"
+version = "0.0.0"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "requests>=2.28.0",
+    "numpy>=1.23.0",
+    "pandas>=1.5.0",
+    "matplotlib>=3.5.0",
+    "scipy>=1.7.0",
+    "python-dotenv>=0.19.0",
+    "tqdm>=4.65.0",
+    "lxml>=4.9.0",
+    "plotly>=5.18.0",
+    "tabulate>=0.9.0",
+    "exchange-calendars>=4.5,<5",
+]
+
+[project.optional-dependencies]
+png = ["kaleido>=1,<2"]
+trading = ["alpaca-trade-api==3.2.0"]
+windows-qt = ["PyQt5>=5.15.0; sys_platform == 'win32'"]
+
+[dependency-groups]
+test = ["pytest==9.0.3", "pyyaml>=6.0"]
+lint = [
+    "ruff==0.9.6",
+    "codespell==2.3.0",
+    "mypy==1.14.1",
+    "pandas-stubs==3.0.0.260204",
+    "types-requests==2.32.4.20260107",
+    "types-tqdm==4.67.3.20260205",
+    "tomli==2.4.1",
+    "pytest==9.0.3",
+]
+security = [
+    "bandit[toml]==1.8.3",
+    "detect-secrets==1.5.0",
+    "pip-audit==2.10.1",
+    "pytest==9.0.3",
+]
+
+[tool.uv]
+package = false
+required-version = "==0.12.17"
+default-groups = []
+# Alpaca requires urllib3<2; request type stubs require urllib3>=2.
+# Lint and trading are installed in separate environments.
+conflicts = [[{ group = "lint" }, { extra = "trading" }]]
+
 [tool.ruff]
 target-version = "py310"
 line-length = 120
@@ -38,7 +88,7 @@ quote-style = "single"
 indent-style = "space"
 
 [tool.codespell]
-skip = "*.csv,*.json,*.html,*.png,./data/*,./reports/*,./venv311/*,./archive/*,./.git/*"
+skip = "*.csv,*.json,*.html,*.png,./data/*,./reports/*,./venv311/*,./archive/*,./.git/*,uv.lock,requirements*.txt"
 ignore-words-list = "ags,hist,thr,assertIn,trough"
 
 [tool.bandit]

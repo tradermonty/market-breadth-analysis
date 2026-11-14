@@ -1,0 +1,2 @@
+# Core-only production analysis has no accepted vulnerability exceptions.
+exceptions = []

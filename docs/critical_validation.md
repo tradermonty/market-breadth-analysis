@@ -2,32 +2,32 @@
 
 This workflow measures fixture evidence for analysis, acquisition, backtests,
 publication, comparisons and order recovery. It does not establish live broker,
-provider availability or strategy equivalence. Project dependency locking and
-installation changes belong to #17 / PR #38; this PR introduces a separate
-workflow without editing that work.
+provider availability or strategy equivalence. Dependency locking is provided by #17 / PR #38. This separate workflow
+consumes the same Python/uv pins and locked trading/test profile, with fixed
+supplementary validation tools.
 
 ## Reproduce
 
 From a clean Python 3.11 environment with the repository's runtime dependencies:
 
 ```sh
-python -m pip install -r requirements.txt
-python -m pip install -r requirements-validation-tools.txt
-python -m mypy --config-file mypy-critical.ini
-python scripts/run_critical_validation.py --output-dir /tmp/breadth-validation-NEW
+uv sync --locked --extra trading --group test
+uv pip install --python .venv/bin/python -r requirements-validation-tools.txt
+.venv/bin/python -m mypy --config-file mypy-critical.ini
+.venv/bin/python scripts/run_critical_validation.py --output-dir /tmp/breadth-validation-NEW
 ```
 
 The output directory must be new; previous evidence is never reused or erased.
 The separate `Critical API-free Validation` workflow runs these commands on
 Ubuntu 24.04 and uploads all diagnostics even if tests or gates fail. Existing
-CI still runs its original lint/type/security/test checks. Tool direct pins
-for this supplementary workflow are explicit; #17 owns the broader lock.
+CI still runs its original lint/type/security/test checks. The workflow sets up uv 0.12.17 explicitly before shared lock regressions.
+Supplementary validation-tool direct pins remain explicit.
 
 Outputs include `tests.log`, JUnit, line/branch coverage JSON, HTML annotated
 source, `critical-gaps.json` (actual missing lines/arcs), source/test/config file
 hashes and interpreter/tool versions in `run.json`, a network-attempt log and
 `verdict.json`. The checker binds report digests to a fresh random run ID and
-compares pre-run input hashes against the current checkout. Editing source or
+compares pre-run input hashes against the current checkout. Editing source, uv.lock, .python-version or
 a report, reusing another run ID, omitting a module, dropping below a floor,
 or omitting/skipping a required critical test fails validation. This is an
 integrity/regression check for trusted test execution, not tamper-proof attestation.

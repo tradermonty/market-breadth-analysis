@@ -71,6 +71,8 @@ def test_02_complete_current_evidence_passes(bundle):
         'changed_source',
         'changed_policy',
         'changed_config',
+        'changed_lock',
+        'changed_python',
         'missing_file',
         'line_drop',
         'branch_drop',
@@ -97,6 +99,10 @@ def test_03_faults_cannot_produce_pass(bundle, fault):
         path.write_text(json.dumps(changed))
     elif fault == 'changed_config':
         (root / 'pyproject.toml').write_text('[tool.pytest.ini_options]\naddopts = "--ignore=tests"\n')
+    elif fault == 'changed_lock':
+        (root / 'uv.lock').write_text('version = 1\n')
+    elif fault == 'changed_python':
+        (root / '.python-version').write_text('3.12\n')
     elif fault == 'missing_file':
         data['files'] = {}
     elif fault == 'line_drop':
