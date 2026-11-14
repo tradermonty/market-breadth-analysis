@@ -7,8 +7,9 @@ must not load .env or read credentials, so importing it has no side effects.
 import csv
 import io
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 
 from market_dates import NY, _utc_now
 
@@ -32,11 +33,11 @@ class ContentValidation:
     error: str | None
 
 
-def _is_html(text):
+def _is_html(text: str) -> bool:
     return text.strip().lower().startswith(('<!doctype', '<html'))
 
 
-def _parse_iso_date(value):
+def _parse_iso_date(value: str) -> date | None:
     """Return a date for a strict YYYY-MM-DD string, or None."""
     try:
         parsed = date.fromisoformat(value)
@@ -45,11 +46,12 @@ def _parse_iso_date(value):
     return parsed if parsed.isoformat() == value else None
 
 
-def _latest_row_error(row):
+def _latest_row_error(row: Mapping[str, str | None]) -> str | None:
     """Describe why the latest row cannot be published, or return None."""
     for column in REQUIRED_COLUMNS:
         try:
-            value = float(row[column])
+            raw = row[column]
+            value = float(raw) if raw is not None else float('nan')
         except (TypeError, ValueError):
             return f'Invalid {column} on latest row: {row[column]!r}'
         if not math.isfinite(value):
@@ -61,7 +63,7 @@ def _latest_row_error(row):
     return None
 
 
-def validate_csv_content(csv_text, summary_text, *, now=None):
+def validate_csv_content(csv_text: str, summary_text: str, *, now: datetime | None = None) -> ContentValidation:
     """Validate CSV content and extract the latest data date.
 
     Rejects HTML error responses, empty content, missing columns, malformed,
@@ -87,7 +89,7 @@ def validate_csv_content(csv_text, summary_text, *, now=None):
         if DATE_COLUMN not in (reader.fieldnames or []):
             return ContentValidation(False, None, None, 0, f'Missing {DATE_COLUMN!r} column in data CSV')
 
-        fieldnames = reader.fieldnames
+        fieldnames = reader.fieldnames or []
         rows = list(reader)
     except Exception as e:
         return ContentValidation(False, None, None, 0, f'Failed to parse data CSV: {e}')

@@ -1,0 +1,72 @@
+{
+  "files": {
+    "fmp_data_fetcher.py": {
+      "line": 40,
+      "branch": 30
+    },
+    "market_dates.py": {
+      "line": 90,
+      "branch": 85
+    },
+    "market_breadth.py": {
+      "line": 80,
+      "branch": 65
+    },
+    "feed_contract.py": {
+      "line": 90,
+      "branch": 95
+    },
+    "backtest/backtest.py": {
+      "line": 75,
+      "branch": 60
+    },
+    "backtest/run_multi_etf_backtest.py": {
+      "line": 85,
+      "branch": 50
+    },
+    "scripts/compare_tv_python_trades.py": {
+      "line": 60,
+      "branch": 60
+    },
+    "trigger_market_breadth.py": {
+      "line": 75,
+      "branch": 75
+    },
+    "scripts/publish_market_breadth.py": {
+      "line": 85,
+      "branch": 90
+    },
+    "trade/order_state.py": {
+      "line": 80,
+      "branch": 65
+    },
+    "trade/run_market_breadth_trade.py": {
+      "line": 80,
+      "branch": 70
+    },
+    "validation/coverage_child_probe.py": {
+      "line": 95,
+      "branch": 95
+    }
+  },
+  "required_tests": [
+    "tests.test_critical_e2e::test_01_cached_analysis_emits_required_outputs",
+    "tests.test_critical_e2e::test_02_single_etf_and_multi_etf_actual_runs",
+    "tests.test_critical_e2e::test_03_trigger_cli_failed_download_is_nonzero",
+    "tests.test_acquisition_contract::test_01_transport_retry_and_recovery",
+    "tests.test_acquisition_contract::test_02_exhausted_transport_is_redacted",
+    "tests.test_trade_comparison::test_01_later_27_bar_mismatch_fails_api_and_real_cli",
+    "tests.test_trade_comparison::test_02_exact_and_tolerated_matches_pass_cli",
+    "tests.test_publication_gate::test_invalid_artifacts",
+    "tests.test_publication_gate::test_legitimate_warmup_and_low_latest_coverage",
+    "tests.test_publication_gate::test_cli_failure_is_nonzero",
+    "tests.test_order_reconciliation.TestReconciliation::test_03_crash_after_acceptance_repairs_entry_fill_exactly_once",
+    "tests.test_order_reconciliation.TestReconciliation::test_04_response_loss_reconcile_finds_and_repairs_no_second_submit",
+    "tests.test_order_reconciliation.TestReconciliation::test_07_partial_fill_then_cancel_credits_delta_exactly_once",
+    "tests.test_order_reconciliation.TestBlockedStates::test_08_corrupt_order_state_blocks",
+    "tests.test_order_reconciliation.TestSubmission::test_05_duplicate_coid_adopts_existing_order",
+    "tests.test_critical_typing::test_invalid_contract_call_is_rejected",
+    "tests.test_offline_validation::test_05_child_only_coverage_marker_executes",
+    "tests.test_offline_validation::test_06_direct_pytest_default_child_environment_is_guarded"
+  ]
+}

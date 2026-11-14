@@ -6,10 +6,15 @@ and reconciling pending broker orders at startup.
 """
 
 import json
+import logging
 import os
 import re
 import tempfile
 from contextlib import suppress
+from typing import Any
+
+State = dict[str, Any]
+FilePath = str | os.PathLike[str]
 
 
 class ExecutionBlocked(Exception):
@@ -58,7 +63,15 @@ _COID_RE = re.compile(r'^[A-Za-z0-9_-]+$')
 FINAL_ORDER_STATUSES = {'filled', 'canceled', 'expired', 'rejected'}
 
 
-def build_client_order_id(symbol, signal_type, signal_date, side, retry_count=0, stop_time=None, stop_seq=None):
+def build_client_order_id(
+    symbol: str,
+    signal_type: str,
+    signal_date: str,
+    side: str,
+    retry_count: int = 0,
+    stop_time: str | None = None,
+    stop_seq: int | None = None,
+) -> str:
     """Deterministic client_order_id. Raises ValueError on overflow (fail-closed)."""
     side_str = str(side).lower()
     if side_str not in ('buy', 'sell'):
@@ -78,7 +91,7 @@ def build_client_order_id(symbol, signal_type, signal_date, side, retry_count=0,
     return coid
 
 
-def atomic_write_json(path, data):
+def atomic_write_json(path: FilePath, data: object) -> None:
     """Write JSON atomically via tempfile + os.replace in the same directory."""
     directory = os.path.dirname(os.path.abspath(path)) or '.'
     fd, tmp_path = tempfile.mkstemp(prefix='.tmp-state-', dir=directory)
@@ -92,7 +105,7 @@ def atomic_write_json(path, data):
                 os.remove(tmp_path)
 
 
-def validate_order_state(data):
+def validate_order_state(data: object) -> State:
     """Validate parsed order-state JSON. Raises StateCorruptionError on bad shape."""
     if not isinstance(data, dict):
         raise StateCorruptionError('order state must be a dict')
@@ -112,7 +125,7 @@ def validate_order_state(data):
     return data
 
 
-def load_order_state(path):
+def load_order_state(path: FilePath) -> State:
     """Load order state; missing file yields an empty state. Corrupt file raises."""
     if not os.path.exists(path):
         return {'schema_version': SCHEMA_VERSION, 'records': []}
@@ -124,7 +137,7 @@ def load_order_state(path):
     return validate_order_state(data)
 
 
-def broker_status_code(exc):
+def broker_status_code(exc: object) -> int | None:
     """Best-effort HTTP status from an SDK exception (structured, redaction-safe).
 
     alpaca_trade_api.rest.APIError keeps the HTTP code on `_status_code`;
@@ -143,7 +156,7 @@ def broker_status_code(exc):
         return None
 
 
-def order_is_duplicate_rejection(exc):
+def order_is_duplicate_rejection(exc: object) -> bool:
     """True for HTTP 422 duplicate-client_order_id rejections.
 
     Structured first; the message fallback stays because legacy SDK paths may
@@ -154,7 +167,7 @@ def order_is_duplicate_rejection(exc):
     return 'client_order_id must be unique' in str(exc).lower()
 
 
-def order_lookup_not_found(exc):
+def order_lookup_not_found(exc: object) -> bool:
     """True when the broker definitively reports no order (HTTP 404 family).
 
     Message fallback covers "order not found"/"position does not exist" bodies.
@@ -172,16 +185,16 @@ class ExecutionLock:
     PermissionError means a foreign-user process is alive (blocked).
     """
 
-    def __init__(self, symbol, state_dir='trade'):
+    def __init__(self, symbol: str, state_dir: FilePath = 'trade') -> None:
         self.symbol = symbol
         self.state_dir = state_dir
 
     @property
-    def path(self):
+    def path(self) -> str:
         return os.path.join(self.state_dir, f'.lock_{self.symbol}')
 
     @staticmethod
-    def _pid_alive(pid):
+    def _pid_alive(pid: int) -> bool:
         try:
             os.kill(pid, 0)
             return True
@@ -190,7 +203,7 @@ class ExecutionLock:
         except PermissionError:
             return True
 
-    def acquire(self):
+    def acquire(self) -> None:
         """Acquire the lock; raises ExecutionBlocked if a live process holds it."""
         for _ in range(2):
             try:
@@ -215,14 +228,14 @@ class ExecutionLock:
             return
         raise ExecutionBlocked(f'Could not acquire execution lock {self.path}')
 
-    def _read_lock_payload(self):
+    def _read_lock_payload(self) -> Any:
         try:
             with open(self.path) as f:
                 return json.load(f)
         except (json.JSONDecodeError, OSError):
             return {}
 
-    def release(self):
+    def release(self) -> None:
         try:
             if os.path.exists(self.path):
                 os.remove(self.path)
@@ -230,19 +243,17 @@ class ExecutionLock:
             pass
 
 
-def datetime_now_iso():
+def datetime_now_iso() -> str:
     import datetime as _dt
 
     return _dt.datetime.now().isoformat()
 
 
-_lock_logger_cache = None
+_lock_logger_cache: logging.Logger | None = None
 
 
-def _lock_logger():
+def _lock_logger() -> logging.Logger:
     global _lock_logger_cache
     if _lock_logger_cache is None:
-        import logging
-
         _lock_logger_cache = logging.getLogger('market_breadth_trade')
     return _lock_logger_cache

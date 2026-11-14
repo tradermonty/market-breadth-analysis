@@ -12,6 +12,7 @@ import datetime
 import io
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -22,7 +23,7 @@ import security_gate  # noqa: E402
 
 FIXTURES = Path(__file__).resolve().parent / 'fixtures' / 'security'
 
-TODAY = datetime.date.today()  # deterministic only via the gate's injected `today`
+TODAY = datetime.date(2026, 11, 14)  # deterministic only via the gate's injected `today`
 DAYS = datetime.timedelta(days=1)
 
 
@@ -65,7 +66,17 @@ def _vuln_json(package, version, vid, aliases=None):
     )
 
 
-class TestSecurityGate(unittest.TestCase):
+class IsolatedFixtures(unittest.TestCase):
+    def setUp(self):
+        global FIXTURES
+        previous = FIXTURES
+        directory = tempfile.TemporaryDirectory()
+        FIXTURES = Path(directory.name)
+        self.addCleanup(directory.cleanup)
+        self.addCleanup(lambda: globals().update(FIXTURES=previous))
+
+
+class TestSecurityGate(IsolatedFixtures):
     """test_01..test_26 per docs for issue #16."""
 
     # pip-audit gate

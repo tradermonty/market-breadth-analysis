@@ -1,0 +1,49 @@
+name: Critical API-free Validation
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  critical-paths:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      SKIP_API_TESTS: 'true'
+      DOTENV_DISABLED: '1'
+      FMP_API_KEY: ''
+      MPLBACKEND: Agg
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: '.python-version'
+      - name: Set up pinned uv for shared lock regressions
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.17"
+      - name: Install locked runtime and validation tools
+        env:
+          UV_PROJECT_ENVIRONMENT: ${{ runner.temp }}/critical-validation-env
+        run: |
+          uv sync --locked --extra trading --group test
+          uv pip install --python "$UV_PROJECT_ENVIRONMENT/bin/python" -r requirements-validation-tools.txt
+          echo "$UV_PROJECT_ENVIRONMENT/bin" >> "$GITHUB_PATH"
+      - name: Check incremental data and order contracts
+        run: python -m mypy --config-file mypy-critical.ini
+      - name: Measure and enforce critical API-free paths
+        run: python scripts/run_critical_validation.py --output-dir "$RUNNER_TEMP/critical-validation"
+      - name: Upload coverage, missing branches, test and run identity evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: critical-validation
+          path: ${{ runner.temp }}/critical-validation
+          include-hidden-files: true
+          if-no-files-found: warn
