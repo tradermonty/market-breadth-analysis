@@ -17,4 +17,4 @@ types-requests==2.32.4.20260107
 types-tqdm==4.67.3.20260205
 tomli==2.4.1
 # Test runner required by the "Tool parity checks" CI step in this job.
-pytest==9.0.2
+pytest==9.0.3

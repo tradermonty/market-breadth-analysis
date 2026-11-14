@@ -37,7 +37,7 @@ GitHub は[リポジトリに60日間活動がないと定期ワークフロー�
 
 ## 必要条件
 
-- Python 3.8以上
+- CPython 3.11（対応環境と固定手順は[依存関係ガイド](docs/dependencies.md)を参照）
 - 必要なPythonパッケージ（requirements.txtに記載）
 - APIキー（オプション）:
   - FMP APIキー（Financial Modeling Prep）
@@ -57,8 +57,15 @@ cd market_breadth
 
 2. 必要なパッケージのインストール:
 ```bash
-pip install -r requirements.txt
+uv sync --locked
+source .venv/bin/activate
 ```
+
+uv 0.12.17 を使用します。標準環境はヘッドレス分析・HTML・CSV用で、PNG・取引・テストは
+追加プロファイルです。対応Python/OS、固定・更新コマンド、Chrome/Qtの条件、ハッシュ付き
+pip互換ファイルは[依存関係ガイド](docs/dependencies.md)を参照してください。保存データの実行には
+既存キャッシュが必要です。`python scripts/smoke_headless.py` はAPI不要の合成データ例です。
+
 
 3. 環境変数の設定（オプション）:
 `.env.sample`ファイルを`.env`にコピーして編集:

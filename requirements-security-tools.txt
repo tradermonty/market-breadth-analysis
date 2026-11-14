@@ -7,10 +7,10 @@
 # CI/pre-commit parity is gated by tests/test_ci_tool_versions.py.
 #
 # NOTE: these pins and their transitive dependencies are OUTSIDE the pip-audit
-# Gate-1 audit surface (which scans requirements.txt only). A follow-up issue
+# Gate-1 audit surface (which scans the generated runtime exports only). A follow-up issue
 # extends Gate 1 to this file.
 bandit[toml]==1.8.3
 detect-secrets==1.5.0
 pip-audit==2.10.1
 # Test runner required by the "Tool parity checks" CI step in this job.
-pytest==9.0.2
+pytest==9.0.3

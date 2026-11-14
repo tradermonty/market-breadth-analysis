@@ -43,3 +43,6 @@ schd_schg_strategy/
 *.egg-info/
 dist/
 build/
+
+# Locked project environments
+.venv/

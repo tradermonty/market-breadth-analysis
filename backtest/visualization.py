@@ -16,8 +16,14 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from market_breadth import plot_breadth_and_sp500_with_peaks
 
 
-def setup_matplotlib_backend():
+def setup_matplotlib_backend(*, headless=False):
     """Set up matplotlib backend based on the operating system."""
+    if headless:
+        matplotlib.use('Agg')
+        return
+    if os.environ.get('MPLBACKEND'):
+        matplotlib.use(os.environ['MPLBACKEND'])
+        return
     system = platform.system().lower()
     if system in ('darwin', 'windows'):
         try:
@@ -41,7 +47,7 @@ def visualize_backtest_results(bt, show_plot=True):
         print('No data to visualize.')
         return
 
-    setup_matplotlib_backend()
+    setup_matplotlib_backend(headless=not show_plot)
 
     # Create subplots
     _fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(15, 16))
