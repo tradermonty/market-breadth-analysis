@@ -1,0 +1,42 @@
+name: Critical API-free Validation
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  critical-paths:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      SKIP_API_TESTS: 'true'
+      DOTENV_DISABLED: '1'
+      FMP_API_KEY: ''
+      MPLBACKEND: Agg
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install existing runtime and validation tools
+        run: |
+          python -m pip install -r requirements.txt --ignore-installed PyQt5
+          python -m pip install -r requirements-validation-tools.txt
+      - name: Check incremental data and order contracts
+        run: python -m mypy --config-file mypy-critical.ini
+      - name: Measure and enforce critical API-free paths
+        run: python scripts/run_critical_validation.py --output-dir "$RUNNER_TEMP/critical-validation"
+      - name: Upload coverage, missing branches, test and run identity evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: critical-validation
+          path: ${{ runner.temp }}/critical-validation
+          include-hidden-files: true
+          if-no-files-found: warn

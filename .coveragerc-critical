@@ -1,0 +1,9 @@
+[run]
+branch = true
+parallel = true
+patch = subprocess
+source = ${BREADTH_SOURCE_ROOT?}
+data_file = ${BREADTH_COVERAGE_DATA?}
+
+[report]
+show_missing = true

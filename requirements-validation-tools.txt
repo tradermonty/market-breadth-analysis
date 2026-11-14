@@ -1,0 +1,4 @@
+# Independent validation tools for Issue #21, separate from runtime/#17 inputs.
+coverage==7.17.3
+pytest==9.0.3
+mypy==1.14.1
