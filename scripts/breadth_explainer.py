@@ -468,34 +468,70 @@ def carry_forward(site_dir, previous_url=LIVE_URL):
         return 'error'
 
 
-def analyze(csv_dir, analyzer_dir, eli5_dir, work_dir, previous_url=LIVE_URL):
-    """Explainer job: prepare Claude's workspace; return True when a new page should be written."""
-    work = Path(work_dir)
-    work.mkdir(parents=True, exist_ok=True)
-    data = work / 'data'
-    data.mkdir(exist_ok=True)
+def analyze(csv_dir, analyzer_dir, out_dir, previous_url=LIVE_URL, runner=None):
+    """Analysis job (no secrets): run the analyzer; return True when a new page should be written.
+
+    Writes only analysis.json, analysis.md and facts.json to ``out_dir`` (the artifact handed to
+    the Claude job). ``runner`` replaces the localhost-HTTP analyzer run in tests.
+    """
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    scratch = out / 'scratch'
+    data = scratch / 'data'
+    data.mkdir(parents=True, exist_ok=True)
     for name in ('market_breadth_data.csv', 'market_breadth_summary.csv'):
         shutil.copyfile(Path(csv_dir) / name, data / name)  # the analyzer never sees the site dir
 
-    analysis, markdown = _run_analyzer(data, analyzer_dir, work / 'analysis_out')
+    analysis, markdown = (runner or _run_analyzer)(data, analyzer_dir, scratch / 'analysis_out')
+    facts = extract_facts(analysis)
+    (out / 'analysis.json').write_text(json.dumps(analysis, indent=2), encoding='utf-8')
+    (out / 'analysis.md').write_text(Path(markdown).read_text(encoding='utf-8')[:MAX_BYTES], encoding='utf-8')
+    (out / 'facts.json').write_text(json.dumps(facts, indent=2), encoding='utf-8')
+
+    regenerate = needs_regeneration(_fetch(previous_url), facts)
+    print(f'facts={json.dumps(facts)} regenerate={str(regenerate).lower()}')
+    return regenerate
+
+
+def _copy_skill_docs(src, dest):
+    """Copy only regular Markdown files of a skill; refuse symlinks anywhere in the tree."""
+    src = Path(src)
+    for path in [src, *src.rglob('*')]:
+        if path.is_symlink():
+            raise ValueError(f'symlink in skill: {path.relative_to(src.parent)}')
+    for path in src.rglob('*.md'):
+        if path.is_file():
+            target = dest / path.relative_to(src)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(path.read_bytes())
+
+
+def prepare(analysis_dir, analyzer_skill_dir, eli5_dir, work_dir):
+    """Claude job (trusted code, before the secret is used): build a fresh, clean workspace.
+
+    Only regular files are created. Facts are re-derived here from analysis.json rather than
+    trusting the facts.json in the artifact.
+    """
+    work = Path(work_dir)
+    if work.exists():
+        raise ValueError(f'{work} already exists; refusing to reuse a workspace')
+    work.mkdir(parents=True)
+    src = Path(analysis_dir)
+    analysis = json.loads((src / 'analysis.json').read_text(encoding='utf-8'))
     facts = extract_facts(analysis)
     (work / 'analysis.json').write_text(json.dumps(analysis, indent=2), encoding='utf-8')
-    shutil.copyfile(markdown, work / 'analysis.md')
+    (work / 'analysis.md').write_text((src / 'analysis.md').read_text(encoding='utf-8')[:MAX_BYTES], encoding='utf-8')
     (work / 'facts.json').write_text(json.dumps(facts, indent=2), encoding='utf-8')
 
     skills = work / '.claude' / 'skills'
-    shutil.copytree(eli5_dir, skills / 'eli5', dirs_exist_ok=True)
-    shutil.copytree(analyzer_dir, skills / 'market-breadth-analyzer', dirs_exist_ok=True)
+    _copy_skill_docs(eli5_dir, skills / 'eli5')
+    _copy_skill_docs(analyzer_skill_dir, skills / 'market-breadth-analyzer')
     shutil.copyfile(EXAMPLE, work / 'example.html')
     prompt = PROMPT.read_text(encoding='utf-8')
     for key, value in fact_strings(facts).items():
         prompt = prompt.replace('{{' + key.upper() + '}}', value)
     (work / 'prompt.md').write_text(prompt, encoding='utf-8')
-
-    previous = _fetch(previous_url)
-    regenerate = needs_regeneration(previous, facts)
-    print(f'facts={json.dumps(facts)} regenerate={str(regenerate).lower()}')
-    return regenerate
+    return facts
 
 
 def finalize(work_dir, site_dir):
@@ -551,9 +587,13 @@ def main(argv=None):
     a = sub.add_parser('analyze')
     a.add_argument('--csv-dir', required=True)
     a.add_argument('--analyzer-dir', required=True)
-    a.add_argument('--eli5-dir', required=True)
-    a.add_argument('--work-dir', required=True)
+    a.add_argument('--out-dir', required=True)
     a.add_argument('--previous-url', default=LIVE_URL, help='published page to compare ("" to skip)')
+    p = sub.add_parser('prepare')
+    p.add_argument('--analysis-dir', required=True)
+    p.add_argument('--analyzer-skill-dir', required=True)
+    p.add_argument('--eli5-dir', required=True)
+    p.add_argument('--work-dir', required=True)
     f = sub.add_parser('finalize')
     f.add_argument('--site-dir', required=True)
     f.add_argument('--work-dir', required=True)
@@ -563,11 +603,19 @@ def main(argv=None):
         carry_forward(args.site_dir, args.previous_url)
     elif args.command == 'analyze':
         try:
-            regenerate = analyze(args.csv_dir, args.analyzer_dir, args.eli5_dir, args.work_dir, args.previous_url)
+            regenerate = analyze(args.csv_dir, args.analyzer_dir, args.out_dir, args.previous_url)
         except Exception as exc:
             _warn(f'analysis failed: {type(exc).__name__}: {exc}')
             regenerate = False
         _github_output(regenerate=str(regenerate).lower())
+    elif args.command == 'prepare':
+        try:
+            prepare(args.analysis_dir, args.analyzer_skill_dir, args.eli5_dir, args.work_dir)
+            ready = True
+        except Exception as exc:
+            _warn(f'workspace preparation failed: {type(exc).__name__}: {exc}')
+            ready = False
+        _github_output(ready=str(ready).lower())
     else:
         _github_output(publish=str(finalize(args.work_dir, args.site_dir) == 'generated').lower())
     return 0

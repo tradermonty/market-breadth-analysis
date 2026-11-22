@@ -114,18 +114,19 @@ jobs:
   # ---------------------------------------------------------------------------------------
   # Plain-English explainer (breadth_explained.html), written by Claude from the Market
   # Breadth Analyzer + ELI5 skills. Optional and isolated from the chart publication:
-  #   explainer         - third-party skill code and Claude; read-only, no Pages permissions,
-  #                       no access to the site directory. Produces explainer.html only.
+  #   explainer-analyze - pinned third-party analyzer; no secrets, read-only, no Pages
+  #                       permissions. Hands only analysis.json/.md + facts.json onward.
+  #   explainer         - Claude. Installs the CLI before touching any artifact, builds a
+  #                       fresh workspace with trusted code, tools scoped to that workspace.
   #   explainer-publish - trusted repo code, no secrets: validates the page, adds a strict
   #                       CSP and redeploys the already-deployed site plus that one file.
-  # Every step is non-blocking so the run (watched by scripts/monitor_feed.py) stays green;
-  # degradation is reported as ::warning:: annotations.
+  # Every step is non-blocking with its own timeout (sum < job timeout), so the run that
+  # scripts/monitor_feed.py watches stays green; problems surface as ::warning:: annotations.
   # ---------------------------------------------------------------------------------------
-  explainer:
+  explainer-analyze:
     needs: build
     runs-on: ubuntu-latest
-    # Larger than the sum of step timeouts, so a hung step never fails the whole run.
-    timeout-minutes: 60
+    timeout-minutes: 40
     permissions:
       contents: read
     outputs:
@@ -177,6 +178,71 @@ jobs:
           sparse-checkout: skills/market-breadth-analyzer
           persist-credentials: false
 
+      - name: Analyze breadth
+        id: analyze
+        continue-on-error: true
+        timeout-minutes: 8
+        run: >-
+          python scripts/breadth_explainer.py analyze
+          --csv-dir "$RUNNER_TEMP/site"
+          --analyzer-dir .explainer/claude-trading-skills/skills/market-breadth-analyzer
+          --out-dir "$RUNNER_TEMP/analysis"
+
+      - name: Upload analysis
+        if: steps.analyze.outputs.regenerate == 'true'
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/upload-artifact@v4
+        with:
+          name: breadth-analysis
+          path: |
+            ${{ runner.temp }}/analysis/analysis.json
+            ${{ runner.temp }}/analysis/analysis.md
+            ${{ runner.temp }}/analysis/facts.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  explainer:
+    needs: explainer-analyze
+    if: needs.explainer-analyze.outputs.regenerate == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    permissions:
+      contents: read
+    outputs:
+      ready: ${{ steps.prepare.outputs.ready }}
+    steps:
+      # Install the CLI first, before any artifact or third-party content is on the runner.
+      - name: Install Claude Code CLI
+        continue-on-error: true
+        timeout-minutes: 5
+        run: npm install --global --no-fund --no-audit @anthropic-ai/claude-code@2.1.330
+
+      - name: Checkout repository
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/setup-python@v4
+        with:
+          python-version-file: '.python-version'
+
+      - name: Check out Market Breadth Analyzer skill
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/checkout@v4
+        with:
+          repository: tradermonty/claude-trading-skills
+          ref: d5fcca78c0d8c8294ca53cf49a1cfbb1162df2c7 # pragma: allowlist secret (pinned commit SHA)
+          path: .explainer/claude-trading-skills
+          sparse-checkout: skills/market-breadth-analyzer
+          persist-credentials: false
+
       - name: Check out ELI5 skill
         continue-on-error: true
         timeout-minutes: 3
@@ -188,25 +254,27 @@ jobs:
           sparse-checkout: skills/eli5
           persist-credentials: false
 
-      - name: Analyze breadth
-        id: analyze
+      - name: Download analysis
         continue-on-error: true
-        timeout-minutes: 8
+        timeout-minutes: 3
+        uses: actions/download-artifact@v4
+        with:
+          name: breadth-analysis
+          path: ${{ runner.temp }}/analysis
+
+      - name: Prepare Claude workspace
+        id: prepare
+        continue-on-error: true
+        timeout-minutes: 3
         run: >-
-          python scripts/breadth_explainer.py analyze
-          --csv-dir "$RUNNER_TEMP/site"
-          --analyzer-dir .explainer/claude-trading-skills/skills/market-breadth-analyzer
+          python scripts/breadth_explainer.py prepare
+          --analysis-dir "$RUNNER_TEMP/analysis"
+          --analyzer-skill-dir .explainer/claude-trading-skills/skills/market-breadth-analyzer
           --eli5-dir .explainer/claude-skills-library/skills/eli5
           --work-dir "$RUNNER_TEMP/explainer"
 
-      - name: Install Claude Code CLI
-        if: steps.analyze.outputs.regenerate == 'true'
-        continue-on-error: true
-        timeout-minutes: 5
-        run: npm install --global --no-fund --no-audit @anthropic-ai/claude-code@2.1.330
-
       - name: Write explainer with Claude
-        if: steps.analyze.outputs.regenerate == 'true'
+        if: steps.prepare.outputs.ready == 'true'
         continue-on-error: true
         timeout-minutes: 15
         working-directory: ${{ runner.temp }}/explainer
@@ -221,7 +289,7 @@ jobs:
           || echo "::warning title=Breadth explainer::Claude step exited with $?"
 
       - name: Upload explainer
-        if: steps.analyze.outputs.regenerate == 'true'
+        if: steps.prepare.outputs.ready == 'true'
         continue-on-error: true
         timeout-minutes: 3
         uses: actions/upload-artifact@v4
@@ -235,9 +303,8 @@ jobs:
 
   explainer-publish:
     needs: [build, deploy, explainer]
-    if: needs.explainer.outputs.regenerate == 'true'
+    if: needs.explainer.outputs.ready == 'true'
     runs-on: ubuntu-latest
-    # Larger than the sum of step timeouts below, so a hung step never fails the whole run.
     timeout-minutes: 40
     permissions:
       contents: read
@@ -287,6 +354,7 @@ jobs:
             --site-dir "$RUNNER_TEMP/site" --work-dir "$RUNNER_TEMP/explainer"
 
       - name: Upload site with explainer
+        id: upload
         if: steps.finalize.outputs.publish == 'true'
         continue-on-error: true
         timeout-minutes: 3
@@ -296,8 +364,10 @@ jobs:
           path: ${{ runner.temp }}/site
           retention-days: 1
 
+      # Deploy only our own upload: if an earlier (untrusted) job had already created an
+      # artifact with this name, our upload fails and nothing is deployed.
       - name: Redeploy GitHub Pages
-        if: steps.finalize.outputs.publish == 'true'
+        if: steps.finalize.outputs.publish == 'true' && steps.upload.outcome == 'success'
         continue-on-error: true
         timeout-minutes: 8
         uses: actions/deploy-pages@v4

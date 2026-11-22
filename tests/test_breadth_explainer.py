@@ -2,7 +2,6 @@
 
 import json
 import re
-import textwrap
 import time
 from pathlib import Path
 
@@ -330,78 +329,153 @@ def test_17_carry_forward_never_raises(tmp_path):
     assert bx.carry_forward(tmp_path / 'missing-dir', None) == 'error'
 
 
-# ---------------------------------------------------------------- analyze (explainer job)
+# ---------------------------------------------------------------- analyze (explainer-analyze job)
 
 
-STUB_ANALYZER = textwrap.dedent(
-    """
-    import argparse, json, os, urllib.request
-    assert 'SECRET_FOR_TEST' not in os.environ, 'analyzer must run with a scrubbed environment'
-    p = argparse.ArgumentParser()
-    p.add_argument('--detail-url'); p.add_argument('--summary-url'); p.add_argument('--output-dir')
-    a = p.parse_args()
-    rows = urllib.request.urlopen(a.detail_url).read().decode().strip().splitlines()
-    urllib.request.urlopen(a.summary_url).read()
-    last = rows[-1].split(',')
-    out = {
-        'data_provenance': {'as_of': last[0]},
+def _fake_runner(data_dir, analyzer_dir, out_dir):
+    """Stands in for the localhost-HTTP analyzer run (sockets are forbidden in tests)."""
+    rows = (Path(data_dir) / 'market_breadth_data.csv').read_text().strip().splitlines()
+    date, breadth = rows[-1].split(',')
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / 'report.md').write_text('# report')
+    analysis = {
+        'data_provenance': {'as_of': date},
         'composite': {'composite_score': 33.5, 'zone': 'Weakening'},
-        'components': {'breadth_level_trend': {'current_8ma': float(last[1])}},
+        'components': {'breadth_level_trend': {'current_8ma': float(breadth)}},
     }
-    os.makedirs(a.output_dir, exist_ok=True)
-    json.dump(out, open(os.path.join(a.output_dir, 'market_breadth_2026-11-22_080000.json'), 'w'))
-    open(os.path.join(a.output_dir, 'market_breadth_2026-11-22_080000.md'), 'w').write('# report')
-    """
-)
+    return analysis, out_dir / 'report.md'
 
 
-def _skills(tmp_path):
-    analyzer = tmp_path / 'mba'
-    (analyzer / 'scripts').mkdir(parents=True)
-    (analyzer / 'SKILL.md').write_text('---\nname: market-breadth-analyzer\n---\n')
-    (analyzer / 'scripts' / 'market_breadth_analyzer.py').write_text(STUB_ANALYZER)
-    eli5 = tmp_path / 'eli5'
-    eli5.mkdir()
-    (eli5 / 'SKILL.md').write_text('---\nname: eli5\n---\n')
+def _csv_dir(tmp_path):
     csv = tmp_path / 'site'
     csv.mkdir()
     (csv / 'market_breadth_data.csv').write_text('Date,Breadth_Index_8MA\n2026-11-19,0.6\n2026-11-20,0.574\n')
     (csv / 'market_breadth_summary.csv').write_text('Metric,Value\n')
-    return analyzer, eli5, csv
+    (csv / 'index.html').write_text('site file the analyzer must not see')
+    return csv
 
 
-def test_18_analyze_prepares_isolated_claude_workspace(tmp_path, monkeypatch):
-    monkeypatch.setenv('SECRET_FOR_TEST', 'x')
-    analyzer, eli5, csv = _skills(tmp_path)
-    work = tmp_path / 'work'
-    assert bx.analyze(csv, analyzer, eli5, work, previous_url=None) is True
-    assert json.loads((work / 'facts.json').read_text()) == FACTS
-    assert (work / 'analysis.md').read_text() == '# report'
-    assert (work / 'data' / 'market_breadth_data.csv').exists()  # analyzer served a copy
-    assert (work / '.claude' / 'skills' / 'eli5' / 'SKILL.md').exists()
-    assert (work / '.claude' / 'skills' / 'market-breadth-analyzer' / 'SKILL.md').exists()
-    prompt = (work / 'prompt.md').read_text()
-    assert '{{' not in prompt and 'content="2026-11-20"' in prompt and '<b data-fact="breadth">57</b>' in prompt
-    assert (work / 'example.html').read_text() == example()
+def test_18_analyze_hands_on_only_analysis_files(tmp_path):
+    seen = {}
+
+    def runner(data_dir, analyzer_dir, out_dir):
+        seen['files'] = sorted(p.name for p in Path(data_dir).iterdir())
+        return _fake_runner(data_dir, analyzer_dir, out_dir)
+
+    out = tmp_path / 'analysis'
+    assert bx.analyze(_csv_dir(tmp_path), tmp_path / 'mba', out, previous_url=None, runner=runner) is True
+    assert seen['files'] == ['market_breadth_data.csv', 'market_breadth_summary.csv']
+    assert json.loads((out / 'facts.json').read_text()) == FACTS
+    assert (out / 'analysis.md').read_text() == '# report'
+    assert json.loads((out / 'analysis.json').read_text())['composite']['zone'] == 'Weakening'
 
 
 def test_19_analyze_skips_claude_when_published_page_is_current(tmp_path):
-    analyzer, eli5, csv = _skills(tmp_path)
     live = tmp_path / 'live.html'
     live.write_text(bx.with_csp(example()))
-    assert bx.analyze(csv, analyzer, eli5, tmp_path / 'work', previous_url=live.as_uri()) is False
+    out = tmp_path / 'analysis'
+    assert (
+        bx.analyze(_csv_dir(tmp_path), tmp_path / 'mba', out, previous_url=live.as_uri(), runner=_fake_runner) is False
+    )
 
 
-def test_20_cli_reports_outputs_and_survives_analyzer_failure(tmp_path, monkeypatch):
-    analyzer, eli5, csv = _skills(tmp_path)
+def test_19b_run_analyzer_uses_scrubbed_environment(tmp_path, monkeypatch):
+    calls = {}
+
+    def fake_run(argv, **kwargs):
+        calls.update(kwargs)
+        raise RuntimeError('stop before the server is used')
+
+    monkeypatch.setenv('SECRET_FOR_TEST', 'x')
+    monkeypatch.setattr(bx.subprocess, 'run', fake_run)
+    monkeypatch.setattr(bx.http.server, 'ThreadingHTTPServer', _NoSocketServer)
+    with pytest.raises(RuntimeError):
+        bx._run_analyzer(tmp_path, tmp_path / 'mba', tmp_path / 'out')
+    assert set(calls['env']) == {'PATH', 'HOME'} and calls['check'] is True and calls['timeout']
+
+
+class _NoSocketServer:
+    def __init__(self, address, handler):
+        self.server_address = ('127.0.0.1', 1)
+
+    def serve_forever(self):
+        pass
+
+    def shutdown(self):
+        pass
+
+    def server_close(self):
+        pass
+
+
+# ---------------------------------------------------------------- prepare (explainer job, trusted)
+
+
+def _analysis_dir(tmp_path, facts_override=None):
+    src = tmp_path / 'analysis'
+    src.mkdir()
+    (src / 'analysis.json').write_text(json.dumps(ANALYSIS))
+    (src / 'analysis.md').write_text('# report')
+    (src / 'facts.json').write_text(json.dumps(facts_override or FACTS))
+    return src
+
+
+def _skill(tmp_path, name):
+    skill = tmp_path / name
+    (skill / 'scripts').mkdir(parents=True)
+    (skill / 'SKILL.md').write_text(f'---\nname: {name}\n---\n')
+    (skill / 'scripts' / 'tool.py').write_text('print(1)')
+    return skill
+
+
+def test_20_prepare_builds_clean_workspace_from_trusted_code(tmp_path):
+    src = _analysis_dir(tmp_path, facts_override={**FACTS, 'score': 99.9})  # artifact facts are ignored
+    work = tmp_path / 'work'
+    assert bx.prepare(src, _skill(tmp_path, 'mba'), _skill(tmp_path, 'eli5'), work) == FACTS
+    assert json.loads((work / 'facts.json').read_text()) == FACTS
+    files = sorted(str(p.relative_to(work)) for p in work.rglob('*') if p.is_file())
+    assert files == [
+        '.claude/skills/eli5/SKILL.md',
+        '.claude/skills/market-breadth-analyzer/SKILL.md',
+        'analysis.json',
+        'analysis.md',
+        'example.html',
+        'facts.json',
+        'prompt.md',
+    ]
+    prompt = (work / 'prompt.md').read_text()
+    assert '{{' not in prompt and 'content="2026-11-20"' in prompt and '<b data-fact="breadth">57</b>' in prompt
+
+
+def test_20b_prepare_refuses_symlinks_and_reused_workspace(tmp_path):
+    eli5 = _skill(tmp_path, 'eli5')
+    (eli5 / 'secrets.md').symlink_to('/etc/hosts')
+    with pytest.raises(ValueError, match='symlink'):
+        bx.prepare(_analysis_dir(tmp_path), _skill(tmp_path, 'mba'), eli5, tmp_path / 'work')
+    existing = tmp_path / 'existing'
+    existing.mkdir()
+    with pytest.raises(ValueError, match='already exists'):
+        bx.prepare(tmp_path / 'analysis', tmp_path / 'mba', tmp_path / 'mba', existing)
+
+
+def test_20c_cli_reports_outputs_and_never_fails(tmp_path, monkeypatch):
     out = tmp_path / 'gh_output'
     monkeypatch.setenv('GITHUB_OUTPUT', str(out))
-    base = ['analyze', '--csv-dir', str(csv), '--eli5-dir', str(eli5), '--previous-url', '']
-    assert bx.main([*base, '--analyzer-dir', str(analyzer), '--work-dir', str(tmp_path / 'w1')]) == 0
-    assert bx.main([*base, '--analyzer-dir', str(tmp_path / 'nope'), '--work-dir', str(tmp_path / 'w2')]) == 0
+
+    def broken_analyzer(*args):
+        raise FileNotFoundError('analyzer script missing')
+
+    monkeypatch.setattr(bx, '_run_analyzer', broken_analyzer)  # no real server: sockets are forbidden
+    csv = _csv_dir(tmp_path)
+    analyze_args = ['analyze', '--csv-dir', str(csv), '--analyzer-dir', str(tmp_path / 'nope')]
+    assert bx.main([*analyze_args, '--out-dir', str(tmp_path / 'a'), '--previous-url', '']) == 0
+    src = _analysis_dir(tmp_path)
+    prepare_args = ['prepare', '--analysis-dir', str(src), '--analyzer-skill-dir', str(_skill(tmp_path, 'mba'))]
+    assert bx.main([*prepare_args, '--eli5-dir', str(_skill(tmp_path, 'eli5')), '--work-dir', str(tmp_path / 'w')]) == 0
+    assert bx.main([*prepare_args, '--eli5-dir', str(tmp_path / 'eli5'), '--work-dir', str(tmp_path / 'w')]) == 0
     work, site = _work(tmp_path / 'f', explainer=example())
     assert bx.main(['finalize', '--work-dir', str(work), '--site-dir', str(site)]) == 0
-    assert out.read_text().split() == ['regenerate=true', 'regenerate=false', 'publish=true']
+    assert out.read_text().split() == ['regenerate=false', 'ready=true', 'ready=false', 'publish=true']
 
 
 # ---------------------------------------------------------------- workflow wiring / isolation
@@ -410,6 +484,9 @@ def test_20_cli_reports_outputs_and_survives_analyzer_failure(tmp_path, monkeypa
 @pytest.fixture(scope='module')
 def wf():
     return yaml.safe_load(WORKFLOW.read_text())
+
+
+EXPLAINER_JOBS = ['explainer-analyze', 'explainer', 'explainer-publish']
 
 
 def test_21_build_job_only_carries_forward_with_trusted_code(wf):
@@ -422,18 +499,35 @@ def test_21_build_job_only_carries_forward_with_trusted_code(wf):
     assert steps[0]['with']['persist-credentials'] is False
 
 
-def test_22_explainer_job_is_isolated_and_non_blocking(wf):
-    job = wf['jobs']['explainer']
-    assert job['needs'] == 'build'
-    assert job['permissions'] == {'contents': 'read'}
-    assert 'environment' not in job
-    for step in job['steps']:
+@pytest.mark.parametrize('job', EXPLAINER_JOBS)
+def test_22_explainer_jobs_are_non_blocking_and_do_not_persist_tokens(wf, job):
+    for step in wf['jobs'][job]['steps']:
         assert step.get('continue-on-error') is True, step['name']
         if 'checkout' in step.get('uses', ''):
-            assert step['with']['persist-credentials'] is False
-    secret_steps = [s for s in job['steps'] if 'ANTHROPIC_API_KEY' in json.dumps(s)]
-    assert len(secret_steps) == 1 and 'claude -p' in secret_steps[0]['run']
-    assert 'npm install' not in secret_steps[0]['run']
+            assert step['with']['persist-credentials'] is False, step['name']
+
+
+def test_22b_secret_only_in_the_claude_step_never_next_to_third_party_code(wf):
+    for job in EXPLAINER_JOBS:
+        text = json.dumps(wf['jobs'][job])
+        expected = 1 if job == 'explainer' else 0
+        assert text.count('secrets.') == expected, job
+    analyze = wf['jobs']['explainer-analyze']
+    assert analyze['permissions'] == {'contents': 'read'} and 'environment' not in analyze
+    assert any('breadth_explainer.py analyze' in s.get('run', '') for s in analyze['steps'])
+    claude_job = wf['jobs']['explainer']
+    assert claude_job['permissions'] == {'contents': 'read'} and 'environment' not in claude_job
+    assert not any('breadth_explainer.py analyze' in s.get('run', '') for s in claude_job['steps'])
+    names = [s['name'] for s in claude_job['steps']]
+    # CLI installed before any artifact/third-party content; workspace built before the secret is used.
+    assert names[0] == 'Install Claude Code CLI'
+    assert (
+        names.index('Download analysis')
+        < names.index('Prepare Claude workspace')
+        < names.index('Write explainer with Claude')
+    )
+    secret_step = next(s for s in claude_job['steps'] if 'ANTHROPIC_API_KEY' in json.dumps(s))
+    assert 'claude -p' in secret_step['run'] and 'npm' not in secret_step['run']
 
 
 def test_23_claude_tools_are_scoped_to_its_workspace(wf):
@@ -447,29 +541,25 @@ def test_23_claude_tools_are_scoped_to_its_workspace(wf):
 def test_24_third_party_code_is_pinned(wf):
     text = WORKFLOW.read_text()
     assert re.search(r'@anthropic-ai/claude-code@\d+\.\d+\.\d+\b', text)
-    for repo in ('tradermonty/claude-trading-skills', 'takusaotome/claude-skills-library'):
-        ref = re.search(rf'repository: {repo}\n\s+ref: (\S+)', text)
-        assert ref and re.fullmatch(r'[0-9a-f]{40}', ref.group(1)), repo
+    refs = re.findall(r'repository: (\S+)\n\s+ref: (\S+)', text)
+    assert {repo for repo, _ in refs} == {'tradermonty/claude-trading-skills', 'takusaotome/claude-skills-library'}
+    assert all(re.fullmatch(r'[0-9a-f]{40}', ref) for _, ref in refs), refs
 
 
-def test_25_explainer_publish_redeploys_only_validated_page(wf):
+def test_25_explainer_publish_redeploys_only_its_own_validated_upload(wf):
     job = wf['jobs']['explainer-publish']
     assert set(job['needs']) == {'build', 'deploy', 'explainer'}
-    assert 'secrets' not in json.dumps(job)
-    for step in job['steps']:
-        assert step.get('continue-on-error') is True, step['name']
     names = [s['name'] for s in job['steps']]
-    assert (
-        names.index('Validate explainer')
-        < names.index('Upload site with explainer')
-        < names.index('Redeploy GitHub Pages')
-    )
-    for name in ('Upload site with explainer', 'Redeploy GitHub Pages'):
-        step = job['steps'][names.index(name)]
-        assert step['if'] == "steps.finalize.outputs.publish == 'true'"
+    order = ['Validate explainer', 'Upload site with explainer', 'Redeploy GitHub Pages']
+    assert [names.index(n) for n in order] == sorted(names.index(n) for n in order)
+    upload = job['steps'][names.index('Upload site with explainer')]
+    deploy = job['steps'][names.index('Redeploy GitHub Pages')]
+    assert upload['id'] == 'upload' and upload['if'] == "steps.finalize.outputs.publish == 'true'"
+    assert deploy['if'] == "steps.finalize.outputs.publish == 'true' && steps.upload.outcome == 'success'"
+    assert deploy['with']['artifact_name'] == upload['with']['name']
 
 
-@pytest.mark.parametrize('job', ['explainer', 'explainer-publish'])
+@pytest.mark.parametrize('job', EXPLAINER_JOBS)
 def test_25b_hung_steps_cannot_time_out_the_job(wf, job):
     # A job-level timeout concludes the run as failure, which scripts/monitor_feed.py would
     # report as a feed outage. Every step has its own timeout and they fit in the job budget.
