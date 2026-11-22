@@ -210,7 +210,9 @@ jobs:
     permissions:
       contents: read
     outputs:
-      ready: ${{ steps.prepare.outputs.ready }}
+      # Only our own upload counts: a same-named artifact pre-created by an earlier job makes
+      # this upload fail, and then nothing is published.
+      uploaded: ${{ steps.upload.outcome == 'success' }}
     steps:
       # Install the CLI first, before any artifact or third-party content is on the runner.
       - name: Install Claude Code CLI
@@ -286,9 +288,11 @@ jobs:
           claude -p "$(cat prompt.md)" --model "$EXPLAINER_MODEL" --max-budget-usd 2
           --setting-sources project --permission-mode dontAsk
           --allowedTools "Read(./**),Glob,Skill,Write(./explainer.html),Edit(./explainer.html)"
+          --disallowedTools "Bash,WebFetch,WebSearch,Task,NotebookEdit"
           || echo "::warning title=Breadth explainer::Claude step exited with $?"
 
       - name: Upload explainer
+        id: upload
         if: steps.prepare.outputs.ready == 'true'
         continue-on-error: true
         timeout-minutes: 3
@@ -303,7 +307,7 @@ jobs:
 
   explainer-publish:
     needs: [build, deploy, explainer]
-    if: needs.explainer.outputs.ready == 'true'
+    if: needs.explainer.outputs.uploaded == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:

@@ -493,6 +493,20 @@ def analyze(csv_dir, analyzer_dir, out_dir, previous_url=LIVE_URL, runner=None):
     return regenerate
 
 
+def _safe_skill_md(text):
+    """Keep only name/description frontmatter (skills can declare hooks/allowed-tools) and
+    refuse dynamic-context commands, which Claude Code would execute."""
+    if '!`' in text:
+        raise ValueError('skill uses a !`command` dynamic-context line')
+    match = re.match(r'\A---\n(.*?)\n---\n', text, re.S)
+    if not match:
+        raise ValueError('SKILL.md has no frontmatter')
+    kept = [line for line in match.group(1).splitlines() if re.match(r'(name|description):\s*\S', line)]
+    if not any(line.startswith('name:') for line in kept):
+        raise ValueError('SKILL.md frontmatter has no single-line name')
+    return '---\n' + '\n'.join(kept) + '\n---\n' + text[match.end() :]
+
+
 def _copy_skill_docs(src, dest):
     """Copy only regular Markdown files of a skill; refuse symlinks anywhere in the tree."""
     src = Path(src)
@@ -501,9 +515,14 @@ def _copy_skill_docs(src, dest):
             raise ValueError(f'symlink in skill: {path.relative_to(src.parent)}')
     for path in src.rglob('*.md'):
         if path.is_file():
+            text = path.read_text(encoding='utf-8')
+            if path.name == 'SKILL.md':
+                text = _safe_skill_md(text)
+            elif '!`' in text:
+                raise ValueError(f'{path.name} uses a !`command` dynamic-context line')
             target = dest / path.relative_to(src)
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(path.read_bytes())
+            target.write_text(text, encoding='utf-8')
 
 
 def prepare(analysis_dir, analyzer_skill_dir, eli5_dir, work_dir):
