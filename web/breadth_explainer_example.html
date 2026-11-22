@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Market Breadth, Explained</title>
+<meta name="description" content="A plain-language picture of today's S&P 500 market breadth.">
+<meta name="breadth-data-date" content="2026-11-20">
+<meta name="breadth-score" content="33.5">
+<meta name="breadth-zone" content="Weakening">
+<meta name="breadth-pct" content="57">
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --ink: #1d2330; --muted: #5d6678; --line: #e3e6eb;
+    --up: #23a35a; --off: #d5d9e0; --warn: #f08c2b; --pink: #fbe1ee; --pink-ink: #c2477f;
+    --long: #2e7d32; --short: #f29d0c; --price: #0aa5c2; --accent: #0366d6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #11141a; --card: #1a1f28; --ink: #e8ebf1; --muted: #9aa3b5; --line: #2c3340;
+      --off: #3a4250; --pink: #4a2537; --pink-ink: #f2a2c6; --accent: #7cb8ff;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #11141a; --card: #1a1f28; --ink: #e8ebf1; --muted: #9aa3b5; --line: #2c3340;
+    --off: #3a4250; --pink: #4a2537; --pink-ink: #f2a2c6; --accent: #7cb8ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 17px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  main { max-width: 720px; margin: 0 auto; padding: 20px 16px 40px; }
+  .date { color: var(--muted); font-size: 0.85rem; margin: 0 0 6px; }
+  h1 { font-size: 1.75rem; line-height: 1.25; margin: 0 0 18px; }
+  h1 em { font-style: normal; color: var(--warn); }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+    padding: 18px 16px 16px; margin: 0 0 14px;
+  }
+  .step { color: var(--muted); font-size: 0.75rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+  h2 { font-size: 1.2rem; margin: 2px 0 10px; }
+  .card p { margin: 10px 0 0; }
+  .muted { color: var(--muted); }
+  svg { display: block; width: 100%; height: auto; }
+  svg text { fill: var(--ink); font-family: inherit; }
+  .so-what {
+    background: var(--ink); color: var(--bg); border-radius: 16px; padding: 18px 16px; margin: 18px 0 14px;
+    font-size: 1.1rem; line-height: 1.45;
+  }
+  .so-what b { color: var(--warn); }
+  footer { font-size: 0.8rem; color: var(--muted); line-height: 1.5; }
+  footer a, .back a { color: var(--accent); text-decoration: none; }
+  .back { margin: 0 0 18px; font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<main>
+  <p class="back"><a href="index.html">&larr; Market Breadth dashboard</a></p>
+  <p class="date">Data as of <time data-fact="date" datetime="2026-11-20">Friday, Nov 20, 2026</time> &middot; S&amp;P 500</p>
+  <h1>Fewer stocks are joining the climb, and the crowd is <em>thinning out</em>.</h1>
+
+  <section class="card">
+    <div class="step">1 &middot; The idea</div>
+    <h2>The index is a parade. Breadth counts who's actually marching.</h2>
+    <svg viewBox="0 0 320 150" role="img" aria-label="Of 100 stocks, 57 are marching up and 43 are not">
+      <g>
+        <circle cx="18" cy="12" r="5.5" fill="var(--up)"/>
+        <circle cx="38" cy="12" r="5.5" fill="var(--up)"/>
+        <circle cx="58" cy="12" r="5.5" fill="var(--up)"/>
+        <circle cx="78" cy="12" r="5.5" fill="var(--up)"/>
+        <circle cx="98" cy="12" r="5.5" fill="var(--up)"/>
+        <circle cx="118" cy="12" r="5.5" fill="var(--up)"/>
+        <circle cx="138" cy="12" r="5.5" fill="var(--up)"/>
+        <circle cx="158" cy="12" r="5.5" fill="var(--up)"/>
+        <circle cx="178" cy="12" r="5.5" fill="var(--up)"/>
+        <circle cx="198" cy="12" r="5.5" fill="var(--up)"/>
+        <circle cx="18" cy="25.5" r="5.5" fill="var(--up)"/>
+        <circle cx="38" cy="25.5" r="5.5" fill="var(--up)"/>
+        <circle cx="58" cy="25.5" r="5.5" fill="var(--up)"/>
+        <circle cx="78" cy="25.5" r="5.5" fill="var(--up)"/>
+        <circle cx="98" cy="25.5" r="5.5" fill="var(--up)"/>
+        <circle cx="118" cy="25.5" r="5.5" fill="var(--up)"/>
+        <circle cx="138" cy="25.5" r="5.5" fill="var(--up)"/>
+        <circle cx="158" cy="25.5" r="5.5" fill="var(--up)"/>
+        <circle cx="178" cy="25.5" r="5.5" fill="var(--up)"/>
+        <circle cx="198" cy="25.5" r="5.5" fill="var(--up)"/>
+        <circle cx="18" cy="39" r="5.5" fill="var(--up)"/>
+        <circle cx="38" cy="39" r="5.5" fill="var(--up)"/>
+        <circle cx="58" cy="39" r="5.5" fill="var(--up)"/>
+        <circle cx="78" cy="39" r="5.5" fill="var(--up)"/>
+        <circle cx="98" cy="39" r="5.5" fill="var(--up)"/>
+        <circle cx="118" cy="39" r="5.5" fill="var(--up)"/>
+        <circle cx="138" cy="39" r="5.5" fill="var(--up)"/>
+        <circle cx="158" cy="39" r="5.5" fill="var(--up)"/>
+        <circle cx="178" cy="39" r="5.5" fill="var(--up)"/>
+        <circle cx="198" cy="39" r="5.5" fill="var(--up)"/>
+        <circle cx="18" cy="52.5" r="5.5" fill="var(--up)"/>
+        <circle cx="38" cy="52.5" r="5.5" fill="var(--up)"/>
+        <circle cx="58" cy="52.5" r="5.5" fill="var(--up)"/>
+        <circle cx="78" cy="52.5" r="5.5" fill="var(--up)"/>
+        <circle cx="98" cy="52.5" r="5.5" fill="var(--up)"/>
+        <circle cx="118" cy="52.5" r="5.5" fill="var(--up)"/>
+        <circle cx="138" cy="52.5" r="5.5" fill="var(--up)"/>
+        <circle cx="158" cy="52.5" r="5.5" fill="var(--up)"/>
+        <circle cx="178" cy="52.5" r="5.5" fill="var(--up)"/>
+        <circle cx="198" cy="52.5" r="5.5" fill="var(--up)"/>
+        <circle cx="18" cy="66" r="5.5" fill="var(--up)"/>
+        <circle cx="38" cy="66" r="5.5" fill="var(--up)"/>
+        <circle cx="58" cy="66" r="5.5" fill="var(--up)"/>
+        <circle cx="78" cy="66" r="5.5" fill="var(--up)"/>
+        <circle cx="98" cy="66" r="5.5" fill="var(--up)"/>
+        <circle cx="118" cy="66" r="5.5" fill="var(--up)"/>
+        <circle cx="138" cy="66" r="5.5" fill="var(--up)"/>
+        <circle cx="158" cy="66" r="5.5" fill="var(--up)"/>
+        <circle cx="178" cy="66" r="5.5" fill="var(--up)"/>
+        <circle cx="198" cy="66" r="5.5" fill="var(--up)"/>
+        <circle cx="18" cy="79.5" r="5.5" fill="var(--up)"/>
+        <circle cx="38" cy="79.5" r="5.5" fill="var(--up)"/>
+        <circle cx="58" cy="79.5" r="5.5" fill="var(--up)"/>
+        <circle cx="78" cy="79.5" r="5.5" fill="var(--up)"/>
+        <circle cx="98" cy="79.5" r="5.5" fill="var(--up)"/>
+        <circle cx="118" cy="79.5" r="5.5" fill="var(--up)"/>
+        <circle cx="138" cy="79.5" r="5.5" fill="var(--up)"/>
+        <circle cx="158" cy="79.5" r="5.5" fill="var(--off)"/>
+        <circle cx="178" cy="79.5" r="5.5" fill="var(--off)"/>
+        <circle cx="198" cy="79.5" r="5.5" fill="var(--off)"/>
+        <circle cx="18" cy="93" r="5.5" fill="var(--off)"/>
+        <circle cx="38" cy="93" r="5.5" fill="var(--off)"/>
+        <circle cx="58" cy="93" r="5.5" fill="var(--off)"/>
+        <circle cx="78" cy="93" r="5.5" fill="var(--off)"/>
+        <circle cx="98" cy="93" r="5.5" fill="var(--off)"/>
+        <circle cx="118" cy="93" r="5.5" fill="var(--off)"/>
+        <circle cx="138" cy="93" r="5.5" fill="var(--off)"/>
+        <circle cx="158" cy="93" r="5.5" fill="var(--off)"/>
+        <circle cx="178" cy="93" r="5.5" fill="var(--off)"/>
+        <circle cx="198" cy="93" r="5.5" fill="var(--off)"/>
+        <circle cx="18" cy="106.5" r="5.5" fill="var(--off)"/>
+        <circle cx="38" cy="106.5" r="5.5" fill="var(--off)"/>
+        <circle cx="58" cy="106.5" r="5.5" fill="var(--off)"/>
+        <circle cx="78" cy="106.5" r="5.5" fill="var(--off)"/>
+        <circle cx="98" cy="106.5" r="5.5" fill="var(--off)"/>
+        <circle cx="118" cy="106.5" r="5.5" fill="var(--off)"/>
+        <circle cx="138" cy="106.5" r="5.5" fill="var(--off)"/>
+        <circle cx="158" cy="106.5" r="5.5" fill="var(--off)"/>
+        <circle cx="178" cy="106.5" r="5.5" fill="var(--off)"/>
+        <circle cx="198" cy="106.5" r="5.5" fill="var(--off)"/>
+        <circle cx="18" cy="120" r="5.5" fill="var(--off)"/>
+        <circle cx="38" cy="120" r="5.5" fill="var(--off)"/>
+        <circle cx="58" cy="120" r="5.5" fill="var(--off)"/>
+        <circle cx="78" cy="120" r="5.5" fill="var(--off)"/>
+        <circle cx="98" cy="120" r="5.5" fill="var(--off)"/>
+        <circle cx="118" cy="120" r="5.5" fill="var(--off)"/>
+        <circle cx="138" cy="120" r="5.5" fill="var(--off)"/>
+        <circle cx="158" cy="120" r="5.5" fill="var(--off)"/>
+        <circle cx="178" cy="120" r="5.5" fill="var(--off)"/>
+        <circle cx="198" cy="120" r="5.5" fill="var(--off)"/>
+        <circle cx="18" cy="133.5" r="5.5" fill="var(--off)"/>
+        <circle cx="38" cy="133.5" r="5.5" fill="var(--off)"/>
+        <circle cx="58" cy="133.5" r="5.5" fill="var(--off)"/>
+        <circle cx="78" cy="133.5" r="5.5" fill="var(--off)"/>
+        <circle cx="98" cy="133.5" r="5.5" fill="var(--off)"/>
+        <circle cx="118" cy="133.5" r="5.5" fill="var(--off)"/>
+        <circle cx="138" cy="133.5" r="5.5" fill="var(--off)"/>
+        <circle cx="158" cy="133.5" r="5.5" fill="var(--off)"/>
+        <circle cx="178" cy="133.5" r="5.5" fill="var(--off)"/>
+        <circle cx="198" cy="133.5" r="5.5" fill="var(--off)"/>
+      </g>
+      <text x="230" y="58" font-size="30" font-weight="700" fill="var(--up)" style="fill:var(--up)">57</text>
+      <text x="230" y="78" font-size="12">marching up</text>
+      <text x="230" y="112" font-size="30" font-weight="700" style="fill:var(--muted)">43</text>
+      <text x="230" y="132" font-size="12">sitting out</text>
+    </svg>
+    <p>Out of every 100 S&amp;P 500 stocks, about <b data-fact="breadth">57</b> are above their long-term trend line.</p>
+  </section>
+
+  <section class="card">
+    <div class="step">2 &middot; Today's reading</div>
+    <h2>57 is middling. It's below the "healthy" line.</h2>
+    <svg viewBox="0 0 320 126" role="img" aria-label="A 0 to 100 scale: usual bottom 23, very weak 40, healthy 60, usual top 72, today 57">
+      <defs>
+        <linearGradient id="heat" x1="0" x2="1">
+          <stop offset="0" stop-color="#d64545"/><stop offset=".45" stop-color="#f0b429"/><stop offset="1" stop-color="#23a35a"/>
+        </linearGradient>
+      </defs>
+      <rect x="16" y="52" width="288" height="18" rx="9" fill="url(#heat)"/>
+      <g font-size="11" text-anchor="middle">
+        <line x1="82.2" y1="48" x2="82.2" y2="74" stroke="var(--ink)" stroke-width="1.5"/>
+        <text x="82.2" y="88">23</text><text x="82.2" y="103" style="fill:var(--muted)">usual bottom</text>
+        <line x1="131.2" y1="48" x2="131.2" y2="74" stroke="var(--ink)" stroke-width="1" stroke-dasharray="3 2"/>
+        <text x="131.2" y="88">40</text><text x="131.2" y="119" style="fill:var(--muted)">very weak</text>
+        <line x1="188.8" y1="48" x2="188.8" y2="74" stroke="var(--ink)" stroke-width="1" stroke-dasharray="3 2"/>
+        <text x="188.8" y="88">60</text><text x="188.8" y="103" style="fill:var(--muted)">healthy</text>
+        <line x1="223.4" y1="48" x2="223.4" y2="74" stroke="var(--ink)" stroke-width="1.5"/>
+        <text x="223.4" y="88">72</text><text x="223.4" y="119" style="fill:var(--muted)">usual top</text>
+      </g>
+      <path d="M180.2 46 l-9 -16 h18 z" fill="var(--ink)"/>
+      <text x="180.2" y="22" font-size="14" font-weight="700" text-anchor="middle">Today 57</text>
+    </svg>
+    <p class="muted">Breadth was higher than this on about 3 of every 4 days since 2016.</p>
+  </section>
+
+  <section class="card">
+    <div class="step">3 &middot; Which way it's heading</div>
+    <h2>The fast line just slipped under the slow line.</h2>
+    <svg viewBox="0 0 320 150" role="img" aria-label="The short-term breadth line falls below the long-term line, starting a pink warning zone">
+      <rect x="226" y="14" width="80" height="112" fill="var(--pink)"/>
+      <text x="266" y="30" font-size="11" text-anchor="middle" style="fill:var(--pink-ink)" font-weight="700">pink zone</text>
+      <path d="M16 70 C 80 62, 160 58, 304 72" fill="none" stroke="var(--long)" stroke-width="4" stroke-linecap="round"/>
+      <path d="M16 96 C 60 40, 110 30, 150 44 S 220 52, 304 104" fill="none" stroke="var(--short)" stroke-width="4" stroke-linecap="round"/>
+      <circle cx="304" cy="104" r="5" fill="var(--short)"/>
+      <circle cx="304" cy="72" r="5" fill="var(--long)"/>
+      <g font-size="11">
+        <text x="16" y="142" style="fill:var(--short)" font-weight="700">━ last ~2 weeks</text>
+        <text x="140" y="142" style="fill:var(--long)" font-weight="700">━ last ~10 months</text>
+      </g>
+    </svg>
+    <p>Both lines point down. When that happens, the chart turns <b style="color:var(--pink-ink)">pink</b>, an early warning. It began 2 trading days ago.</p>
+  </section>
+
+  <section class="card">
+    <div class="step">4 &middot; Price check</div>
+    <h2>Prices and participation are falling together.</h2>
+    <svg viewBox="0 0 320 130" role="img" aria-label="Over 60 days the S&P 500 fell 10 percent and stocks above trend fell from 73 to 57 of 100">
+      <g text-anchor="middle">
+        <text x="80" y="20" font-size="12" style="fill:var(--muted)">S&amp;P 500 price</text>
+        <path d="M80 34 v52" stroke="var(--price)" stroke-width="10" stroke-linecap="round"/>
+        <path d="M62 78 l18 22 l18 -22 z" fill="var(--price)"/>
+        <text x="80" y="122" font-size="20" font-weight="700">&minus;10%</text>
+        <text x="240" y="20" font-size="12" style="fill:var(--muted)">Stocks marching up</text>
+        <path d="M240 34 v52" stroke="var(--short)" stroke-width="10" stroke-linecap="round"/>
+        <path d="M222 78 l18 22 l18 -22 z" fill="var(--short)"/>
+        <text x="240" y="122" font-size="20" font-weight="700">73 &rarr; 57</text>
+      </g>
+      <text x="160" y="66" font-size="12" text-anchor="middle" style="fill:var(--muted)">last 60 days</text>
+    </svg>
+    <p class="muted">No hidden strength underneath. The drop is broad, not just a few big names.</p>
+  </section>
+
+  <section class="card">
+    <div class="step">5 &middot; Where we are in the wave</div>
+    <h2>Breadth peaked 54 days ago. No bottom signal yet.</h2>
+    <svg viewBox="0 0 320 130" role="img" aria-label="A wave: the peak was 54 days ago, we are on the way down, the bottom has not arrived">
+      <path d="M10 100 C 50 100, 60 24, 100 24 S 160 80, 200 80" fill="none" stroke="var(--ink)" stroke-width="3" stroke-linecap="round"/>
+      <path d="M200 80 C 240 80, 260 112, 300 112" fill="none" stroke="var(--ink)" stroke-width="3" stroke-dasharray="5 6" stroke-linecap="round" opacity=".45"/>
+      <path d="M100 14 l-7 -10 h14 z" fill="#e03131" transform="translate(0 4)"/>
+      <text x="114" y="16" font-size="11">peak &middot; 54 days ago</text>
+      <circle cx="200" cy="80" r="8" fill="var(--warn)"/>
+      <text x="194" y="106" font-size="12" font-weight="700" text-anchor="end">you are here</text>
+      <text x="304" y="128" font-size="11" text-anchor="end" style="fill:var(--muted)">bottom?</text>
+    </svg>
+    <p class="muted">Past bottoms often came near 40 or lower. We're at 57.</p>
+  </section>
+
+  <section class="card">
+    <div class="step">6 &middot; All of it in one number</div>
+    <h2>Health score: <span data-fact="score">33.5</span> / 100, "<span data-fact="zone">Weakening</span>"</h2>
+    <svg viewBox="0 0 320 190" role="img" aria-label="Gauge from 0 to 100 with the needle at 33.5 in the weakening zone">
+      <g fill="none" stroke-width="26">
+        <path d="M40 160 A120 120 0 0 1 62.9 89.5" stroke="#d64545"/>
+        <path d="M62.9 89.5 A120 120 0 0 1 122.9 45.9" stroke="#f08c2b"/>
+        <path d="M122.9 45.9 A120 120 0 0 1 197.1 45.9" stroke="#f0c929"/>
+        <path d="M197.1 45.9 A120 120 0 0 1 257.1 89.5" stroke="#8bc34a"/>
+        <path d="M257.1 89.5 A120 120 0 0 1 280 160" stroke="#23a35a"/>
+      </g>
+      <line x1="160" y1="160" x2="110.5" y2="73.1" stroke="var(--ink)" stroke-width="5" stroke-linecap="round"/>
+      <circle cx="160" cy="160" r="9" fill="var(--ink)"/>
+      <g font-size="11" text-anchor="middle" style="fill:var(--muted)">
+        <text x="30" y="180" style="fill:var(--muted)">0</text>
+        <text x="290" y="180" style="fill:var(--muted)">100</text>
+      </g>
+      <text x="160" y="186" font-size="13" font-weight="700" text-anchor="middle">weak &larr;&nbsp;&nbsp;&nbsp;&rarr; healthy</text>
+    </svg>
+    <p class="muted">Six breadth checks rolled into one score. Today, all six lean negative or mixed.</p>
+  </section>
+
+  <div class="so-what">
+    <b>So what?</b> Rallies last longer when most stocks join in. Right now fewer are joining, so this is a time for <b>caution</b>, not boldness. The thing to watch is breadth bottoming out.
+  </div>
+
+  <footer>
+    <p>Generated from the public breadth data on the
+      <a href="index.html">Market Breadth dashboard</a> using the
+      <a href="https://tradermonty.github.io/claude-trading-skills/en/skills/market-breadth-analyzer/" target="_blank" rel="noopener">Market Breadth Analyzer</a> skill.
+      Latest data: 2026-11-20.</p>
+    <p><b>Not investment advice.</b> For education only. Past patterns may not repeat. Do your own research.</p>
+  </footer>
+</main>
+</body>
+</html>

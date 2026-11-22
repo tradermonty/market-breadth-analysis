@@ -46,6 +46,8 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v3
+      with:
+        persist-credentials: false
 
     - name: Set up Python
       uses: actions/setup-python@v4
@@ -80,6 +82,14 @@ jobs:
         if-no-files-found: warn
         retention-days: 7
 
+    # Keep the published plain-English explainer (re-checked) so every deploy keeps its link.
+    # Trusted repo code only; it can never block the chart publication.
+    - name: Carry forward breadth explainer
+      continue-on-error: true
+      run: >-
+        python scripts/breadth_explainer.py carry-forward
+        --site-dir "$RUNNER_TEMP/market-breadth-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+
     - name: Setup Pages
       uses: actions/configure-pages@v4
 
@@ -100,3 +110,196 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+  # ---------------------------------------------------------------------------------------
+  # Plain-English explainer (breadth_explained.html), written by Claude from the Market
+  # Breadth Analyzer + ELI5 skills. Optional and isolated from the chart publication:
+  #   explainer         - third-party skill code and Claude; read-only, no Pages permissions,
+  #                       no access to the site directory. Produces explainer.html only.
+  #   explainer-publish - trusted repo code, no secrets: validates the page, adds a strict
+  #                       CSP and redeploys the already-deployed site plus that one file.
+  # Every step is non-blocking so the run (watched by scripts/monitor_feed.py) stays green;
+  # degradation is reported as ::warning:: annotations.
+  # ---------------------------------------------------------------------------------------
+  explainer:
+    needs: build
+    runs-on: ubuntu-latest
+    # Larger than the sum of step timeouts, so a hung step never fails the whole run.
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    outputs:
+      regenerate: ${{ steps.analyze.outputs.regenerate }}
+    steps:
+      - name: Checkout repository
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/setup-python@v4
+        with:
+          python-version-file: '.python-version'
+
+      - name: Install analyzer dependency
+        continue-on-error: true
+        timeout-minutes: 3
+        run: python -m pip install --disable-pip-version-check 'requests==2.34.2'
+
+      - name: Download built site
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/download-artifact@v4
+        with:
+          name: github-pages
+          path: ${{ runner.temp }}/pages
+
+      - name: Extract fresh CSVs
+        continue-on-error: true
+        timeout-minutes: 3
+        run: |
+          mkdir -p "$RUNNER_TEMP/site"
+          tar -xf "$RUNNER_TEMP/pages/artifact.tar" -C "$RUNNER_TEMP/site" \
+            ./market_breadth_data.csv ./market_breadth_summary.csv
+
+      - name: Check out Market Breadth Analyzer skill
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/checkout@v4
+        with:
+          repository: tradermonty/claude-trading-skills
+          ref: d5fcca78c0d8c8294ca53cf49a1cfbb1162df2c7 # pragma: allowlist secret (pinned commit SHA)
+          path: .explainer/claude-trading-skills
+          sparse-checkout: skills/market-breadth-analyzer
+          persist-credentials: false
+
+      - name: Check out ELI5 skill
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/checkout@v4
+        with:
+          repository: takusaotome/claude-skills-library
+          ref: dd1fb14d0fc6937104657c9ff1770abc57e81683 # pragma: allowlist secret (pinned commit SHA)
+          path: .explainer/claude-skills-library
+          sparse-checkout: skills/eli5
+          persist-credentials: false
+
+      - name: Analyze breadth
+        id: analyze
+        continue-on-error: true
+        timeout-minutes: 8
+        run: >-
+          python scripts/breadth_explainer.py analyze
+          --csv-dir "$RUNNER_TEMP/site"
+          --analyzer-dir .explainer/claude-trading-skills/skills/market-breadth-analyzer
+          --eli5-dir .explainer/claude-skills-library/skills/eli5
+          --work-dir "$RUNNER_TEMP/explainer"
+
+      - name: Install Claude Code CLI
+        if: steps.analyze.outputs.regenerate == 'true'
+        continue-on-error: true
+        timeout-minutes: 5
+        run: npm install --global --no-fund --no-audit @anthropic-ai/claude-code@2.1.330
+
+      - name: Write explainer with Claude
+        if: steps.analyze.outputs.regenerate == 'true'
+        continue-on-error: true
+        timeout-minutes: 15
+        working-directory: ${{ runner.temp }}/explainer
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          EXPLAINER_MODEL: claude-opus-5-5
+        # Tools are scoped to this workspace: reads only inside it, writes only explainer.html.
+        run: >-
+          claude -p "$(cat prompt.md)" --model "$EXPLAINER_MODEL" --max-budget-usd 2
+          --setting-sources project --permission-mode dontAsk
+          --allowedTools "Read(./**),Glob,Skill,Write(./explainer.html),Edit(./explainer.html)"
+          || echo "::warning title=Breadth explainer::Claude step exited with $?"
+
+      - name: Upload explainer
+        if: steps.analyze.outputs.regenerate == 'true'
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/upload-artifact@v4
+        with:
+          name: breadth-explainer
+          path: |
+            ${{ runner.temp }}/explainer/explainer.html
+            ${{ runner.temp }}/explainer/facts.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  explainer-publish:
+    needs: [build, deploy, explainer]
+    if: needs.explainer.outputs.regenerate == 'true'
+    runs-on: ubuntu-latest
+    # Larger than the sum of step timeouts below, so a hung step never fails the whole run.
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+    steps:
+      - name: Checkout repository
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/setup-python@v4
+        with:
+          python-version-file: '.python-version'
+
+      - name: Download deployed site
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/download-artifact@v4
+        with:
+          name: github-pages
+          path: ${{ runner.temp }}/pages
+
+      - name: Download explainer
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/download-artifact@v4
+        with:
+          name: breadth-explainer
+          path: ${{ runner.temp }}/explainer
+
+      - name: Validate explainer
+        id: finalize
+        continue-on-error: true
+        timeout-minutes: 3
+        run: |
+          mkdir -p "$RUNNER_TEMP/site"
+          tar -xf "$RUNNER_TEMP/pages/artifact.tar" -C "$RUNNER_TEMP/site"
+          python scripts/breadth_explainer.py finalize \
+            --site-dir "$RUNNER_TEMP/site" --work-dir "$RUNNER_TEMP/explainer"
+
+      - name: Upload site with explainer
+        if: steps.finalize.outputs.publish == 'true'
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/upload-pages-artifact@v3
+        with:
+          name: github-pages-explainer
+          path: ${{ runner.temp }}/site
+          retention-days: 1
+
+      - name: Redeploy GitHub Pages
+        if: steps.finalize.outputs.publish == 'true'
+        continue-on-error: true
+        timeout-minutes: 8
+        uses: actions/deploy-pages@v4
+        with:
+          artifact_name: github-pages-explainer
