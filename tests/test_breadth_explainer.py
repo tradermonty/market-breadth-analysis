@@ -394,6 +394,26 @@ def test_19b_run_analyzer_uses_scrubbed_environment(tmp_path, monkeypatch):
     assert set(calls['env']) == {'PATH', 'HOME'} and calls['check'] is True and calls['timeout']
 
 
+def test_19c_run_analyzer_resolves_relative_skill_dir(tmp_path, monkeypatch):
+    # The workflow passes a relative --analyzer-dir; the script runs with cwd=<skill>/scripts,
+    # so a relative script path would be resolved twice (the first live run failed this way).
+    seen = {}
+
+    def fake_run(argv, **kwargs):
+        seen['script'], seen['cwd'] = argv[1], kwargs['cwd']
+        raise RuntimeError('stop before the server is used')
+
+    (tmp_path / 'repo' / 'skill' / 'scripts').mkdir(parents=True)
+    monkeypatch.chdir(tmp_path / 'repo')
+    monkeypatch.setattr(bx.subprocess, 'run', fake_run)
+    monkeypatch.setattr(bx.http.server, 'ThreadingHTTPServer', _NoSocketServer)
+    with pytest.raises(RuntimeError):
+        bx._run_analyzer(tmp_path, Path('skill'), tmp_path / 'out')
+    expected = tmp_path.resolve() / 'repo' / 'skill' / 'scripts'
+    assert Path(seen['script']) == expected / 'market_breadth_analyzer.py'
+    assert Path(seen['cwd']) == expected
+
+
 class _NoSocketServer:
     def __init__(self, address, handler):
         self.server_address = ('127.0.0.1', 1)

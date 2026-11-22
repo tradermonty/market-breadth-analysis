@@ -419,7 +419,8 @@ def _run_analyzer(csv_dir, analyzer_dir, out_dir):
     port = server.server_address[1]
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
-        scripts = Path(analyzer_dir) / 'scripts'
+        # Absolute: the script runs with cwd=scripts, so a relative path would resolve twice.
+        scripts = Path(analyzer_dir).resolve() / 'scripts'
         subprocess.run(  # nosec B603 - fixed argv, pinned skill script
             [
                 sys.executable,
