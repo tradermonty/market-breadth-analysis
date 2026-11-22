@@ -89,7 +89,7 @@ indent-style = "space"
 
 [tool.codespell]
 skip = "*.csv,*.json,*.html,*.png,./data/*,./reports/*,./venv311/*,./archive/*,./.git/*,uv.lock,requirements*.txt"
-ignore-words-list = "ags,hist,thr,assertIn,trough"
+ignore-words-list = "ags,hist,thr,assertIn,trough,doubleclick"
 
 [tool.bandit]
 exclude_dirs = ["tests", "archive", "venv311"]

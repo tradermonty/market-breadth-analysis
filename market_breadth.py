@@ -759,6 +759,22 @@ def extract_chart_data_50(above_ma_50, sp500_data, short_ma_period=10, start_dat
     }
 
 
+# Phone layout script embedded into market_breadth.html (see web/market_breadth_mobile.js).
+MOBILE_CHART_SCRIPT = pathlib.Path(__file__).resolve().parent / 'web' / 'market_breadth_mobile.js'
+# Viewport tag plus zero body margin so the chart is edge to edge (it sits inside an iframe on the index page).
+VIEWPORT_META = '<meta name="viewport" content="width=device-width, initial-scale=1">\n<style>body{margin:0}</style>'
+
+
+def _add_viewport_meta(html_file):
+    """Plotly's full-page HTML has no viewport tag, so phones render it at desktop width and shrink it."""
+    html = html_file.read_text(encoding='utf-8')
+    if 'name="viewport"' in html:
+        return
+    if '<head>' not in html:
+        raise ValueError(f'No <head> in {html_file}; cannot add viewport meta')
+    html_file.write_text(html.replace('<head>', '<head>\n' + VIEWPORT_META, 1), encoding='utf-8')
+
+
 def detect_bearish_regions(breadth_ma_200_trend, breadth_ma_short, breadth_ma_200):
     """Convert day-level bearish mask into a list of (start, end) continuous intervals.
 
@@ -1228,9 +1244,9 @@ def plot_breadth_and_sp500_with_peaks(
             )
 
     # --- Layout ---
+    # No fixed width: the chart fills its container so it fits phones (PNG export sets its own width).
     fig.update_layout(
         height=chart_height,
-        width=1200,
         plot_bgcolor='white',
         paper_bgcolor='white',
         hovermode='x unified',
@@ -1254,6 +1270,7 @@ def plot_breadth_and_sp500_with_peaks(
         rangeselector=dict(
             buttons=[
                 dict(count=1, label='1Y', step='year', stepmode='backward'),
+                dict(count=2, label='2Y', step='year', stepmode='backward'),
                 dict(count=3, label='3Y', step='year', stepmode='backward'),
                 dict(count=5, label='5Y', step='year', stepmode='backward'),
                 dict(step='all', label='ALL'),
@@ -1274,6 +1291,8 @@ def plot_breadth_and_sp500_with_peaks(
         str(html_file),
         include_plotlyjs=True,
         full_html=True,
+        default_width='100%',
+        post_script=MOBILE_CHART_SCRIPT.read_text(encoding='utf-8'),
         config={
             'displayModeBar': True,
             'modeBarButtonsToRemove': ['lasso2d', 'select2d'],
@@ -1281,6 +1300,7 @@ def plot_breadth_and_sp500_with_peaks(
             'responsive': True,
         },
     )
+    _add_viewport_meta(html_file)
     print(f'Interactive chart saved to {html_file}')
 
     # PNG output (backward compatibility)

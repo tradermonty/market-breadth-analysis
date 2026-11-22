@@ -19,6 +19,8 @@ on:
       - 'scripts/**'
       - 'security/**'
       - '.secrets.baseline'
+      - 'web/**'
+      - 'reports/*.html'
 
 jobs:
   lint:
