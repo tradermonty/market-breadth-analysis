@@ -62,6 +62,7 @@
             color: #0366d6;
             text-decoration: none;
             margin: 0 10px;
+            white-space: nowrap;
         }
         .download-links a:hover {
             text-decoration: underline;
@@ -84,11 +85,39 @@
             z-index: 1;
         }
 
-        /* Mobile: taller aspect ratio for readability */
+        /* Phone: full-bleed chart with a fixed height, so the page (not the iframe) scrolls.
+           The chart itself switches to its phone layout inside the iframe (web/market_breadth_mobile.js). */
         @media (max-width: 768px) {
-            body { padding: 5px; }
-            .container { padding: 8px; }
-            .chart-container { padding-top: 120%; }
+            body { padding: 0; background-color: white; }
+            .container { padding: 12px 0 24px; border-radius: 0; box-shadow: none; }
+            header { padding: 0 16px; }
+            h1 { text-align: left; font-size: 1.25rem; margin: 0; }
+            .last-update { text-align: left; margin: 2px 0 0; font-size: 0.8em; }
+            .chart-container { padding-top: 0; height: 860px; margin: 8px 0 0; }
+            .chart-container iframe, .chart-container img { border-radius: 0; }
+            .download-links {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 8px;
+                padding: 0 16px;
+                margin-top: 16px;
+                font-size: 0.95em;
+            }
+            .download-links a {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                min-height: 44px;
+                margin: 0;
+                padding: 4px 8px;
+                border: 1px solid #d0d7de;
+                border-radius: 8px;
+                white-space: normal;
+                text-align: center;
+                line-height: 1.3;
+            }
+            .download-links a.wide { grid-column: 1 / -1; }
+            .download-links .separator { display: none; }
         }
 
         /* Tablet */
@@ -99,26 +128,28 @@
 </head>
 <body>
     <div class="container">
-        <h1>Market Breadth Analysis</h1>
+        <header>
+            <h1>Market Breadth Analysis</h1>
+            <div class="last-update">
+                Last Update: <span id="last-update"></span>
+            </div>
+        </header>
         <div class="chart-container">
             <div class="error-message" id="error-message">
                 Failed to load the chart. Please try again later.
             </div>
             <!-- Primary: Interactive HTML chart -->
-            <iframe id="chart-iframe" style="display:none;"></iframe>
+            <iframe id="chart-iframe" title="Market breadth chart" style="display:none;"></iframe>
             <!-- Fallback: Static PNG image -->
             <img id="chart-image" alt="Market Breadth Analysis Chart" style="display:none;">
-        </div>
-        <div class="last-update">
-            Last Update: <span id="last-update"></span>
         </div>
         <div class="download-links">
             <a href="market_breadth_data.csv" download>CSV Data</a>
             <span class="separator">|</span>
             <a href="market_breadth_summary.csv" download>Summary</a>
             <span class="separator">|</span>
-            <a href="downtrend_forecast.html">Long-History Pink Scenarios</a>
-            <a href="downtrend_forecast_high_price.html">Pink Onsets Near Price Highs</a>
+            <a class="wide" href="downtrend_forecast.html">Long-History Pink Scenarios</a>
+            <a class="wide" href="downtrend_forecast_high_price.html">Pink Onsets Near Price Highs</a>
         </div>
     </div>
     <script>
@@ -152,7 +183,8 @@
             fetch('market_breadth.html', { method: 'HEAD' })
                 .then(response => {
                     if (response.ok) {
-                        iframe.src = 'market_breadth.html';
+                        // Pass query options (e.g. ?initial=1y) through to the chart.
+                        iframe.src = 'market_breadth.html' + location.search;
                         iframe.style.display = 'block';
                         updateLastModifiedDate('market_breadth.html');
                     } else {

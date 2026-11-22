@@ -9,6 +9,28 @@ import pandas as pd
 
 from scripts.analyze_clustered_pink import merge_intervals, pink_intervals
 
+PAGE_CSS = (
+    'body{background:#10131c;color:#e1e4ec;font:16px/1.65 Arial,sans-serif;max-width:1150px;margin:45px auto;'
+    'padding:0 24px}\n'
+    'h1,h2{color:#f0b3ce}table{border-collapse:collapse;width:100%;margin:20px 0}td,th{padding:12px;'
+    'border-bottom:1px solid #394254;text-align:right}td:first-child,th:first-child{text-align:left}'
+    '.note{background:#1d2535;padding:18px;border-radius:10px}a{color:#b9d8ff}\n'
+    # Phones: readable type, tighter margins, wide tables scroll sideways instead of shrinking the page.
+    '@media(max-width:700px){body{margin:16px auto;padding:0 16px;font-size:15px;line-height:1.6}'
+    'h1{font-size:22px;line-height:1.3}h2{font-size:18px;margin-top:28px}.note{padding:12px}'
+    'table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;font-size:13px;white-space:nowrap}'
+    'td,th{padding:8px 10px}}\n'
+)
+
+
+def page_head(title):
+    """Document head for the published report, including the viewport tag phones need."""
+    return (
+        '<!doctype html><html lang="en"><meta charset="utf-8">\n'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+        f'<title>{html.escape(title)}</title><style>\n{PAGE_CSS}</style>'
+    )
+
 
 def chattering_starts(events, dates, max_gap=5, max_span=40, min_segments=3):
     positions = {str(value)[:10]: i for i, value in enumerate(dates)}
@@ -166,11 +188,7 @@ def study(directory, output, exclude_chattering=False):
         >= -2
     )
     s = cohorts['same_age']
-    output.write_text(f"""<!doctype html><html lang="en"><meta charset="utf-8">
-<title>Pink Onsets Near Price Highs</title><style>
-body{{background:#10131c;color:#e1e4ec;font:16px/1.65 Arial,sans-serif;max-width:1150px;margin:45px auto;padding:0 24px}}
-h1,h2{{color:#f0b3ce}}table{{border-collapse:collapse;width:100%;margin:20px 0}}td,th{{padding:12px;border-bottom:1px solid #394254;text-align:right}}td:first-child,th:first-child{{text-align:left}}.note{{background:#1d2535;padding:18px;border-radius:10px}}a{{color:#b9d8ff}}
-</style><h1>Pink Onsets Near Price Highs{' — Rapid Switching Excluded' if exclude_chattering else ''}</h1>
+    output.write_text(f"""{page_head('Pink Onsets Near Price Highs')}<h1>Pink Onsets Near Price Highs{' — Rapid Switching Excluded' if exclude_chattering else ''}</h1>
 <p><a href="index.html">Market breadth dashboard</a> · <a href="downtrend_forecast.html">Long-history scenarios</a></p>
 <p>Frozen data through {data['as_of']}. Current onset: {data['current_start']}; current episode is on session 11.</p>
 <p class="note">Exploratory study using the current 504-stock survivor cohort with the project's fixed denominator. Missing historical prices and membership limitations affect early episodes. These are historical frequencies, not calibrated forecasts. The ongoing episode is excluded.</p>

@@ -302,12 +302,12 @@ class TestPlotlyInteractiveFeatures(unittest.TestCase):
         _, cls.fig, cls.tmpdir = _cached_fig()
 
     def test_19_range_selector_buttons(self):
-        """Range selector should have 1Y, 3Y, 5Y, ALL buttons."""
+        """Range selector should have 1Y, 2Y, 3Y, 5Y, ALL buttons."""
         # Range selector is on xaxis (panel 1)
         rs = self.fig.layout.xaxis.rangeselector
         self.assertIsNotNone(rs, 'Range selector not found on xaxis')
         labels = [b.label for b in rs.buttons]
-        for expected in ['1Y', '3Y', '5Y', 'ALL']:
+        for expected in ['1Y', '2Y', '3Y', '5Y', 'ALL']:
             self.assertIn(expected, labels, f"Button '{expected}' missing from range selector")
 
     def test_20_hover_mode(self):
@@ -315,9 +315,9 @@ class TestPlotlyInteractiveFeatures(unittest.TestCase):
         self.assertEqual(self.fig.layout.hovermode, 'x unified')
 
     def test_21_layout_dimensions(self):
-        """Layout should be 900 height x 1200 width."""
+        """Layout is 900 high; width is unset so the chart fills its container (phones included)."""
         self.assertEqual(self.fig.layout.height, 900)
-        self.assertEqual(self.fig.layout.width, 1200)
+        self.assertIsNone(self.fig.layout.width)
 
 
 # ===================================================================
