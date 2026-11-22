@@ -96,6 +96,15 @@ class TestHighPricePage(unittest.TestCase):
         self.assertIn('@media(max-width:700px)', html)
 
 
+def _pin_wrapper_height(html_path):
+    """Make the outer wrapper look like Plotly 7's write_html output: <div style="height:Npx; width:100%;">."""
+    text = html_path.read_text()
+    height = re.search(r'"height":(\d+)', text).group(1)
+    pinned, n = re.subn(r'(<body>\s*)<div[^>]*>', rf'\1<div style="height:{height}px; width:100%;">', text, count=1)
+    assert n == 1, 'wrapper div not found'
+    html_path.write_text(pinned)
+
+
 def _playwright():
     try:
         from playwright.sync_api import sync_playwright
@@ -134,11 +143,14 @@ class TestChartInBrowser(unittest.TestCase):
 
     THREE_PANEL = False
     LINES = 3  # price, 200MA, short MA
+    PINNED_WRAPPER = False
 
     @classmethod
     def setUpClass(cls):
         cls.tmpdir = tempfile.mkdtemp()
         _, sp500, cls.html_path = _build_chart(cls.tmpdir, three_panel=cls.THREE_PANEL)
+        if cls.PINNED_WRAPPER:
+            _pin_wrapper_height(cls.html_path)
         cls.last = sp500.index[-1].date()
         cls.last_x = 'xaxis3' if cls.THREE_PANEL else 'xaxis2'
         cls.pw = _playwright()().start()
@@ -254,6 +266,12 @@ class TestThreePanelChartInBrowser(TestChartInBrowser):
 
     THREE_PANEL = True
     LINES = 5  # price, 50MA, short MA (50), 200MA, short MA (200)
+
+
+class TestPlotly7WrapperChartInBrowser(TestThreePanelChartInBrowser):
+    """Plotly 7 (the locked CI/publish version) pins the outer wrapper div to the desktop height."""
+
+    PINNED_WRAPPER = True
 
 
 if __name__ == '__main__':
