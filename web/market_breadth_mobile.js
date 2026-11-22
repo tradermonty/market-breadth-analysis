@@ -175,9 +175,11 @@
     var dots = [];
     for (var j = ORIGINAL_COUNT; j < gd.data.length; j++) dots.push(j);
 
-    // write_html pins the div to the desktop height inline; keep it equal to the drawn chart
-    // so phones get no blank scroll area below it.
+    // write_html pins the plot div (and, in Plotly 7, its wrapper div) to the desktop height
+    // inline; keep both equal to the drawn chart so phones get no blank scroll area below it.
     gd.style.height = lay.height + 'px';
+    var wrapper = gd.parentElement;
+    if (wrapper && wrapper !== document.body) wrapper.style.height = lay.height + 'px';
     // Drop the width Plotly auto-filled for the previous size so the chart refits after a breakpoint change.
     var base = Object.assign({}, gd.layout);
     delete base.width;
