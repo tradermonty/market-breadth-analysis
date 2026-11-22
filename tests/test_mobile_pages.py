@@ -72,6 +72,14 @@ class TestIndexPage(unittest.TestCase):
     def test_07_index_links_are_tap_sized_on_phones(self):
         self.assertIn('min-height: 44px', self.html)
 
+    def test_07b_index_links_to_ai_breadth_skill_guide(self):
+        link = re.search(r'<a [^>]*href="([^"]+)"[^>]*class="ai-skill-link"[^>]*>', self.html)
+        self.assertIsNotNone(link, 'AI analysis link missing')
+        self.assertEqual(
+            link.group(1), 'https://tradermonty.github.io/claude-trading-skills/en/skills/market-breadth-analyzer/'
+        )
+        self.assertIn('rel="noopener"', link.group(0))
+
 
 class TestHighPricePage(unittest.TestCase):
     def test_08_generator_head_declares_viewport_and_phone_css(self):

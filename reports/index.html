@@ -70,6 +70,20 @@
         .download-links .separator {
             color: #ccc;
         }
+        /* Low-key pointer to the Claude skill that analyzes this site's data */
+        .ai-note {
+            text-align: center;
+            color: #777;
+            font-size: 0.8em;
+            margin: 14px 0 4px;
+        }
+        .ai-note a {
+            color: #0366d6;
+            text-decoration: none;
+        }
+        .ai-note a:hover {
+            text-decoration: underline;
+        }
         .error-message {
             color: #721c24;
             background-color: #f8d7da;
@@ -118,6 +132,7 @@
             }
             .download-links a.wide { grid-column: 1 / -1; }
             .download-links .separator { display: none; }
+            .ai-note { padding: 0 16px; margin-top: 18px; line-height: 1.5; }
         }
 
         /* Tablet */
@@ -151,6 +166,10 @@
             <a class="wide" href="downtrend_forecast.html">Long-History Pink Scenarios</a>
             <a class="wide" href="downtrend_forecast_high_price.html">Pink Onsets Near Price Highs</a>
         </div>
+        <p class="ai-note">
+            Want to analyze this breadth data with AI?
+            <a href="https://tradermonty.github.io/claude-trading-skills/en/skills/market-breadth-analyzer/" class="ai-skill-link" target="_blank" rel="noopener">Try the Market Breadth Analyzer skill for Claude &rarr;</a>
+        </p>
     </div>
     <script>
         function updateLastModifiedDate(resourcePath) {
