@@ -620,3 +620,12 @@ def test_25b_hung_steps_cannot_time_out_the_job(wf, job):
 def test_26_index_links_to_explainer():
     html = (ROOT / 'reports' / 'index.html').read_text()
     assert 'href="breadth_explained.html"' in html
+
+
+def test_26b_explainer_link_is_a_button_next_to_the_title():
+    # The daily explainer is the page's headline link: a button in the header, above the chart.
+    html = (ROOT / 'reports' / 'index.html').read_text()
+    assert html.count('href="breadth_explained.html"') == 1
+    header = html[html.index('<header>') : html.index('</header>')]
+    assert 'class="explainer-button" href="breadth_explained.html"' in header
+    assert '.explainer-button {' in html
