@@ -26,6 +26,37 @@
             font-size: clamp(1.2rem, 4vw, 1.8rem);
             margin: 10px 0;
         }
+        /* Headline link to the daily AI explainer, placed right under the title */
+        .explainer-cta {
+            text-align: center;
+            margin: 12px 0 4px;
+        }
+        .explainer-button {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 44px;
+            padding: 8px 22px;
+            background-color: #0366d6;
+            color: #fff;
+            font-weight: 600;
+            text-decoration: none;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+        }
+        .explainer-button:hover,
+        .explainer-button:focus-visible {
+            background-color: #0256b4;
+        }
+        .explainer-button:focus-visible {
+            outline: 3px solid #9ecbff;
+            outline-offset: 2px;
+        }
+        .explainer-sub {
+            color: #666;
+            font-size: 0.8em;
+            margin-top: 4px;
+        }
         .chart-container {
             margin: 10px 0;
             text-align: center;
@@ -107,6 +138,8 @@
             header { padding: 0 16px; }
             h1 { text-align: left; font-size: 1.25rem; margin: 0; }
             .last-update { text-align: left; margin: 2px 0 0; font-size: 0.8em; }
+            .explainer-cta { text-align: left; margin: 10px 0 0; }
+            .explainer-button { display: flex; width: 100%; box-sizing: border-box; }
             .chart-container { padding-top: 0; height: 860px; margin: 8px 0 0; }
             .chart-container iframe, .chart-container img { border-radius: 0; }
             .download-links {
@@ -148,6 +181,10 @@
             <div class="last-update">
                 Last Update: <span id="last-update"></span>
             </div>
+            <div class="explainer-cta">
+                <a class="explainer-button" href="breadth_explained.html">Today's Breadth, Explained Simply &rarr;</a>
+                <div class="explainer-sub">A plain-English read of today's chart, updated daily</div>
+            </div>
         </header>
         <div class="chart-container">
             <div class="error-message" id="error-message">
@@ -162,8 +199,6 @@
             <a href="market_breadth_data.csv" download>CSV Data</a>
             <span class="separator">|</span>
             <a href="market_breadth_summary.csv" download>Summary</a>
-            <span class="separator">|</span>
-            <a class="wide" href="breadth_explained.html">Today's Breadth, Explained Simply</a>
             <span class="separator">|</span>
             <a class="wide" href="downtrend_forecast.html">Long-History Pink Scenarios</a>
             <a class="wide" href="downtrend_forecast_high_price.html">Pink Onsets Near Price Highs</a>
