@@ -2,10 +2,12 @@ name: Daily Market Breadth Analysis
 
 on:
   schedule:
-    # Pre-market: ~4:00 AM West Coast (11:00 UTC)
-    - cron: '0 11 * * 1-5'
-    # Post-market: ~2:00 PM PST / 3:00 PM PDT (22:00 UTC)
-    - cron: '0 22 * * 1-5'
+    # Post-market only: 6:00 PM EST / 7:00 PM EDT (23:00 UTC), after the close settles.
+    # GitHub often starts scheduled runs hours late, so a local launchd job
+    # (com.tradermonty.market-breadth-backup-trigger, 3:00 PM PT) dispatches this
+    # workflow through trigger_market_breadth.py when the published CSV is stale.
+    # A pre-market run was dropped: it could only republish the previous session.
+    - cron: '0 23 * * 1-5'
   workflow_dispatch:  # Enable manual execution
 
 # Set required permissions for GitHub Pages deployment
