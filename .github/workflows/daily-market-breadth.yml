@@ -371,9 +371,34 @@ jobs:
       # Deploy only our own upload: if an earlier (untrusted) job had already created an
       # artifact with this name, our upload fails and nothing is deployed.
       - name: Redeploy GitHub Pages
+        id: deploy
         if: steps.finalize.outputs.publish == 'true' && steps.upload.outcome == 'success'
         continue-on-error: true
         timeout-minutes: 8
         uses: actions/deploy-pages@v4
         with:
           artifact_name: github-pages-explainer
+
+      # deploy-pages looks the artifact up about a second after the upload, and the API does
+      # not always list it yet ("No artifacts named ..."). Wait, then retry once.
+      - name: Wait before retrying redeploy
+        if: steps.deploy.outcome == 'failure'
+        continue-on-error: true
+        timeout-minutes: 2
+        run: sleep 30
+
+      - name: Retry GitHub Pages redeploy
+        id: deploy_retry
+        if: steps.deploy.outcome == 'failure'
+        continue-on-error: true
+        timeout-minutes: 8
+        uses: actions/deploy-pages@v4
+        with:
+          artifact_name: github-pages-explainer
+
+      # Steps above never fail the job, so surface a missed deploy as a run annotation.
+      - name: Warn if explainer was not deployed
+        if: steps.deploy.outcome == 'failure' && steps.deploy_retry.outcome != 'success'
+        continue-on-error: true
+        timeout-minutes: 1
+        run: echo "::warning title=Breadth explainer::Pages redeploy failed twice; the site still shows the previous explainer."
