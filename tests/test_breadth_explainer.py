@@ -607,6 +607,26 @@ def test_25_explainer_publish_redeploys_only_its_own_validated_upload(wf):
     assert deploy['with']['artifact_name'] == upload['with']['name']
 
 
+def test_25c_failed_redeploy_is_retried_after_a_wait_and_warned(wf):
+    # deploy-pages can look up the artifact before the API lists the upload made a second
+    # earlier ("No artifacts named ..."). Wait and retry once; warn if it still did not deploy.
+    steps = wf['jobs']['explainer-publish']['steps']
+    names = [s['name'] for s in steps]
+    deploy = steps[names.index('Redeploy GitHub Pages')]
+    wait = steps[names.index('Wait before retrying redeploy')]
+    retry = steps[names.index('Retry GitHub Pages redeploy')]
+    warn = steps[names.index('Warn if explainer was not deployed')]
+    assert names.index(deploy['name']) < names.index(wait['name']) < names.index(retry['name'])
+    assert names.index(retry['name']) < names.index(warn['name'])
+    assert deploy['id'] == 'deploy'
+    assert wait['if'] == retry['if'] == "steps.deploy.outcome == 'failure'"
+    assert re.search(r'sleep \d+', wait['run'])
+    assert retry['id'] == 'deploy_retry'
+    assert retry['uses'] == deploy['uses'] and retry['with'] == deploy['with']
+    assert warn['if'] == "steps.deploy.outcome == 'failure' && steps.deploy_retry.outcome != 'success'"
+    assert '::warning' in warn['run']
+
+
 @pytest.mark.parametrize('job', EXPLAINER_JOBS)
 def test_25b_hung_steps_cannot_time_out_the_job(wf, job):
     # A job-level timeout concludes the run as failure, which scripts/monitor_feed.py would
