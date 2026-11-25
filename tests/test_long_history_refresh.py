@@ -196,3 +196,19 @@ def test_13_prepare_without_end_date_uses_metadata_manifest(tmp_path):
 def test_14_session_count_is_singular_for_one():
     assert sessions_text(1) == '1 session'
     assert sessions_text(3) == '3 sessions'
+
+
+def test_15_metadata_request_errors_do_not_leak_api_key(monkeypatch):
+    import pytest
+    import requests
+
+    from scripts.refresh_long_history_metadata import _get
+
+    def boom(url, params, timeout):
+        raise requests.ConnectionError(f'failed: {url}?apikey={params["apikey"]}')
+
+    monkeypatch.setattr('scripts.refresh_long_history_metadata.requests.get', boom)
+    with pytest.raises(RuntimeError) as error:
+        _get('sp500_constituent', 'SECRET123')
+    assert 'SECRET123' not in str(error.value)
+    assert error.value.__cause__ is None and error.value.__suppress_context__

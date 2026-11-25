@@ -56,11 +56,18 @@ def membership_audit(current, changes, end):
 
 
 def _get(path, api_key, params=None):
-    response = requests.get(BASE + path, params={**(params or {}), 'apikey': api_key}, timeout=60)
-    # Do not include the URL in errors: it carries the API key.
+    # Never surface the URL or request exception text: both can carry the API key.
+    try:
+        response = requests.get(BASE + path, params={**(params or {}), 'apikey': api_key}, timeout=60)
+    except requests.RequestException as error:
+        raise RuntimeError(f'{path}: {type(error).__name__}') from None
     if response.status_code != 200:
         raise RuntimeError(f'{path}: HTTP {response.status_code}')
-    return response.json(), hashlib.sha256(response.content).hexdigest()
+    try:
+        payload = response.json()
+    except ValueError:
+        raise RuntimeError(f'{path}: invalid JSON response') from None
+    return payload, hashlib.sha256(response.content).hexdigest()
 
 
 def refresh(directory, previous_directory, env_file, end):
