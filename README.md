@@ -23,12 +23,12 @@ A tool for analyzing and visualizing the market breadth of S&P500 stocks.
 
 ## Live Data (GitHub Pages)
 
-The latest market breadth data is automatically updated twice daily and published to GitHub Pages:
+The latest market breadth data is updated automatically every weekday after the US market close and published to GitHub Pages:
 
 | Resource | URL |
 |---|---|
-| Interactive Chart | [market_breadth.html](https://tradermonty.github.io/market-breadth-analysis/market_breadth.html) |
 | Dashboard | [index.html](https://tradermonty.github.io/market-breadth-analysis/) |
+| Daily Report | [breadth_explained.html](https://tradermonty.github.io/market-breadth-analysis/breadth_explained.html) |
 | Data CSV | [market_breadth_data.csv](https://tradermonty.github.io/market-breadth-analysis/market_breadth_data.csv) |
 | Summary CSV | [market_breadth_summary.csv](https://tradermonty.github.io/market-breadth-analysis/market_breadth_summary.csv) |
 

@@ -21,10 +21,12 @@ returns 5xx or an unexpected payload, or `exchange_calendars` is unavailable.
 The monitor does not guess holidays.
 
 Why a 24-hour grace: scheduled producer runs often start hours late (0.3 to
-10.3 hours across 40 runs before 2026-11-13). With 24 hours, each weekday
-session gets both producer attempts before an alarm. A Friday session gets
-only the Friday 22:00 UTC attempt, so a failed Friday run is a real weekend
-outage.
+10.3 hours across 40 runs before 2026-11-13). Since 2026-11-25 the producer
+has one post-market cron (23:00 UTC, weekdays), backed by a local launchd job
+that dispatches it at 3:00 PM PT when the CSV is stale. With 24 hours, each
+session gets the cron, the local dispatch and the next weekday's cron before an
+alarm. A Friday session gets no next-day cron, so a failed Friday run that the
+local dispatch does not recover is a real weekend outage.
 
 Deploys in progress: GitHub Pages caches each file for 600 seconds and ignores
 query strings. If the CSV, summary and JSON disagree, the monitor waits until

@@ -4,7 +4,8 @@ name: Feed Monitor
 # public feed and the producer's state. Recovery runbook: docs/feed_monitoring.md.
 on:
   schedule:
-    # Daily 23:30 UTC, after both producer crons including typical start delays.
+    # Daily 23:30 UTC. Judges sessions closed 24+ hours ago, so it does not race
+    # the producer's 23:00 UTC cron or its local 3:00 PM PT backup dispatch.
     - cron: '30 23 * * *'
   workflow_dispatch:
     inputs:

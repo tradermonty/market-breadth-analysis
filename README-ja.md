@@ -23,12 +23,12 @@ S&P500銘柄のマーケットブレッドを分析・可視化するツール�
 
 ## ライブデータ（GitHub Pages）
 
-最新の Market Breadth データは1日2回自動更新され、GitHub Pages で公開されています:
+最新の Market Breadth データは、平日の米国市場の引け後に自動更新され、GitHub Pages で公開されています:
 
 | リソース | URL |
 |---|---|
-| インタラクティブチャート | [market_breadth.html](https://tradermonty.github.io/market-breadth-analysis/market_breadth.html) |
 | ダッシュボード | [index.html](https://tradermonty.github.io/market-breadth-analysis/) |
+| デイリーレポート | [breadth_explained.html](https://tradermonty.github.io/market-breadth-analysis/breadth_explained.html) |
 | データCSV | [market_breadth_data.csv](https://tradermonty.github.io/market-breadth-analysis/market_breadth_data.csv) |
 | サマリーCSV | [market_breadth_summary.csv](https://tradermonty.github.io/market-breadth-analysis/market_breadth_summary.csv) |
 
