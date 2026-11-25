@@ -15,8 +15,11 @@ import pandas as pd
 import requests
 from dotenv import load_dotenv
 
+from scripts.prepare_long_history import resolve_end
 
-def fetch_history(directory, env_file):
+
+def fetch_history(directory, env_file, end=None):
+    end = resolve_end(directory, end)
     load_dotenv(env_file)
     api_key = os.environ['FMP_API_KEY']
     symbols = json.loads((directory / 'universe.json').read_text())
@@ -25,7 +28,7 @@ def fetch_history(directory, env_file):
     lock = threading.Lock()
     next_request = [0.0]
 
-    def request(symbol, start='1990-01-01', end='2026-10-02'):
+    def request(symbol, start='1990-01-01', end=end):
         with lock:
             wait = max(0, next_request[0] - time.monotonic())
             if wait:
@@ -112,5 +115,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--directory', type=Path, required=True)
     parser.add_argument('--env-file', type=Path, required=True)
+    parser.add_argument(
+        '--end-date', help='Last price date requested (default: metadata_manifest.json end, else 2026-10-02)'
+    )
     args = parser.parse_args()
-    fetch_history(args.directory, args.env_file)
+    fetch_history(args.directory, args.env_file, args.end_date)

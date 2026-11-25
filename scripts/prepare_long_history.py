@@ -24,7 +24,21 @@ def trend_with_hysteresis(series):
     return result
 
 
-def prepare(directory):
+ORIGINAL_END = '2026-10-02'
+
+
+def resolve_end(directory, end=None):
+    """Explicit end date, else the cutoff recorded by the metadata refresh, else the original snapshot."""
+    if end:
+        return end
+    manifest = directory / 'metadata_manifest.json'
+    if manifest.exists():
+        return json.loads(manifest.read_text())['end']
+    return ORIGINAL_END
+
+
+def prepare(directory, end=None):
+    end = resolve_end(directory, end)
     manifest = json.loads((directory / 'acquisition_manifest.json').read_text())
     constituents = json.loads((directory / 'current_constituents.json').read_text())
     changes = json.loads((directory / 'historical_constituents.json').read_text())
@@ -49,7 +63,7 @@ def prepare(directory):
     above = (prices > moving) & eligible
     groups = collections.defaultdict(list)
     for item in changes:
-        if item.get('date') and '1990-01-01' <= item['date'] <= '2026-10-02':
+        if item.get('date') and '1990-01-01' <= item['date'] <= end:
             groups[pd.Timestamp(item['date'])].append(item)
     dates = sorted(groups, reverse=True)
     cursor = 0
@@ -136,5 +150,8 @@ def prepare(directory):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--directory', type=Path, required=True)
+    parser.add_argument(
+        '--end-date', help='Last membership change applied (default: metadata_manifest.json end, else 2026-10-02)'
+    )
     args = parser.parse_args()
-    prepare(args.directory)
+    prepare(args.directory, args.end_date)

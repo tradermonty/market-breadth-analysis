@@ -4,11 +4,28 @@ import argparse
 import json
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
+
 from scripts.build_downtrend_forecast import build, summarize_outcomes
 from scripts.render_downtrend_forecast_english import render
 
 
-def assemble(directory, output_dir, exclude_chattering=False):
+def previous_snapshot(directory):
+    """Summarize the reference model of a previous cache for the 'changes' section."""
+    frame = pd.read_csv(directory / 'current_fixed.csv', parse_dates=['Date'])
+    mask = frame['Bearish_Signal'].astype(str).str.lower().eq('true')
+    starts = np.flatnonzero(mask & ~mask.shift(1, fill_value=False))
+    return {
+        'as_of': str(frame.Date.iloc[-1].date()),
+        'start': str(frame.Date.iloc[starts[-1]].date()),
+        # Same onset eligibility as the study: skip the first 200 observations.
+        'onsets': [str(frame.Date.iloc[i].date()) for i in starts if i >= 200],
+        'current_count': len(json.loads((directory / 'current_constituents.json').read_text())),
+    }
+
+
+def assemble(directory, output_dir, exclude_chattering=False, previous=None):
     audit = json.loads((directory / 'dataset_audit.json').read_text())
     manifest = json.loads((directory / 'acquisition_manifest.json').read_text())
     membership = json.loads((directory / 'membership_audit.json').read_text())
@@ -26,6 +43,7 @@ def assemble(directory, output_dir, exclude_chattering=False):
         'membership_anomalies': len(membership['anomalies']),
         'datasets': audit,
         'model_summaries': {name: model['episode_summary'] for name, model in models.items()},
+        'current_starts': {name: model['current']['start'] for name, model in models.items()},
         'same_age_summary': summarize_outcomes(
             [e['episode_outcome'] for e in result['events'] if e['same_age_eligible']]
         ),
@@ -36,6 +54,7 @@ def assemble(directory, output_dir, exclude_chattering=False):
         stats,
         output_dir / 'long_current_fixed' / 'downtrend_forecast_input.csv',
         output_dir / 'downtrend_forecast.html',
+        previous=previous,
     )
 
 
@@ -44,5 +63,7 @@ if __name__ == '__main__':
     parser.add_argument('--directory', type=Path, required=True)
     parser.add_argument('--output-dir', type=Path, default=Path('reports'))
     parser.add_argument('--exclude-chattering', action='store_true')
+    parser.add_argument('--previous-directory', type=Path, help='Cache directory of the previous publication')
     args = parser.parse_args()
-    assemble(args.directory, args.output_dir, args.exclude_chattering)
+    previous = previous_snapshot(args.previous_directory) if args.previous_directory else None
+    assemble(args.directory, args.output_dir, args.exclude_chattering, previous)

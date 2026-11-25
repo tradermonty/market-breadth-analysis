@@ -1,17 +1,20 @@
 # Long-history breadth episode research
 
 The English publication pages are `reports/downtrend_forecast.html` and
-`reports/downtrend_forecast_high_price.html`. Both are dated
-research snapshot through 2026-10-02, not an automatically refreshed forecast.
-The daily workflow publishes this tracked file but does not rerun the study.
+`reports/downtrend_forecast_high_price.html`. Both are dated research snapshots,
+not automatically refreshed forecasts. `downtrend_forecast.html` is a snapshot
+through 2026-11-24 (cache `data/long_history_20261124/`);
+`downtrend_forecast_high_price.html` remains the 2026-10-02 snapshot.
+The daily workflow publishes these tracked files but does not rerun the study.
 
 ## Scope and evidence
 
-The research cache contains fresh FMP price responses for 1,256 candidate current
-and former constituents. 983 have usable positive adjusted prices, including all
-504 current constituents. SPY has 8,477 observations from 1993-01-29 through
-2026-10-02. Individual responses/cache files have hashes in the acquisition
-manifest. No API credential is saved in report artifacts or request diagnostics.
+The 2026-11-24 research cache contains fresh FMP price responses for 1,259
+candidate current and former constituents. 988 have usable positive adjusted
+prices, including all 503 current constituents. SPY has 8,514 observations from
+1993-01-29 through 2026-11-24. (The original 2026-10-02 cache: 1,256 candidates,
+983 usable, 504 current constituents, 8,477 SPY observations.) Individual
+responses/cache files have hashes in the acquisition manifest. No API credential is saved in report artifacts or request diagnostics.
 
 Three models are kept separate:
 
@@ -55,16 +58,20 @@ excluded as signal onsets. The first reference episode is 1994-03-30.
 The publication removes rapid switching with the same fixed rule on both pages:
 at least three pink segments, non-pink gaps no longer than five sessions, and a
 total first-onset-to-final-exit span no longer than 40 sessions. Original episode
-dates and outcomes remain unchanged; episodes are not merged. In the reference
-model, 2015-03-11, 2015-03-26 and 2015-04-17 are excluded. The 2018 episode remains.
+dates and outcomes remain unchanged; episodes are not merged. In the 2026-10-02
+reference model, 2015-03-11, 2015-03-26 and 2015-04-17 were excluded. In the
+2026-11-24 reference model the rebuilt current cohort no longer produces the
+2015-04-17 onset, so no chain qualifies and nothing is excluded. The 2018
+episode remains in both.
 This rule uses subsequent regime changes and is a retrospective sensitivity
-analysis, not a filter necessarily available at onset or session 11. Apply it
+analysis, not a filter necessarily available at onset or at the current age. Apply it
 separately to each alternative universe model. Bottom-detection searches still
 stop at the next original pink onset, including excluded episodes.
 
-The publication distinguishes retained completed episodes (reference n=53,
-original n=56) from those that remained pink through the current equivalent age
-(retained n=44, original n=45). It also
+The publication distinguishes retained completed episodes from those that
+remained pink through the current equivalent age. As of 2026-11-24 (current onset
+2026-11-19, session 4): completed n=55 retained / 55 original, same-age n=53.
+As of 2026-10-02 (onset 2026-09-18, session 11): 53 / 56 and 44 / 45. It also
 shows 5/21/63/126/252-session forward windows; these are convenience horizons,
 not optimized prediction intervals or the duration of an entire correction.
 Only forward windows ending before the current episode's onset are included.
@@ -87,6 +94,33 @@ python -m scripts.analyze_high_price_pink \
   --output reports/downtrend_forecast_high_price.html --exclude-chattering
 ```
 
+### Refreshing to a new cutoff (used for the 2026-11-24 snapshot)
+
+Create a new dated cache; never overwrite the previous one. The metadata step
+keeps the previous candidate universe and adds only symbols touched by
+membership changes after the previous cutoff (2026-11-24: OKTA, SKYD, TWLO).
+
+```bash
+python -m scripts.refresh_long_history_metadata --directory data/long_history_20261124 \
+  --previous-directory data/long_history_20261002 --env-file .env --end-date 2026-11-24
+python -m scripts.fetch_long_history --directory data/long_history_20261124 \
+  --env-file .env --end-date 2026-11-24
+python -m scripts.prepare_long_history --directory data/long_history_20261124 --end-date 2026-11-24
+python -m scripts.publish_long_history_report --directory data/long_history_20261124 \
+  --output-dir reports --exclude-chattering --previous-directory data/long_history_20261002
+```
+
+A refresh shifts historical breadth slightly for two reasons: FMP revises past
+`adjClose` values (between the 2026-10-02 and 2026-11-24 acquisitions, 252 of 500
+shared current constituents changed, some non-uniformly, e.g. KDP and LEN), and the
+reference model is rebuilt from the latest current constituents. Raw breadth moved
+by up to about 1 percentage point. Applying the new prices to the old 504-stock
+cohort reproduces most of the onset changes; the cohort change alone explains
+2015-04-17, 2016-11-30 and 2016-12-01. The publication lists the onset
+differences. FMP change-history dates also shifted by one day for many records,
+which affects only the reconstructed-history model. `--end-date` may be omitted
+for fetch/prepare; the cutoff recorded in `metadata_manifest.json` is then used.
+
 For price reacquisition from the same archived metadata/universe:
 
 ```bash
@@ -94,7 +128,7 @@ python -m scripts.fetch_long_history \
   --directory data/long_history_20261002 --env-file .env
 ```
 
-This fetcher is intentionally bounded to 1990-01-01 through 2026-10-02, resumes
+This fetcher is bounded to 1990-01-01 through `--end-date` (default 2026-10-02), resumes
 successful caches, checks 5,000-row caps, limits request starts to approximately
 5.5 per second, and retries transient failures once. It rejects invalid adjusted
 prices rather than imputing them. Run new acquisitions in a new dated cache;
@@ -104,7 +138,8 @@ API-free validation:
 
 ```bash
 SKIP_API_TESTS=true FMP_API_KEY='' python -m pytest \
-  tests/test_downtrend_forecast.py tests/test_long_history_preparation.py
+  tests/test_downtrend_forecast.py tests/test_long_history_preparation.py \
+  tests/test_long_history_refresh.py
 ```
 
 The generated page is ready for review/publication via the normal repository

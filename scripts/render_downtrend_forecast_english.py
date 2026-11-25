@@ -8,8 +8,79 @@ from pathlib import Path
 import pandas as pd
 import plotly.graph_objects as go
 
+PRICE = 'S&P500_Price'
 
-def render(statistics, data, output):
+MODEL_ONSET_LABELS = {
+    'current_fixed': 'reference model',
+    'current_eligible': 'MA-eligible current-cohort variant',
+    'historical_reconstructed': 'reconstructed-history variant',
+}
+
+
+def model_onset_sentence(current_starts):
+    """Describe the current pink onset date under each universe model."""
+    parts = [f'{MODEL_ONSET_LABELS[name]}: {start}' for name, start in current_starts.items()]
+    return 'Current pink onset by model — ' + '; '.join(parts) + '.'
+
+
+def sessions_text(n):
+    return f'{n} session' + ('' if n == 1 else 's')
+
+
+def previous_publication_paragraph(previous, events, excluded_starts=(), current_start=None, prices=None):
+    """Data-driven note on how the previously published episode turned out."""
+    if not previous:
+        return ''
+    event = next((e for e in events if e['start'] == previous['start']), None)
+    if event and event.get('end'):
+        outcome = (
+            f'That episode ended on {event["end"]} and is now included as a completed historical episode '
+            f'(price low {event["episode_outcome"]["bottom_date"]}, '
+            f'{event["episode_outcome"]["bottom_return_pct"]:+.1f}% from onset).'
+        )
+        if prices is not None:
+            onset_price = prices.loc[prices.Date == pd.Timestamp(event['start']), PRICE].iloc[0]
+            after = prices[prices.Date >= pd.Timestamp(event['end'])]
+            low = after.loc[after[PRICE].idxmin()]
+            new_onset = f' The current pink episode began on {current_start}.' if current_start else ''
+            outcome += (
+                f' After the warning ended, the lowest close was on {low.Date.date()}, '
+                f'{(low[PRICE] / onset_price - 1) * 100:+.1f}% from that onset (through the data cutoff), '
+                f'so the end of a pink warning did not mark the final price low.{new_onset}'
+            )
+    elif current_start == previous['start']:
+        outcome = 'That episode is still pink and is the current episode of this report.'
+    else:
+        outcome = 'That episode is not in the completed-episode sample of this report.'
+    cohort = ''
+    if 'onsets' in previous:
+        previous_onsets = {x for x in previous['onsets'] if x <= previous['as_of']}
+        known = [*(e['start'] for e in events), *excluded_starts, *([current_start] if current_start else [])]
+        current_onsets = {x for x in known if x <= previous['as_of']}
+        size = (
+            f'The previous snapshot had {previous["current_count"]} current constituents. '
+            if 'current_count' in previous
+            else ''
+        )
+        only_previous = ', '.join(sorted(previous_onsets - current_onsets)) or 'none'
+        only_current = ', '.join(sorted(current_onsets - previous_onsets)) or 'none'
+        cohort = (
+            f'<p>{size}Historical breadth is recomputed from a fresh acquisition. The provider revised past adjusted '
+            'prices for many symbols, and the reference model is rebuilt from the latest current constituents. '
+            'Both shift historical breadth slightly and can move, add or remove pink onsets that sit near the '
+            f'thresholds. Onset dates through {previous["as_of"]} found only in the previous snapshot: '
+            f'{only_previous}; only in this snapshot: {only_current}. '
+            'The rapid-switching exclusion is re-evaluated on the new episode list.</p>'
+        )
+    return (
+        f'<h2>Changes from the previous publication</h2><p>The previous page used data through {previous["as_of"]} '
+        f'and described the episode that began {previous["start"]}. {outcome} '
+        'All statistics here are recomputed from a fresh data acquisition; earlier figures are not carried forward.</p>'
+        + cohort
+    )
+
+
+def render(statistics, data, output, previous=None):
     r = json.loads(statistics.read_text())
     d = pd.read_csv(data, parse_dates=['Date'])
     c = r['current']
@@ -34,7 +105,7 @@ def render(statistics, data, output):
         '<div class="note"><strong>Scope:</strong> The main analysis follows each entire pink episode. A 63-session window represents about three months, not the full warning cycle. Historical frequencies describe a small sample; they are not calibrated probabilities for the current episode.</div>'
     )
     sections.append(
-        '<p><a href="index.html">Market breadth dashboard</a> · <a href="downtrend_forecast_high_price.html">Pink Onsets Near Price Highs</a></p>'
+        '<p><a href="index.html">Market breadth dashboard</a> · <a href="downtrend_forecast_high_price.html">Pink Onsets Near Price Highs</a> (separate, earlier snapshot)</p>'
     )
     noise = r.get('chattering_filter', {})
     if noise.get('enabled'):
@@ -42,12 +113,12 @@ def render(statistics, data, output):
         sections.append(
             '<h2>Rapid switching excluded</h2><p>Exclude all original segments in a completed chain of at least three pink episodes separated by at most five non-pink sessions, with a total first-onset-to-final-exit span of at most 40 sessions. Retained episodes keep their original dates and outcomes; episodes are not merged.</p>'
             f'<p>Original completed episodes: {noise["original_n"]}; retained: {noise["retained_n"]}. Excluded onset dates: {removed}.</p>'
-            '<div class="note">This retrospective noise filter uses subsequent regime changes. It cannot necessarily be evaluated at onset or on session 11. Filtered statistics are descriptive sensitivity results, not a more accurate live probability estimate. The same rule is applied separately to each universe sensitivity model.</div>'
+            f'<div class="note">This retrospective noise filter uses subsequent regime changes. It cannot necessarily be evaluated at onset or on session {c["observed_sessions"]}. Filtered statistics are descriptive sensitivity results, not a more accurate live probability estimate. The same rule is applied separately to each universe sensitivity model.</div>'
         )
     if r.get('long_history_audit'):
         audit = r['long_history_audit']
         sections.append(
-            '<h2>Fresh long-history data and universe sensitivity</h2><div class="note"><strong>Exploratory survivor-cohort study:</strong> The reference model uses the current 504 constituents and preserves the project’s fixed denominator: a missing or unavailable 200-day average counts as not above the average. Earlier periods therefore contain both survivorship bias and denominator dilution. This is not a verified point-in-time reconstruction of the historical S&amp;P 500.</div>'
+            f'<h2>Fresh long-history data and universe sensitivity</h2><div class="note"><strong>Exploratory survivor-cohort study:</strong> The reference model uses the current {audit["current_count"]} constituents and preserves the project’s fixed denominator: a missing or unavailable 200-day average counts as not above the average. Earlier periods therefore contain both survivorship bias and denominator dilution. This is not a verified point-in-time reconstruction of the historical S&amp;P 500.</div>'
         )
         sections.append(
             f'<p>Fresh retrieval covered {audit["requested"]} current/former symbols; usable adjusted price history was obtained for {audit["usable"]}, including all {audit["current_count"]} current constituents. SPY covers {r["history_start"]} through {c["as_of"]}. Prices use FMP adjClose; the provider describes it as adjusted for splits and dividends. The archived inputs and acquisition manifest record individual coverage and hashes.</p>'
@@ -106,8 +177,9 @@ def render(statistics, data, output):
                 model_rows,
             )
         )
+        onsets = model_onset_sentence(audit['current_starts']) if audit.get('current_starts') else ''
         sections.append(
-            '<p>Different denominator and membership models change episode dates and counts. They should not be pooled into one probability estimate. The reference preserves the visible September 18 onset; the MA-eligible current-cohort variant produces a September 16 onset.</p>'
+            f'<p>Different denominator and membership models change episode dates and counts. They should not be pooled into one probability estimate. {onsets}</p>'
         )
         age = audit['same_age_summary']
         sections.append(
@@ -242,7 +314,7 @@ def render(statistics, data, output):
     )
     low = c['lowest_close_to_date']
     sections.append(
-        f'<p><strong>Current episode:</strong> the lowest close observed so far occurred on {low["date"]}, {low["sessions"]} sessions after onset, with an onset-relative return of {percent(low["return_pct"])}. This is not a confirmed final bottom.</p>'
+        f'<p><strong>Current episode:</strong> the lowest close observed so far occurred on {low["date"]}, {sessions_text(low["sessions"])} after onset, with an onset-relative return of {percent(low["return_pct"])}. This is not a confirmed final bottom.</p>'
     )
     sections.append(
         '<h2>Price low versus breadth-bottom detection</h2><p>All price returns use the pink-onset close as the denominator. A plotted bottom date and the date that bottom can first be detected are different. Compare only matching episodes; do not subtract averages from different samples or subtract marginal medians to estimate the median paired difference.</p>'
@@ -292,7 +364,7 @@ def render(statistics, data, output):
         '<p>To determine detection dates, the chart algorithm was replayed on each daily data prefix. For 200MA breadth: find_peaks on the negative series, distance=50 and prominence=0.015. For short breadth: retain EMA8 observations below 40%, then find_peaks with prominence=0.02. A qualifying pivot must be inside the pink interval; the first detection is sought before the next pink onset. Later-revised or disappearing candidates still count as first detections. These are chart detections, not the separate trading engine’s entry signals.</p>'
     )
     sections.append(
-        '<h2>Supplement: fixed-horizon outcomes from today’s equivalent age</h2><p>Historical episodes must still be pink at the same elapsed age as the current episode. Outcomes are measured from that equivalent date, including after pink ends. Only fully observed horizons that end before the current episode begins are used. The 63-session horizon covers roughly three months ahead—about 73 elapsed sessions from onset in this report—and is not selected for demonstrated predictive power.</p>'
+        f'<h2>Supplement: fixed-horizon outcomes from today’s equivalent age</h2><p>Historical episodes must still be pink at the same elapsed age as the current episode. Outcomes are measured from that equivalent date, including after pink ends. Only fully observed horizons that end before the current episode begins are used. The 63-session horizon covers roughly three months ahead—about {c["age_offset"] + 63} elapsed sessions from onset in this report—and is not selected for demonstrated predictive power.</p>'
     )
     rows = []
     for s in r['primary']:
@@ -361,9 +433,15 @@ def render(statistics, data, output):
     sections.append(
         '<h2>Methods and limitations</h2><ul><li>Pink means Breadth_200MA_Trend == -1 and Breadth_Index_8MA &lt; Breadth_Index_200MA. The trend uses the code’s hysteresis rule.</li><li>Stock-level 200-day breadth is smoothed using EMA200; its short line is EMA8. This is different from an index price crossing its own 200-day moving average.</li><li>The study uses a single published CSV snapshot beginning in 2016, excluding signal onsets in the first 200 observations to reduce initialization effects. Rising-price episodes are retained. The old report’s hand-selected 2007–2025 sample is not merged into this study.</li><li>Constituent history is not verified as point-in-time; survivorship and missing-data denominator biases may affect the underlying breadth. Constituents and raw provider prices were not independently reconciled.</li><li>S&amp;P500_Price is the project’s SPY-derived series, not the index level. The CSV alone does not establish adjustment or complete dividend-reinvestment conventions.</li><li>The sample is small and related episodes are not independent. Wilson intervals are reference intervals under a binomial independence assumption, not calibrated forecast intervals. Similarity weighting and extra outcome filters are not applied.</li><li>Price lows and full pink intervals are identified retrospectively. Reported returns exclude costs and do not constitute simulated trades. No trading profitability or optimal entry rule is established.</li><li>Price data use closing observations, not intraday lows. Future news and macroeconomic conditions after the data cutoff are not incorporated.</li></ul>'
     )
-    sections.append(
-        '<h2>Changes from the previous publication</h2><p>The previous page described the March 12, 2026 episode as of March 26, excluded rising-price divergence cases, and assigned similarity-weighted bottom forecasts. This report studies the September episode with reproducible criteria, retains rising-price cases, treats March as a completed historical episode, and does not carry forward the old probabilities, dates, or price targets.</p>'
+    changes = previous_publication_paragraph(
+        previous,
+        r['events'],
+        r.get('chattering_filter', {}).get('excluded_starts', []),
+        current_start=c['start'],
+        prices=d,
     )
+    if changes:
+        sections.append(changes)
     sections.append(
         f'<p>Source: <a href="{html.escape(r["source"])}">published breadth CSV</a>; <a href="https://tradermonty.github.io/market-breadth-analysis/market_breadth.html">daily chart</a>. History begins {r["history_start"]}. Snapshot SHA-256: <code>{r["input_sha256"]}</code>. This report is frozen at {c["as_of"]}; daily chart updates do not automatically refresh its statistics.</p>'
     )
