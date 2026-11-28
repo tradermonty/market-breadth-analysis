@@ -347,3 +347,5 @@ def test_real_producer_contract_and_restored_paths(tmp_path, monkeypatch):
     report = json.loads((dest / 'validation.json').read_text())
     assert report['status'] == 'PASS' and (dest / 'market_breadth.html').stat().st_size > 10000
     assert not (dest / 'market_breadth.png').exists()
+    # Every column the real producer writes must be documented for agents.
+    assert '(undocumented)' not in (dest / 'llms.txt').read_text()

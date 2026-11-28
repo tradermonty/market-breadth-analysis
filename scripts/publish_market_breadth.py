@@ -225,6 +225,96 @@ def _validate_outputs(path, *, started, now, min_coverage=0.9, short_ma=8, grace
     }
 
 
+SITE_URL = 'https://tradermonty.github.io/market-breadth-analysis/'
+LLMS_TXT = 'llms.txt'
+
+
+def _column_docs(short_ma):
+    """Column descriptions; breadth values are fractions in [0, 1], not percentages."""
+    s = short_ma
+    docs = {
+        'Date': 'NYSE session date, YYYY-MM-DD, ascending and unique.',
+        'S&P500_Price': 'SPY ETF daily adjusted close in USD (FMP adjClose); a proxy for the S&P 500, not the index level.',
+        'Breadth_Index_Raw': 'Above_Count_200 / Eligible_Count_200: share of constituents above their own 200-day MA (0-1).',
+        'Breadth_Index_200MA': '200-day EMA of Breadth_Index_Raw (0-1).',
+        f'Breadth_Index_{s}MA': f'{s}-day EMA of Breadth_Index_Raw (0-1).',
+        'Breadth_200MA_Trend': 'Sticky direction of the daily change in Breadth_Index_200MA (threshold 0.001): 1 up, -1 down;'
+        ' 0 only before the first qualifying move.',
+        'Bearish_Signal': f'True when Breadth_200MA_Trend == -1 and Breadth_Index_{s}MA < Breadth_Index_200MA.',
+        'Is_Peak': 'True on a peak of Breadth_Index_200MA (scipy find_peaks, distance 50, prominence 0.015).',
+        'Is_Trough': 'True on a trough of Breadth_Index_200MA (same parameters as Is_Peak).',
+        f'Is_Trough_{s}MA_Below_04': f'True on a trough (prominence 0.02) of Breadth_Index_{s}MA among days it is below 0.4.',
+        'Breadth_50_Index_Raw': 'Above_Count_50 / Eligible_Count_50: share of constituents above their own 50-day MA (0-1).',
+        'Breadth_50_Index_50MA': '50-day EMA of Breadth_50_Index_Raw (0-1).',
+        f'Breadth_50_Index_{s}MA': f'{s}-day EMA of Breadth_50_Index_Raw (0-1).',
+        'Breadth_50_MA_Trend': 'Sticky direction of the daily change in Breadth_50_Index_50MA (threshold 0.001): 1 up, -1 down;'
+        ' 0 only before the first qualifying move.',
+        'Bearish_Signal_50': 'Same rule as Bearish_Signal, applied to the 50-day breadth series.',
+        'Is_Peak_50': 'True on a peak of Breadth_50_Index_50MA (distance 30, prominence 0.02).',
+        'Is_Trough_50': 'True on a trough of Breadth_50_Index_50MA (same parameters as Is_Peak_50).',
+    }
+    for period in (200, 50):
+        docs |= {
+            f'Eligible_Count_{period}': f'Constituents with a close that day and a full {period}-day MA window.',
+            f'Missing_Count_{period}': f'Constituents minus Eligible_Count_{period} (no data that day, short history, fetch failures).',
+            f'Above_Count_{period}': f'Eligible constituents closing above their {period}-day MA.',
+            f'Coverage_{period}': f'Eligible_Count_{period} / constituent count (0-1); low values mean incomplete data.',
+        }
+    return docs
+
+
+def render_llms_txt(columns, *, short_ma, latest):
+    """Render a short llms.txt describing the published CSVs, in the CSV's own column order."""
+    docs = _column_docs(short_ma)
+    lines = [
+        '# Market Breadth Analysis',
+        '',
+        '> Daily S&P 500 market breadth: the share of constituents trading above their 200-day and',
+        '> 50-day moving averages, with trend, peak/trough and bearish-signal markers. Data source:',
+        '> Financial Modeling Prep. Rebuilt on weekdays after the US close. Not investment advice.',
+        '',
+        f'Latest market date in this build: {latest}',
+        '',
+        'Notes:',
+        '- Breadth values are fractions from 0 to 1 (0.62 means 62%).',
+        '- Is_Peak / Is_Trough markers are found with hindsight and can appear or move as new data',
+        '  arrives; do not treat the latest rows as confirmed turning points.',
+        '- The universe is the current S&P 500 membership applied to all history (survivorship bias).',
+        '- The ~10-year window rolls and is fully recomputed on every build; early rows and EMA values',
+        '  change between builds, so do not diff old copies row by row.',
+        '- Breadth_*_Raw is empty when no constituent is eligible; Coverage shows data completeness.',
+        '',
+        '## Data',
+        '',
+        f'- [market_breadth_data.csv]({SITE_URL}market_breadth_data.csv): one row per session, columns below',
+        f'- [market_breadth_summary.csv]({SITE_URL}market_breadth_summary.csv): Metric,Value pairs'
+        ' (average peak/trough levels, counts, analysis period)',
+        f'- [market_date_resolution.json]({SITE_URL}market_date_resolution.json): provenance of the'
+        ' latest market date (calendar, source, generated_at in UTC)',
+        '',
+        '## market_breadth_data.csv columns',
+        '',
+    ]
+    lines += [f'- `{column}`: {docs.get(column, "(undocumented)")}' for column in columns]
+    lines += [
+        '',
+        '## Pages',
+        '',
+        f'- [Dashboard]({SITE_URL}index.html): chart overview',
+        f'- [Interactive chart]({SITE_URL}market_breadth.html): Plotly chart of the same data',
+        '',
+    ]
+    return '\n'.join(lines)
+
+
+def _write_llms_txt(path, *, short_ma, latest):
+    with (path / 'market_breadth_data.csv').open(newline='', encoding='utf-8') as handle:
+        columns = next(csv.reader(handle))
+    file = path / LLMS_TXT
+    file.write_text(render_llms_txt(columns, short_ma=short_ma, latest=latest), encoding='utf-8')
+    return hashlib.sha256(file.read_bytes()).hexdigest()
+
+
 def validate_outputs(path, **kwargs):
     try:
         return _validate_outputs(path, **kwargs)
@@ -353,6 +443,7 @@ def publish_run(path, *, analyze=None, clock=None, source_revision=None, min_cov
                 path, started=started, now=clock(), min_coverage=min_coverage, short_ma=short_ma, grace=grace
             )
         )
+        report['sha256'][LLMS_TXT] = _write_llms_txt(path, short_ma=short_ma, latest=report['latest_market_date'])
         (path / '.nojekyll').touch()
         report.update(status='PASS', reason_code='OK', message='All publication checks passed')
     except Exception as exc:
